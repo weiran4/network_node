@@ -78,7 +78,7 @@ Use a larger `G` to approximate an ideal voltage source more closely, but avoid 
 - 支持二节点支路、单相变压器、自定义 N 节点黑盒和 YBox 打包元件。
 - 生成统一形式的完整节点方程：`I = G V + Ihis`。
 - 使用 Schur complement 对内部节点进行消去。
-- 新增“优化消元 / C导出”tab：面向大型符号系统，使用结构化 `Gkk` 块公式展示消元过程，自动识别对角/耦合子块，并导出不含 solve/LU/Cholesky 的 C 风格步骤。
+- 新增“优化消元 / C导出”标签页：面向大型符号系统，使用结构化 `Gkk` 块公式展示消元过程，自动识别对角/耦合子块，并导出不含 solve/LU/Cholesky 的 C 风格步骤。
 - 显示内部节点电压恢复公式。
 - 为黑盒元件定义和校验支路观测电流。
 - 为元件定义多个 `G`/`Ihis` 开关工况，并可在画布中双击元件切换。
@@ -97,7 +97,7 @@ Use a larger `G` to approximate an ideal voltage source more closely, but avoid 
 i(p -> n) = G * (V_p - V_n - Vs)
 ```
 
-它会生成对称的导纳矩阵 stamp，并写入历史电流项：`Ihis[p] += -G*Vs`，`Ihis[n] += G*Vs`，因此可以直接参与内部节点消去和黑盒约简。
+它会生成对称的导纳矩阵写入项，并写入历史电流项：`Ihis[p] += -G*Vs`，`Ihis[n] += G*Vs`，因此可以直接参与内部节点消去和黑盒约简。
 
 `G` 越大越接近理想电压源，但过大会导致矩阵病态。`G` 必须为正数，0 或负数会报错。
 
@@ -116,8 +116,8 @@ i(p -> n) = G * (V_p - V_n - Vs)
 
 中文最近更新：
 
-- 改进“优化消元 / C导出”结果 tab。它不改变现有完整矩阵和消去矩阵页面；保留用户定义的节点名，显示真实 `G` 和 `Ihis` 的 r/k 分块预览，并按最终表达式做 RAM/CODE 依赖切分：常量 `Gred` 可在 RAM stamp，动态 `Gred` 和 `Ihisred` 使用 CODE 矩阵流程，内部节点电压恢复放在 T1_T2。
-- RTDS C 草稿会为 `Grr/Grk/Gkr/W` 生成可复用别名，避免展开巨大 Schur 标量公式；相同表达式使用 `Gkr_shared_1` 这类中性 shared alias，并在注释中列出对应矩阵位置。RAM 侧 `g_mat_nods/g_mat_over/setupGMatrix` 只注册实际有非零常量 stamp 的节点子集，并使用压缩后的局部索引。
+- 改进“优化消元 / C导出”结果标签页。它不改变现有完整矩阵和消去矩阵页面；保留用户定义的节点名，显示真实 `G` 和 `Ihis` 的 r/k 分块预览，并按最终表达式做 RAM/CODE 依赖切分：常量 `Gred` 可在 RAM 侧写入导纳，动态 `Gred` 和 `Ihisred` 使用 CODE 矩阵流程，内部节点电压恢复放在 T1_T2。
+- RTDS C 草稿会为 `Grr/Grk/Gkr/W` 生成可复用别名，避免展开巨大 Schur 标量公式；相同表达式使用 `Gkr_shared_1` 这类中性共享别名，并在注释中列出对应矩阵位置。RAM 侧 `g_mat_nods/g_mat_over/setupGMatrix` 只注册实际有非零常量导纳写入的节点子集，并使用压缩后的局部索引。
 - 画布标签支持拖拽排序。电路导出升级为 `version: 3`，会保存更完整的工程状态，包括所有画布、节点样式、开关工况、打包黑盒设置、界面选项和已缓存的推导结果。
 - 开关工况保存在每个元件上。普通支路可编辑每个工况的 `G` 和 `Ihis`；矩阵元件可编辑每个工况的局部 `G` 矩阵和 `Ihis` 向量。画布中双击元件可切换工况。
 - 打包后的 YBox 不使用外层 switch case。它会在编辑器中列出内部具有多个工况的支路；切换内部工况后，通过本地 SymPy 后端重新计算打包黑盒。

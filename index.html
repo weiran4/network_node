@@ -3079,6 +3079,8 @@
       "内部工况": "Internal Cases",
       "没有内部支路包含多个工况。": "No internal branch has multiple cases.",
       "切换内部支路工况后，会重新计算这个打包黑盒的 G/Ihis 和观测公式。": "Changing an internal branch case recomputes this packaged box's G/Ihis and observer formulas.",
+      "打包黑盒会按内部支路变量名判断常数；批量按钮只改变内部支路 G 的常数/非常数标记。": "The packaged box classifies constants by internal-branch variable names; the batch buttons only change each internal branch G constant/non-constant flag.",
+      "这个打包黑盒没有可设置 G 常数属性的内部支路。": "This packaged box has no internal branch with configurable G constant properties.",
       "工况数量": "Case Count",
       "当前工况": "Active Case",
       "工况名称": "Case Name",
@@ -3152,7 +3154,7 @@
       "电压源串联 G": "Voltage Source + G",
       "电压源 / Vs": "Voltage Source / Vs",
       "串联导纳 / G": "Series Conductance / G",
-      "该元件用 Norton 等效 stamp：电流方向为 P 到 N，i = G*(V_P - V_N - Vs)。G 不能为 0 或负数。": "This element stamps the Norton equivalent: current direction P to N, i = G*(V_P - V_N - Vs). G cannot be zero or negative.",
+      "该元件使用 Norton 等效导纳写入：电流方向为 P 到 N，i = G*(V_P - V_N - Vs)。G 不能为 0 或负数。": "This element stamps the Norton equivalent: current direction P to N, i = G*(V_P - V_N - Vs). G cannot be zero or negative.",
       "串联导纳不能为空。": "Series conductance is required.",
       "串联导纳不能为 0。": "Series conductance cannot be 0.",
       "串联导纳不能为负数。": "Series conductance cannot be negative.",
@@ -3167,7 +3169,7 @@
       "控制项数量": "Control Term Count",
       "控制节点": "Control Node",
       "系数": "Coefficient",
-      "Stamp 预览": "Stamp Preview",
+      "导纳写入预览": "Stamp Preview",
       "节点电压相关模式使用多行控制项；每一行表示 系数 * V_控制节点。": "Voltage-controlled mode uses multiple control terms; each row means coefficient * V_control_node.",
       "跨导/系数": "Transconductance / Gain",
       "控制正节点": "Control + Node",
@@ -5405,8 +5407,8 @@
               `;
             }).join("")}
           </div>
-          <div class="modal-help">${escapeHtml(tr("packed 黑盒会按内部支路变量名判断常数；批量按钮只改变内部支路 G 的常数/非常数标记。"))}</div>
-        ` : `<div class="modal-help">${escapeHtml(tr("这个 packed 黑盒没有可设置 G 常数属性的内部支路。"))}</div>`}
+          <div class="modal-help">${escapeHtml(tr("打包黑盒会按内部支路变量名判断常数；批量按钮只改变内部支路 G 的常数/非常数标记。"))}</div>
+        ` : `<div class="modal-help">${escapeHtml(tr("这个打包黑盒没有可设置 G 常数属性的内部支路。"))}</div>`}
       `;
     }
 
@@ -8085,7 +8087,7 @@
             <label class="field">
               <span>显示方式 / Display</span>
               <select data-optimized-control="display">
-                <option value="compact" ${display === "compact" ? "selected" : ""}>紧凑 / Compact</option>
+                <option value="compact" ${display === "compact" ? "selected" : ""}>${optText("紧凑", "Compact")}</option>
                 <option value="step" ${display === "step" ? "selected" : ""}>分步 / Step-by-step</option>
                 <option value="expanded" ${display === "expanded" ? "selected" : ""}>展开 / Expanded</option>
               </select>
@@ -8099,15 +8101,15 @@
               </select>
             </label>
             <label class="field checkbox-field">
-              <span>SPD/对称假设</span>
+              <span>${optText("对称正定/对称假设", "SPD / symmetric assumption")}</span>
               <input data-optimized-control="spd" type="checkbox" ${spd ? "checked" : ""}>
             </label>
           </div>
           <label class="field">
-            <span>${optText("符号类别覆盖 / Symbol dependency overrides JSON", "Symbol dependency overrides JSON")}</span>
+            <span>${optText("符号类别覆盖 JSON", "Symbol dependency overrides JSON")}</span>
             <textarea data-optimized-control="symbolDeps" rows="4" spellcheck="false" placeholder='{"Gtap":"CODE_VARIABLE","Ihis_a":"STEP_HISTORY"}'>${escapeHtml(overrides)}</textarea>
           </label>
-          <div class="actual-block-caption">${optText("默认：常数 G 进入 RAM_CONSTANT，非 constant G 进入 CODE_VARIABLE，Ihis/history 符号进入 STEP_HISTORY；这里可以手动覆盖。", "Default: constant G symbols map to RAM_CONSTANT, non-constant G symbols to CODE_VARIABLE, and Ihis/history symbols to STEP_HISTORY. Use this JSON field for manual overrides.")}</div>
+          <div class="actual-block-caption">${optText("默认：常数 G 符号进入 RAM_CONSTANT，非常数 G 符号进入 CODE_VARIABLE，Ihis/历史项符号进入 STEP_HISTORY；这里可以手动覆盖。", "Default: constant G symbols map to RAM_CONSTANT, non-constant G symbols to CODE_VARIABLE, and Ihis/history symbols to STEP_HISTORY. Use this JSON field for manual overrides.")}</div>
         </div>
       `;
     }
@@ -8337,7 +8339,7 @@
         return `
           <div class="formula-card">
             <div class="formula-name">${optText("原始 G/Ihis 预览", "Original G/Ihis Preview")}</div>
-            <div class="formula-empty">${optText("当前没有内部节点，C 导出直接使用原始节点顺序生成 stamp 和注入。", "No internal nodes are selected, so C export uses the original retained-node order for stamping and injection.")}</div>
+            <div class="formula-empty">${optText("当前没有内部节点，C 导出直接使用原始节点顺序生成导纳写入和注入。", "No internal nodes are selected, so C export uses the original retained-node order for stamping and injection.")}</div>
             <div class="formula-line"><span class="formula-lhs">${optText("节点顺序", "Node order")}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(externalNames.join(", ") || "-")}</span></div>
             <div class="matrix-equation">
               <span class="formula-lhs">${formatMath("G")}</span><span class="formula-eq">=</span>${renderMatrix(payload.G_full || [])}
@@ -8351,7 +8353,7 @@
       const effectiveOrder = result.effective_internal_nodes || userOrder;
       const isReordered = JSON.stringify(userOrder) !== JSON.stringify(effectiveOrder);
       const orderNotice = isReordered
-        ? `<div class="formula-empty">${optText("提示：优化消元会自动按结构重排内部 k 节点；下方 G 矩阵和 C Draft 使用右侧显示的重排顺序。", "Note: optimized elimination automatically reorders internal k nodes by structure; the G matrix below and the C draft use the reordered sequence shown on the right.")}</div>`
+        ? `<div class="formula-empty">${optText("提示：优化消元会自动按结构重排内部 k 节点；下方 G 矩阵和 C 草稿使用右侧显示的重排顺序。", "Note: optimized elimination automatically reorders internal k nodes by structure; the G matrix below and the C draft use the reordered sequence shown on the right.")}</div>`
         : `<div class="formula-empty">${optText("提示：优化消元会自动检查并按结构重排内部 k 节点；当前顺序已适合，右侧显示的是实际使用顺序。", "Note: optimized elimination automatically checks and reorders internal k nodes by structure; the current order is already suitable, and the right side shows the sequence actually used.")}</div>`;
       return `
         <div class="formula-card">
@@ -8432,7 +8434,7 @@
         return `
           <div class="formula-card">
             <div class="formula-name">${optText("无内部节点", "No Internal Nodes")}</div>
-            <div class="formula-empty">${optText("当前没有需要消去的内部节点；C 草稿会直接使用原始 G 和 Ihis 生成 RTDS stamp 与注入。", "There are no internal nodes to eliminate; the C draft uses the original G and Ihis directly for RTDS stamping and injection.")}</div>
+            <div class="formula-empty">${optText("当前没有需要消去的内部节点；C 草稿会直接使用原始 G 和 Ihis 生成 RTDS 导纳写入与注入。", "There are no internal nodes to eliminate; the C draft uses the original G and Ihis directly for RTDS stamping and injection.")}</div>
           </div>
         `;
       }
@@ -8485,8 +8487,8 @@
       const rows = (subblock.rows || []).map(index => nodeName(Number(index))).join(", ") || "-";
       const cols = (subblock.cols || []).map(index => nodeName(Number(index))).join(", ") || "-";
       const blockLine = subblock.is_rectangular
-        ? `<div class="formula-line"><span class="formula-lhs">${optText("Dynamic block", "Dynamic block")}</span><span class="formula-eq">=</span><span class="formula-rhs">${optText("Rows", "Rows")}: [${rows}], ${optText("Cols", "Cols")}: [${cols}]</span></div>`
-        : `<div class="formula-line"><span class="formula-lhs">${optText("Dynamic block", "Dynamic block")}</span><span class="formula-eq">=</span><span class="formula-rhs">${optText("非矩形，使用 sparse updates", "Non-rectangular, using sparse updates")}</span></div>`;
+        ? `<div class="formula-line"><span class="formula-lhs">${optText("动态子块", "Dynamic block")}</span><span class="formula-eq">=</span><span class="formula-rhs">${optText("行", "Rows")}: [${rows}], ${optText("列", "Cols")}: [${cols}]</span></div>`
+        : `<div class="formula-line"><span class="formula-lhs">${optText("动态子块", "Dynamic block")}</span><span class="formula-eq">=</span><span class="formula-rhs">${optText("非矩形，使用稀疏更新", "Non-rectangular, using sparse updates")}</span></div>`;
       const ihisStages = dep.Ihisred_stage || [];
       const ihisStageRows = ihisStages.map((stage, index) => `
         <tr>
@@ -8510,10 +8512,10 @@
           <tbody>${ihisStageRows}</tbody>
         </table>
         <div class="formula-line"><span class="formula-lhs">${formatMath("Ihis_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihisr - Grk*W*Ihisk")}</span></div>
-        <div class="actual-block-caption">${optText("RAM-owned rows", "RAM-owned rows")}: ${ihisStageNames("RAM_INIT")}</div>
-        <div class="actual-block-caption">${optText("STEP-owned rows", "STEP-owned rows")}: ${ihisStageNames("CODE_PER_STEP")}</div>
-        <div class="actual-block-caption">${optText("CODE-owned rows", "CODE-owned rows")}: ${ihisStageNames("CODE_UPDATE")}</div>
-        <div class="actual-block-caption">${optText("UNKNOWN rows", "UNKNOWN rows")}: ${ihisStageNames("UNKNOWN")}</div>
+        <div class="actual-block-caption">${optText("RAM 行", "RAM-owned rows")}: ${ihisStageNames("RAM_INIT")}</div>
+        <div class="actual-block-caption">${optText("STEP 行", "STEP-owned rows")}: ${ihisStageNames("CODE_PER_STEP")}</div>
+        <div class="actual-block-caption">${optText("CODE 行", "CODE-owned rows")}: ${ihisStageNames("CODE_UPDATE")}</div>
+        <div class="actual-block-caption">${optText("UNKNOWN 行", "UNKNOWN rows")}: ${ihisStageNames("UNKNOWN")}</div>
       ` : "";
       return `
         <div class="formula-card">
@@ -8524,9 +8526,9 @@
           </table>
           ${blockLine}
           <div class="formula-line"><span class="formula-lhs">${formatMath("Gred[B,C]")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Grr[B,C] - Grk[B,k]*W*Gkr[k,C]")}</span></div>
-          <div class="actual-block-caption">${optText("RAM-owned entries", "RAM-owned entries")}: ${entryList(subblock.ram_entries)}</div>
-          <div class="actual-block-caption">${optText("CODE-owned entries", "CODE-owned entries")}: ${entryList(subblock.code_entries)}</div>
-          ${(subblock.unknown_entries || []).length ? `<div class="actual-block-caption">${optText("UNKNOWN entries", "UNKNOWN entries")}: ${entryList(subblock.unknown_entries)}</div>` : ""}
+          <div class="actual-block-caption">${optText("RAM 元素", "RAM-owned entries")}: ${entryList(subblock.ram_entries)}</div>
+          <div class="actual-block-caption">${optText("CODE 元素", "CODE-owned entries")}: ${entryList(subblock.code_entries)}</div>
+          ${(subblock.unknown_entries || []).length ? `<div class="actual-block-caption">${optText("UNKNOWN 元素", "UNKNOWN entries")}: ${entryList(subblock.unknown_entries)}</div>` : ""}
           ${ihisTable}
         </div>
       `;
@@ -10461,7 +10463,10 @@
       if ((Number(inner.activeSwitchCase) || 0) === nextIndex) return;
       commitHistory();
       inner.activeSwitchCase = nextIndex;
-      statusEl.textContent = `${branch.name}: ${inner.name || inner.id} switch -> ${inner.switchCases[nextIndex]?.name || `Case ${nextIndex + 1}`}`;
+      const caseName = inner.switchCases[nextIndex]?.name || `Case ${nextIndex + 1}`;
+      statusEl.textContent = state.language === "en"
+        ? `${branch.name}: ${inner.name || inner.id} switch -> ${caseName}`
+        : `${branch.name}: ${inner.name || inner.id} 已切换到 ${caseName}`;
       try {
         await recomputePackagedBox(branch);
         render();
@@ -10602,7 +10607,7 @@
             ${editableField("输出电流 / Ihis", "sourceIhis", branch.sourceIhis || "0")}
             ${warnings.length ? `<div class="validation-warning">${warnings.map(escapeHtml).join("<br>")}</div>` : ""}
             <div class="field">
-              <label>${escapeHtml(tr("Stamp 预览"))}</label>
+              <label>${escapeHtml(tr("导纳写入预览"))}</label>
               <div class="stamp-preview">${escapeHtml(currentSourceStampPreview(branch))}</div>
             </div>
             <div class="modal-help">${escapeHtml(tr("节点电压相关模式使用多行控制项；每一行表示 系数 * V_控制节点。"))}</div>
@@ -10611,7 +10616,7 @@
             ${editableField("输出电流 / Ihis", "currentExpression", branch.currentExpression || branch.name || "I")}
             ${constantGEditor(branch, true)}
             <div class="field">
-              <label>${escapeHtml(tr("Stamp 预览"))}</label>
+              <label>${escapeHtml(tr("导纳写入预览"))}</label>
               <div class="stamp-preview">${escapeHtml(currentSourceStampPreview(branch))}</div>
             </div>
           `;
@@ -10658,10 +10663,10 @@
           ${constantGEditor(branch)}
           ${warnings.length ? `<div class="validation-warning">${warnings.map(escapeHtml).join("<br>")}</div>` : ""}
           <div class="field">
-            <label>${escapeHtml(tr("Stamp 预览"))}</label>
+            <label>${escapeHtml(tr("导纳写入预览"))}</label>
             <div class="stamp-preview">${escapeHtml(voltageSourceSeriesStampPreview(branch))}</div>
           </div>
-          <div class="modal-help">${escapeHtml(tr("该元件用 Norton 等效 stamp：电流方向为 P 到 N，i = G*(V_P - V_N - Vs)。G 不能为 0 或负数。"))}</div>
+          <div class="modal-help">${escapeHtml(tr("该元件使用 Norton 等效导纳写入：电流方向为 P 到 N，i = G*(V_P - V_N - Vs)。G 不能为 0 或负数。"))}</div>
         `;
         const terminals = `
           <div class="row">
