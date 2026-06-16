@@ -8,6 +8,7 @@ import sympy as sp
 
 from nodal_tool.ground import apply_ground_constraint, validate_ground_partition
 from nodal_tool.optimized_elimination import (
+    build_dependency_stage_plan,
     build_structured_formula,
     c_draft_for_structured_formula,
 )
@@ -104,15 +105,22 @@ def _clean_value(value):
     return value
 
 
-def _partition_payload(payload: dict) -> tuple[sp.Matrix, sp.Matrix, list[str], list[str], list[str], list[str]]:
+def _partition_payload(payload: dict) -> tuple[sp.Matrix, sp.Matrix, sp.Matrix | None, sp.Matrix | None, list[str], list[str], list[str], list[str]]:
     all_nodes = list(payload["all_nodes"])
     external_nodes = list(payload["external_nodes"])
     requested_internal_nodes = list(payload.get("internal_nodes", []))
     ground_nodes = list(payload.get("ground_nodes", []))
     G_full = _parse_matrix(payload["G_full"])
     Ihis_full = _parse_vector(payload["Ihis_full"])
+    G_tagged = _parse_matrix(payload["G_full_tagged"]) if payload.get("G_full_tagged") else None
+    Ihis_tagged = _parse_vector(payload["Ihis_full_tagged"]) if payload.get("Ihis_full_tagged") else None
 
     grounded = apply_ground_constraint(G_full, Ihis_full, all_nodes, ground_nodes)
+    grounded_tagged = (
+        apply_ground_constraint(G_tagged, Ihis_tagged if Ihis_tagged is not None else Ihis_full, all_nodes, ground_nodes)
+        if G_tagged is not None
+        else None
+    )
     validation = validate_ground_partition(
         all_nodes,
         external_nodes,
@@ -133,7 +141,16 @@ def _partition_payload(payload: dict) -> tuple[sp.Matrix, sp.Matrix, list[str], 
         for node in remaining_nodes
         if node not in external_set and node not in internal_set
     )
-    return grounded.G_ng, grounded.Ihis_ng, remaining_nodes, external, internal, validation.warnings
+    return (
+        grounded.G_ng,
+        grounded.Ihis_ng,
+        grounded_tagged.G_ng if grounded_tagged is not None else None,
+        grounded_tagged.Ihis_ng if grounded_tagged is not None else None,
+        remaining_nodes,
+        external,
+        internal,
+        validation.warnings,
+    )
 
 
 def main() -> None:
@@ -142,7 +159,7 @@ def main() -> None:
     display_mode = payload.get("display_mode") or "compact"
     use_suggested_order = bool(payload.get("use_suggested_order", False))
 
-    G, Ihis, node_order, external_nodes, internal_nodes, partition_warnings = _partition_payload(payload)
+    G, Ihis, G_tagged, Ihis_tagged, node_order, external_nodes, internal_nodes, partition_warnings = _partition_payload(payload)
     warnings = list(partition_warnings)
 
     structured = build_structured_formula(
@@ -153,6 +170,23 @@ def main() -> None:
         internal_nodes,
         use_suggested_order=use_suggested_order,
         simplify_level=simplify_level,
+    )
+    tagged_structured = None
+    if G_tagged is not None and Ihis_tagged is not None:
+        tagged_structured = build_structured_formula(
+            G_tagged,
+            Ihis_tagged,
+            node_order,
+            external_nodes,
+            structured["effective_internal_nodes"],
+            use_suggested_order=False,
+            simplify_level=simplify_level,
+        )
+    rtds_stage_plan = build_dependency_stage_plan(
+        structured,
+        payload.get("symbol_dependency_table_tagged") or payload.get("symbol_dependency_table") or {},
+        simplify_level=simplify_level,
+        analysis_structured=tagged_structured,
     )
     warnings.extend(structured.get("warnings", []))
     blocks = structured["blocks"]
@@ -180,9 +214,12 @@ def main() -> None:
                 "Ihis_i": _clean_vector(blocks["Ihis_i"]),
             },
             "details": _clean_value(structured["details"]),
+            "dependency_analysis": _clean_value(rtds_stage_plan.get("dependency_analysis", {})),
+            "dynamic_subblock": _clean_value(rtds_stage_plan.get("dynamic_subblock", {})),
             "c_draft": c_draft_for_structured_formula(
                 structured,
                 node_display_names=payload.get("node_display_names") or {},
+                rtds_stage_plan=rtds_stage_plan,
             ),
         },
     }

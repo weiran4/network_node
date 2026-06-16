@@ -1113,6 +1113,10 @@
       padding-right: 86px;
     }
 
+    .modal.output-modal.has-minimap .modal-output-body {
+      padding-right: 86px;
+    }
+
     .output.has-minimap .output-body-formulas {
       padding-right: 14px;
     }
@@ -1138,6 +1142,11 @@
 
     .output.has-minimap .output-minimap {
       display: block;
+    }
+
+    .modal.output-modal.has-minimap .output-minimap {
+      display: block;
+      top: 58px;
     }
 
     .output-minimap-content {
@@ -1286,6 +1295,12 @@
       color: #f7fbff;
     }
 
+    .stage-summary-table {
+      table-layout: fixed;
+      width: min(100%, 920px);
+      min-width: 0;
+    }
+
     .analysis-table th,
     .analysis-table td {
       border: 1px solid #42586a;
@@ -1293,6 +1308,16 @@
       text-align: left;
       vertical-align: middle;
       white-space: nowrap;
+    }
+
+    .stage-summary-table th,
+    .stage-summary-table td {
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      font-size: 13px;
+      line-height: 1.45;
+      vertical-align: top;
+      white-space: normal;
+      word-break: break-word;
     }
 
     .analysis-table th {
@@ -1978,6 +2003,7 @@
     .modal {
       width: min(820px, 100%);
       max-height: min(720px, calc(100vh - 48px));
+      position: relative;
       display: grid;
       grid-template-rows: auto 1fr auto;
       background: #fff;
@@ -2564,6 +2590,10 @@
         </button>
       </div>
       <div class="modal-output-body" id="outputDialogBody"></div>
+      <div class="output-minimap" id="outputDialogMinimap" aria-hidden="true">
+        <div class="output-minimap-content" id="outputDialogMinimapContent"></div>
+        <div class="output-minimap-thumb" id="outputDialogMinimapThumb"></div>
+      </div>
     </div>
   </div>
 
@@ -2677,6 +2707,7 @@
       optimizedEliminationSimplify: "light",
       optimizedEliminationAssumeSpd: true,
       optimizedEliminationUseSuggestedOrder: true,
+      optimizedSymbolDependencyOverrides: "",
       nextBranch: 1,
       nextTransformer: 1,
       nextCustom: 1,
@@ -2968,6 +2999,9 @@
     const outputDialog = document.getElementById("outputDialog");
     const outputDialogModal = document.getElementById("outputDialogModal");
     const outputDialogBody = document.getElementById("outputDialogBody");
+    const outputDialogMinimap = document.getElementById("outputDialogMinimap");
+    const outputDialogMinimapContent = document.getElementById("outputDialogMinimapContent");
+    const outputDialogMinimapThumb = document.getElementById("outputDialogMinimapThumb");
     const renameDialog = document.getElementById("renameDialog");
     const renameTitle = document.getElementById("renameTitle");
     const renameInputLabel = document.getElementById("renameInputLabel");
@@ -3295,6 +3329,8 @@
         nodeA: `n${n}a`,
         nodeB: `n${n}b`,
         g: "1/R",
+        gIsConstant: true,
+        constantGSymbols: "",
         ihis: "0",
         direction: "AtoB"
       };
@@ -3332,6 +3368,8 @@
         controlPositive: "",
         controlNegative: "",
         description: "",
+        gIsConstant: true,
+        constantGSymbols: "",
         mathEnabled: true
       };
       state.branches.push(branch);
@@ -3356,6 +3394,8 @@
         nodes: { P: `v${n}p`, N: `v${n}n` },
         voltage: `Vs${n}`,
         conductance: "G",
+        gIsConstant: true,
+        constantGSymbols: "",
         direction: "PtoN"
       };
       state.branches.push(branch);
@@ -3400,6 +3440,8 @@
         rotation: 0,
         nodes: { P: `tr${n}p`, N: `tr${n}n`, S: `tr${n}s`, T: `tr${n}t` },
         gMatrix: "[[G11, -G11, G12, -G12], [-G11, G11, -G12, G12], [G12, -G12, G22, -G22], [-G12, G12, -G22, G22]]",
+        gIsConstant: true,
+        constantGSymbols: "",
         ihisVector: "[[Ihis_p], [-Ihis_p], [Ihis_s], [-Ihis_s]]",
         currents: [
           { name: "primary", from: "P", to: "N", expression: "G11*(V_P - V_N) + G12*(V_S - V_T) + Ihis_p" },
@@ -3447,6 +3489,8 @@
         nodes: Object.fromEntries(ports.map(id => [id, `c${n}_${id.toLowerCase()}`])),
         portLayout: layout,
         gMatrix: `[${ports.map(() => zeroRow).join(", ")}]`,
+        gIsConstant: false,
+        constantGSymbols: "",
         ihisVector: `[${ports.map(() => "[0]").join(", ")}]`,
         currents
       };
@@ -4430,6 +4474,79 @@
       `;
     }
 
+    function checkboxField(label, field, checked, helpText = "") {
+      return `
+        <div class="field">
+          <label class="compact-check">
+            <input data-field="${escapeHtml(field)}" type="checkbox" ${checked ? "checked" : ""}>
+            <span>${escapeHtml(tr(label))}</span>
+          </label>
+          ${helpText ? `<div class="modal-help">${escapeHtml(tr(helpText))}</div>` : ""}
+        </div>
+      `;
+    }
+
+    const G_SYMBOL_RESERVED = new Set([
+      "Abs", "False", "None", "PI", "True", "V", "I", "Ihis",
+      "acos", "asin", "atan", "cos", "cosh", "exp", "log",
+      "pow", "sin", "sinh", "sqrt", "tan", "tanh"
+    ]);
+
+    function extractExpressionSymbols(text) {
+      const symbols = new Set();
+      String(text || "").replace(/\b[A-Za-z_]\w*\b/g, name => {
+        if (!G_SYMBOL_RESERVED.has(name)) symbols.add(name);
+        return name;
+      });
+      return symbols;
+    }
+
+    function parseSymbolList(text) {
+      const symbols = new Set();
+      String(text || "").split(/[\s,;，；]+/).forEach(item => {
+        const clean = item.trim();
+        if (/^[A-Za-z_]\w*$/.test(clean) && !G_SYMBOL_RESERVED.has(clean)) symbols.add(clean);
+      });
+      return symbols;
+    }
+
+    function branchGExpressions(branch) {
+      if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port") return [branchValue(branch, "gMatrix")];
+      if (branch.kind === "current_source") return currentSourceControlRows(branch).map(row => row.coefficient || "");
+      if (branch.kind === "voltage_source_series_r") return [voltageSourceSeriesConductance(branch)];
+      return [branchValue(branch, "g")];
+    }
+
+    function branchConstantGSymbols(branch) {
+      const manual = parseSymbolList(branch.constantGSymbols || "");
+      if (branch.packageOriginal) {
+        const symbols = new Set(manual);
+        packagedGBranches(branch).forEach(({ inner }) => {
+          branchConstantGSymbols(inner).forEach(symbol => symbols.add(symbol));
+        });
+        return symbols;
+      }
+      if (branch.gIsConstant === false) return manual;
+      const symbols = new Set(manual);
+      branchGExpressions(branch).forEach(expr => {
+        extractExpressionSymbols(expr).forEach(symbol => symbols.add(symbol));
+      });
+      return symbols;
+    }
+
+    function constantGEditor(branch, compact = false) {
+      const checked = branch.gIsConstant !== false;
+      const inferred = [...branchConstantGSymbols(branch)].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+      const help = compact
+        ? "勾选时会把当前 G 表达式中的符号默认视为常数；下方可补充常数符号。"
+        : "按变量名判断常数。若 G[0][0] = X + Y + Z 且只填 Z，则只有 Z 可进入 RAM；X/Y 留在 CODE。";
+      return `
+        ${checkboxField("G 是否为常数？", "gIsConstant", checked, help)}
+        ${editableField("常数 G 符号", "constantGSymbols", branch.constantGSymbols || "", false)}
+        <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(inferred.join(", ") || tr("无"))}</div>
+      `;
+    }
+
     function transformerTerminalDisplayName(branch, side) {
       const netId = netLookup().get(terminalKey(branch.id, side)) || "";
       return nodeDisplayName(netId) || branch.nodes?.[side] || side;
@@ -5253,6 +5370,43 @@
           </div>
           <div class="modal-help">${escapeHtml(tr("切换内部支路工况后，会重新计算这个打包黑盒的 G/Ihis 和观测公式。"))}</div>
         ` : `<div class="modal-help">${escapeHtml(tr("没有内部支路包含多个工况。"))}</div>`}
+      `;
+    }
+
+    function packagedGBranches(branch) {
+      return (branch.packageOriginal?.branches || [])
+        .map((inner, index) => ({ inner, index }))
+        .filter(({ inner }) => inner.kind !== "ground");
+    }
+
+    function packagedGConstEditor(branch, showCaption = true) {
+      const items = packagedGBranches(branch);
+      return `
+        ${showCaption ? `<div class="field-caption">${escapeHtml(tr("内部 G 常数属性"))}</div>` : ""}
+        ${items.length ? `
+          <div class="row">
+            <button class="text-button" type="button" data-packaged-gconst-all="1">${escapeHtml(tr("全部设为常数"))}</button>
+            <button class="text-button" type="button" data-packaged-gconst-all="0">${escapeHtml(tr("全部设为非常数"))}</button>
+          </div>
+          <div class="packaged-case-list">
+            ${items.map(({ inner, index }) => {
+              const isConstant = inner.gIsConstant !== false;
+              const symbols = [...branchConstantGSymbols(inner)].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+              return `
+                <div class="packaged-case-row">
+                  <label>${escapeHtml(inner.name || inner.id)}</label>
+                  <select data-field="packedG.${index}.gIsConstant">
+                    <option value="1" ${isConstant ? "selected" : ""}>${escapeHtml(tr("常数"))}</option>
+                    <option value="0" ${!isConstant ? "selected" : ""}>${escapeHtml(tr("非常数"))}</option>
+                  </select>
+                </div>
+                ${editableField(`${inner.name || inner.id} 常数 G 符号`, `packedG.${index}.constantGSymbols`, inner.constantGSymbols || "", false)}
+                <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(symbols.join(", ") || tr("无"))}</div>
+              `;
+            }).join("")}
+          </div>
+          <div class="modal-help">${escapeHtml(tr("packed 黑盒会按内部支路变量名判断常数；批量按钮只改变内部支路 G 的常数/非常数标记。"))}</div>
+        ` : `<div class="modal-help">${escapeHtml(tr("这个 packed 黑盒没有可设置 G 常数属性的内部支路。"))}</div>`}
       `;
     }
 
@@ -6411,17 +6565,22 @@
       outputDialogBody.className = `modal-output-body ${outputText.classList.contains("code") ? "code" : ""}`;
       outputDialog.classList.add("open");
       updateOutputFullscreenButton();
+      scheduleOutputMinimapUpdate();
     }
 
     function closeOutputDialog() {
       outputDialog.classList.remove("open");
       outputDialogModal.classList.remove("fullscreen");
+      outputDialogModal.classList.remove("has-minimap");
+      outputDialogMinimapContent.innerHTML = "";
+      outputDialogMinimapThumb.style.display = "none";
       updateOutputFullscreenButton();
     }
 
     const MINIMAP_OUTPUTS = new Set(["nodeEquations", "reducedEquations", "optimizedElimination", "model", "python"]);
     let outputMinimapFrame = 0;
     let outputMinimapDragging = false;
+    let outputDialogMinimapDragging = false;
 
     function scheduleOutputMinimapUpdate() {
       if (outputMinimapFrame) cancelAnimationFrame(outputMinimapFrame);
@@ -6431,27 +6590,34 @@
       });
     }
 
-    function outputMinimapEnabled() {
+    function outputMinimapEnabled(body = outputText) {
       return MINIMAP_OUTPUTS.has(state.activeOutput) && (
-        outputText.scrollHeight > outputText.clientHeight + 24 ||
-        outputText.scrollWidth > outputText.clientWidth + 24
+        body.scrollHeight > body.clientHeight + 24 ||
+        body.scrollWidth > body.clientWidth + 24
       );
     }
 
     function updateOutputMinimap() {
-      const enabled = outputMinimapEnabled();
-      outputPanel.classList.toggle("has-minimap", enabled);
+      updateOutputMinimapFor(outputPanel, outputText, outputMinimap, outputMinimapContent, outputMinimapThumb);
+      if (outputDialog.classList.contains("open")) {
+        updateOutputMinimapFor(outputDialogModal, outputDialogBody, outputDialogMinimap, outputDialogMinimapContent, outputDialogMinimapThumb);
+      }
+    }
+
+    function updateOutputMinimapFor(panel, body, minimap, content, thumb) {
+      const enabled = outputMinimapEnabled(body);
+      panel.classList.toggle("has-minimap", enabled);
       if (!enabled) {
-        outputMinimapContent.innerHTML = "";
-        outputMinimapThumb.style.display = "none";
+        content.innerHTML = "";
+        thumb.style.display = "none";
         return;
       }
 
-      const scrollHeight = Math.max(1, outputText.scrollHeight);
-      const minimapHeight = Math.max(1, outputMinimapContent.clientHeight);
-      const cards = Array.from(outputText.querySelectorAll(".formula-card"));
-      const marks = cards.length ? cards : Array.from(outputText.querySelectorAll("pre, .code"));
-      outputMinimapContent.innerHTML = marks.map(item => {
+      const scrollHeight = Math.max(1, body.scrollHeight);
+      const minimapHeight = Math.max(1, content.clientHeight);
+      const cards = Array.from(body.querySelectorAll(".formula-card"));
+      const marks = cards.length ? cards : Array.from(body.querySelectorAll("pre, .code"));
+      content.innerHTML = marks.map(item => {
         const top = Math.max(0, (item.offsetTop / scrollHeight) * minimapHeight);
         const height = Math.max(3, (item.offsetHeight / scrollHeight) * minimapHeight);
         const isMatrix = Boolean(item.querySelector?.(".matrix-equation, .actual-block-preview, .ihis-block-preview"));
@@ -6459,38 +6625,45 @@
         const classes = ["output-minimap-mark", isMatrix ? "matrix" : "", isWarning ? "warning" : ""].filter(Boolean).join(" ");
         return `<div class="${classes}" style="top:${top.toFixed(2)}px;height:${height.toFixed(2)}px"></div>`;
       }).join("");
-      updateOutputMinimapThumb();
+      updateOutputMinimapThumbFor(panel, body, minimap, thumb);
     }
 
     function updateOutputMinimapThumb() {
-      if (!outputPanel.classList.contains("has-minimap")) return;
-      const trackHeight = Math.max(1, outputMinimap.clientHeight - 4);
-      const trackWidth = Math.max(1, outputMinimap.clientWidth - 4);
-      const scrollHeight = Math.max(1, outputText.scrollHeight);
-      const scrollWidth = Math.max(1, outputText.scrollWidth);
-      const viewportRatio = Math.min(1, outputText.clientHeight / scrollHeight);
-      const viewportRatioX = Math.min(1, outputText.clientWidth / scrollWidth);
+      updateOutputMinimapThumbFor(outputPanel, outputText, outputMinimap, outputMinimapThumb);
+      if (outputDialog.classList.contains("open")) {
+        updateOutputMinimapThumbFor(outputDialogModal, outputDialogBody, outputDialogMinimap, outputDialogMinimapThumb);
+      }
+    }
+
+    function updateOutputMinimapThumbFor(panel, body, minimap, thumb) {
+      if (!panel.classList.contains("has-minimap")) return;
+      const trackHeight = Math.max(1, minimap.clientHeight - 4);
+      const trackWidth = Math.max(1, minimap.clientWidth - 4);
+      const scrollHeight = Math.max(1, body.scrollHeight);
+      const scrollWidth = Math.max(1, body.scrollWidth);
+      const viewportRatio = Math.min(1, body.clientHeight / scrollHeight);
+      const viewportRatioX = Math.min(1, body.clientWidth / scrollWidth);
       const thumbHeight = Math.max(20, trackHeight * viewportRatio);
       const thumbWidth = Math.max(16, trackWidth * viewportRatioX);
       const maxTop = Math.max(0, trackHeight - thumbHeight);
       const maxLeft = Math.max(0, trackWidth - thumbWidth);
-      const maxScroll = Math.max(1, outputText.scrollHeight - outputText.clientHeight);
-      const maxScrollX = Math.max(1, outputText.scrollWidth - outputText.clientWidth);
-      const thumbTop = Math.min(maxTop, (outputText.scrollTop / maxScroll) * maxTop);
-      const thumbLeft = Math.min(maxLeft, (outputText.scrollLeft / maxScrollX) * maxLeft);
-      outputMinimapThumb.style.display = "block";
-      outputMinimapThumb.style.height = `${thumbHeight}px`;
-      outputMinimapThumb.style.width = `${thumbWidth}px`;
-      outputMinimapThumb.style.transform = `translate(${thumbLeft + 2}px, ${thumbTop + 2}px)`;
+      const maxScroll = Math.max(1, body.scrollHeight - body.clientHeight);
+      const maxScrollX = Math.max(1, body.scrollWidth - body.clientWidth);
+      const thumbTop = Math.min(maxTop, (body.scrollTop / maxScroll) * maxTop);
+      const thumbLeft = Math.min(maxLeft, (body.scrollLeft / maxScrollX) * maxLeft);
+      thumb.style.display = "block";
+      thumb.style.height = `${thumbHeight}px`;
+      thumb.style.width = `${thumbWidth}px`;
+      thumb.style.transform = `translate(${thumbLeft + 2}px, ${thumbTop + 2}px)`;
     }
 
-    function scrollOutputFromMinimap(clientX, clientY) {
-      if (!outputPanel.classList.contains("has-minimap")) return;
-      const rect = outputMinimap.getBoundingClientRect();
+    function scrollOutputFromMinimap(clientX, clientY, panel = outputPanel, body = outputText, minimap = outputMinimap) {
+      if (!panel.classList.contains("has-minimap")) return;
+      const rect = minimap.getBoundingClientRect();
       const ratioX = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
       const ratioY = Math.max(0, Math.min(1, (clientY - rect.top) / Math.max(1, rect.height)));
-      outputText.scrollLeft = ratioX * Math.max(0, outputText.scrollWidth - outputText.clientWidth);
-      outputText.scrollTop = ratioY * Math.max(0, outputText.scrollHeight - outputText.clientHeight);
+      body.scrollLeft = ratioX * Math.max(0, body.scrollWidth - body.clientWidth);
+      body.scrollTop = ratioY * Math.max(0, body.scrollHeight - body.clientHeight);
     }
 
     function updateOutputFullscreenButton() {
@@ -6503,6 +6676,7 @@
     function toggleOutputFullscreen() {
       outputDialogModal.classList.toggle("fullscreen");
       updateOutputFullscreenButton();
+      scheduleOutputMinimapUpdate();
     }
 
     function pythonStringList(items) {
@@ -7772,7 +7946,7 @@
       const external = assembled.nodes.filter(node => !groundSet.has(node) && !state.internalNodes.includes(node));
       const externalVisible = external.filter(node => !forcedInternal.has(node));
 
-      return {
+      const payload = {
         all_nodes: assembled.nodes,
         voltage_nodes: assembled.nodes.map(node => displayNameForAssembledNode(assembled, node)),
         node_display_names: Object.fromEntries(assembled.nodes.map(node => [node, displayNameForAssembledNode(assembled, node)])),
@@ -7783,14 +7957,29 @@
         G_full: assembled.G.map(row => row.map(sumTerms)),
         Ihis_full: assembled.Ihis.map(sumTerms),
         G_full_tagged: assembled.G.map(row => row.map(taggedSumTerms)),
-        Ihis_full_tagged: assembled.Ihis.map(taggedSumTerms)
+        Ihis_full_tagged: assembled.Ihis.map(taggedSumTerms),
+        G_symbol_usage: assembled.GSymbolUsage || [],
+        G_constant_symbols: globallyConstantGSymbols(assembled.GSymbolUsage || [])
       };
+      payload.symbol_dependency_table = buildSymbolDependencyTable(payload);
+      payload.symbol_dependency_table_tagged = buildTaggedSymbolDependencyTable(payload);
+      return payload;
     }
 
     function reducedStaticMessage(payload) {
       if (!payload.internal_nodes.length) {
         return `<div class="formula-empty">${escapeHtml(tr("请在右侧网络节点列表中勾选至少一个“内部”节点。"))}</div>`;
       }
+      if (payload.warnings?.length) {
+        return `<div class="formula-empty">${payload.warnings.map(escapeHtml).join("<br>")}</div>`;
+      }
+      if (!payload.external_nodes.length) {
+        return `<div class="formula-empty">${escapeHtml(tr("至少需要保留一个外部节点。"))}</div>`;
+      }
+      return null;
+    }
+
+    function optimizedStaticMessage(payload) {
       if (payload.warnings?.length) {
         return `<div class="formula-empty">${payload.warnings.map(escapeHtml).join("<br>")}</div>`;
       }
@@ -7847,7 +8036,13 @@
         node_display_names: payload.node_display_names,
         ground_nodes: payload.ground_nodes,
         G_full: payload.G_full,
-        Ihis_full: payload.Ihis_full
+        Ihis_full: payload.Ihis_full,
+        G_symbol_usage: payload.G_symbol_usage,
+        G_constant_symbols: payload.G_constant_symbols,
+        symbol_dependency_table: payload.symbol_dependency_table,
+        symbol_dependency_table_tagged: payload.symbol_dependency_table_tagged,
+        G_full_tagged: payload.G_full_tagged,
+        Ihis_full_tagged: payload.Ihis_full_tagged
       });
     }
 
@@ -7878,6 +8073,7 @@
       const display = state.optimizedEliminationDisplay || "compact";
       const simplify = state.optimizedEliminationSimplify || "light";
       const spd = state.optimizedEliminationAssumeSpd !== false;
+      const overrides = state.optimizedSymbolDependencyOverrides || "";
       return `
         <div class="formula-card">
           <div class="formula-name">优化消元设置 / Optimized elimination controls</div>
@@ -7907,6 +8103,11 @@
               <input data-optimized-control="spd" type="checkbox" ${spd ? "checked" : ""}>
             </label>
           </div>
+          <label class="field">
+            <span>${optText("符号类别覆盖 / Symbol dependency overrides JSON", "Symbol dependency overrides JSON")}</span>
+            <textarea data-optimized-control="symbolDeps" rows="4" spellcheck="false" placeholder='{"Gtap":"CODE_VARIABLE","Ihis_a":"STEP_HISTORY"}'>${escapeHtml(overrides)}</textarea>
+          </label>
+          <div class="actual-block-caption">${optText("默认：常数 G 进入 RAM_CONSTANT，非 constant G 进入 CODE_VARIABLE，Ihis/history 符号进入 STEP_HISTORY；这里可以手动覆盖。", "Default: constant G symbols map to RAM_CONSTANT, non-constant G symbols to CODE_VARIABLE, and Ihis/history symbols to STEP_HISTORY. Use this JSON field for manual overrides.")}</div>
         </div>
       `;
     }
@@ -8049,7 +8250,16 @@
       `;
     }
 
-    function renderStructuredFormulaSummary() {
+    function renderStructuredFormulaSummary(result = null) {
+      if (result?.structured?.block_type === "no_elimination") {
+        return `
+          <div class="formula-card">
+            <div class="formula-name">${optText("最终紧凑公式", "Final Compact Formulas")}</div>
+            <div class="formula-line"><span class="formula-lhs">${formatMath("G_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("G")}</span></div>
+            <div class="formula-line"><span class="formula-lhs">${formatMath("Ihis_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihis")}</span></div>
+          </div>
+        `;
+      }
       return `
         <div class="formula-card">
           <div class="formula-name">${optText("最终紧凑公式", "Final Compact Formulas")}</div>
@@ -8121,6 +8331,21 @@
 
     function renderStructuredBlocks(result, payload) {
       const blocks = result.structured?.blocks || {};
+      if (result.structured?.block_type === "no_elimination") {
+        const displayNames = payload.node_display_names || {};
+        const externalNames = (payload.external_nodes || []).map(node => displayNames[node] || nodeDisplayName(node));
+        return `
+          <div class="formula-card">
+            <div class="formula-name">${optText("原始 G/Ihis 预览", "Original G/Ihis Preview")}</div>
+            <div class="formula-empty">${optText("当前没有内部节点，C 导出直接使用原始节点顺序生成 stamp 和注入。", "No internal nodes are selected, so C export uses the original retained-node order for stamping and injection.")}</div>
+            <div class="formula-line"><span class="formula-lhs">${optText("节点顺序", "Node order")}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(externalNames.join(", ") || "-")}</span></div>
+            <div class="matrix-equation">
+              <span class="formula-lhs">${formatMath("G")}</span><span class="formula-eq">=</span>${renderMatrix(payload.G_full || [])}
+              <span class="formula-lhs">${formatMath("Ihis")}</span><span class="formula-eq">=</span>${renderVectorMatrix(payload.Ihis_full || [])}
+            </div>
+          </div>
+        `;
+      }
       const blockPayload = { ...payload, internal_nodes: result.effective_internal_nodes || payload.internal_nodes || [] };
       const userOrder = result.internal_nodes || payload.internal_nodes || [];
       const effectiveOrder = result.effective_internal_nodes || userOrder;
@@ -8203,9 +8428,108 @@
 
     function renderStructuredByType(result) {
       const type = result.structured?.block_type;
+      if (type === "no_elimination") {
+        return `
+          <div class="formula-card">
+            <div class="formula-name">${optText("无内部节点", "No Internal Nodes")}</div>
+            <div class="formula-empty">${optText("当前没有需要消去的内部节点；C 草稿会直接使用原始 G 和 Ihis 生成 RTDS stamp 与注入。", "There are no internal nodes to eliminate; the C draft uses the original G and Ihis directly for RTDS stamping and injection.")}</div>
+          </div>
+        `;
+      }
       if (type === "pure_diagonal") return renderPureDiagonalStructured(result);
       if (type === "diagonal_plus_coupled") return renderDiagonalCoupledStructured(result);
       return renderGeneralStructured();
+    }
+
+    function renderDynamicSubblockAnalysis(result, payload) {
+      const subblock = result.structured?.dynamic_subblock || {};
+      const dep = result.structured?.dependency_analysis || {};
+      const owner = subblock.owner_matrix || [];
+      if (!owner.length) return "";
+      const displayNames = payload.node_display_names || {};
+      const nodes = result.external_nodes || payload.external_nodes || [];
+      const nodeName = index => escapeHtml(displayNames[nodes[index]] || nodeDisplayName(nodes[index]) || `r${index}`);
+      const entryLabel = entry => {
+        const row = Number(entry?.[0]);
+        const col = Number(entry?.[1]);
+        return `${nodeName(row)}-${nodeName(col)}`;
+      };
+      const entryList = entries => (entries || []).map(entryLabel).join(", ") || "-";
+      const stageLabel = stage => String(stage || "-")
+        .replace("CODE_PER_STEP", "STEP")
+        .replace("CODE_UPDATE", "CODE")
+        .replace("RAM_INIT", "RAM");
+      const compactNameList = names => {
+        const clean = (names || []).filter(Boolean);
+        if (!clean.length) return "-";
+        if (clean.length <= 5) return clean.join(", ");
+        return `${clean.slice(0, 2).join(", ")} ... ${clean.slice(-2).join(", ")} (${clean.length})`;
+      };
+      const hasGredStage = stageName => owner.some(row => row.some(stage => stage === stageName));
+      const ownerStageColumns = [
+        ["CODE_UPDATE", optText("CODE 列", "CODE cols")],
+        ["RAM_INIT", optText("RAM 列", "RAM cols")],
+        ["UNKNOWN", optText("UNKNOWN 列", "UNKNOWN cols")],
+        ["CODE_PER_STEP", optText("STEP 列", "STEP cols")]
+      ].filter(([stage]) => stage !== "CODE_PER_STEP" || hasGredStage(stage));
+      const ownerRows = owner.map((row, rowIndex) => `
+        <tr>
+          <th>${nodeName(rowIndex)}</th>
+          ${ownerStageColumns.map(([stageName]) => {
+            const names = row.map((stage, colIndex) => stage === stageName ? nodeName(colIndex) : "").filter(Boolean);
+            return `<td>${compactNameList(names)}</td>`;
+          }).join("")}
+        </tr>
+      `).join("");
+      const header = `<tr><th>${optText("行节点", "Row node")}</th>${ownerStageColumns.map(([, label]) => `<th>${label}</th>`).join("")}</tr>`;
+      const rows = (subblock.rows || []).map(index => nodeName(Number(index))).join(", ") || "-";
+      const cols = (subblock.cols || []).map(index => nodeName(Number(index))).join(", ") || "-";
+      const blockLine = subblock.is_rectangular
+        ? `<div class="formula-line"><span class="formula-lhs">${optText("Dynamic block", "Dynamic block")}</span><span class="formula-eq">=</span><span class="formula-rhs">${optText("Rows", "Rows")}: [${rows}], ${optText("Cols", "Cols")}: [${cols}]</span></div>`
+        : `<div class="formula-line"><span class="formula-lhs">${optText("Dynamic block", "Dynamic block")}</span><span class="formula-eq">=</span><span class="formula-rhs">${optText("非矩形，使用 sparse updates", "Non-rectangular, using sparse updates")}</span></div>`;
+      const ihisStages = dep.Ihisred_stage || [];
+      const ihisStageRows = ihisStages.map((stage, index) => `
+        <tr>
+          <th>${nodeName(index)}</th>
+          <td>${escapeHtml(stageLabel(stage))}</td>
+        </tr>
+      `).join("");
+      const ihisStageNames = stageName => ihisStages
+        .map((stage, index) => stage === stageName ? nodeName(index) : "")
+        .filter(Boolean)
+        .join(", ") || "-";
+      const ihisTable = ihisStages.length ? `
+        <div class="formula-name">${optText("Ihisred CODE/RAM 分析", "Ihisred CODE/RAM Analysis")}</div>
+        <table class="analysis-table stage-summary-table">
+          <thead>
+            <tr>
+              <th>${optText("节点", "Node")}</th>
+              <th>${optText("阶段", "Stage")}</th>
+            </tr>
+          </thead>
+          <tbody>${ihisStageRows}</tbody>
+        </table>
+        <div class="formula-line"><span class="formula-lhs">${formatMath("Ihis_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihisr - Grk*W*Ihisk")}</span></div>
+        <div class="actual-block-caption">${optText("RAM-owned rows", "RAM-owned rows")}: ${ihisStageNames("RAM_INIT")}</div>
+        <div class="actual-block-caption">${optText("STEP-owned rows", "STEP-owned rows")}: ${ihisStageNames("CODE_PER_STEP")}</div>
+        <div class="actual-block-caption">${optText("CODE-owned rows", "CODE-owned rows")}: ${ihisStageNames("CODE_UPDATE")}</div>
+        <div class="actual-block-caption">${optText("UNKNOWN rows", "UNKNOWN rows")}: ${ihisStageNames("UNKNOWN")}</div>
+      ` : "";
+      return `
+        <div class="formula-card">
+          <div class="formula-name">${optText("动态子块 Schur 分析", "Dynamic Subblock Schur Analysis")}</div>
+          <table class="analysis-table stage-summary-table">
+            <thead>${header}</thead>
+            <tbody>${ownerRows}</tbody>
+          </table>
+          ${blockLine}
+          <div class="formula-line"><span class="formula-lhs">${formatMath("Gred[B,C]")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Grr[B,C] - Grk[B,k]*W*Gkr[k,C]")}</span></div>
+          <div class="actual-block-caption">${optText("RAM-owned entries", "RAM-owned entries")}: ${entryList(subblock.ram_entries)}</div>
+          <div class="actual-block-caption">${optText("CODE-owned entries", "CODE-owned entries")}: ${entryList(subblock.code_entries)}</div>
+          ${(subblock.unknown_entries || []).length ? `<div class="actual-block-caption">${optText("UNKNOWN entries", "UNKNOWN entries")}: ${entryList(subblock.unknown_entries)}</div>` : ""}
+          ${ihisTable}
+        </div>
+      `;
     }
 
     function renderOptimizedFormulaResult(result, payload) {
@@ -8215,10 +8539,10 @@
             <div class="formula-name">${optText("结构化 C 草稿", "Structured C Draft")}</div>
             <button class="copy-draft-button" type="button" data-copy-c-draft>${optText("复制 C", "Copy C")}</button>
           </div>
-          <pre class="code" data-c-draft-code>${escapeHtml(result.structured?.c_draft || "")}</pre>
+          <pre class="code" data-c-draft-code tabindex="0" title="${optText("聚焦后按 Ctrl+C 复制整段 C 草稿", "Focus and press Ctrl+C to copy the full C draft")}">${escapeHtml(result.structured?.c_draft || "")}</pre>
         </div>
       `;
-      return `${renderStructuredBlocks(result, payload)}${renderStructuredByType(result)}${renderStructuredFormulaSummary()}${cDraft}`;
+      return `${renderStructuredBlocks(result, payload)}${renderStructuredByType(result)}${renderStructuredFormulaSummary(result)}${renderDynamicSubblockAnalysis(result, payload)}${cDraft}`;
     }
 
     function renderOptimizedEliminationResult(result, payload) {
@@ -8231,7 +8555,7 @@
     }
 
     async function renderOptimizedEliminationAsync(token, payload) {
-      const staticHtml = reducedStaticMessage(payload);
+      const staticHtml = optimizedStaticMessage(payload);
       if (staticHtml) {
         if (token === optimizedEliminationRenderToken) {
           outputText.innerHTML = `<div class="formula-list">${staticHtml}</div>`;
@@ -9307,17 +9631,22 @@
       const size = nodes.length;
       const G = Array.from({ length: size }, () => Array.from({ length: size }, () => []));
       const Ihis = Array.from({ length: size }, () => []);
+      const GSymbolUsage = [];
       const warnings = [];
 
       const nodeLookup = nodeLookupFromGroups(groups);
       state.branches.forEach(branch => {
         if (branch.kind === "ground") return;
+        if (expandPackaged && branch.packageOriginal) {
+          stampPackagedOriginal(branch, netByTerminal, nodeIndex, G, Ihis, GSymbolUsage);
+          return;
+        }
         if (branch.kind === "current_source") {
-          stampCurrentSourceBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeLookup, nodeIndex, G, Ihis, warnings);
+          stampCurrentSourceBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeLookup, nodeIndex, G, Ihis, warnings, GSymbolUsage);
           return;
         }
         if (branch.kind === "voltage_source_series_r") {
-          stampVoltageSourceSeriesRBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeIndex, G, Ihis, warnings);
+          stampVoltageSourceSeriesRBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeIndex, G, Ihis, warnings, GSymbolUsage);
           return;
         }
         const sourceId = branch.id;
@@ -9336,12 +9665,14 @@
             const colNet = netByTerminal.get(terminalKey(branch.id, colSide));
             const col = nodeIndex.get(colNet);
             if (col === undefined) return;
-            addTerm(G[row][col], localG[r]?.[c] || "0", sourceId);
+            const term = localG[r]?.[c] || "0";
+            addTerm(G[row][col], term, sourceId);
+            recordGSymbolUsage(GSymbolUsage, branch, term, rowNet, colNet);
           });
         });
       });
 
-      return { nodes, G, Ihis, displayByNode, forcedInternalNodes, groundNodes: groundNodesFromGroups(groups), warnings };
+      return { nodes, G, Ihis, GSymbolUsage, displayByNode, forcedInternalNodes, groundNodes: groundNodesFromGroups(groups), warnings };
     }
 
     function groundNodesFromGroups(groups) {
@@ -9397,7 +9728,7 @@
       return lookup;
     }
 
-    function stampCurrentSourceBranch(branch, netForSide, nodeLookup, nodeIndex, G, Ihis, warnings = null) {
+    function stampCurrentSourceBranch(branch, netForSide, nodeLookup, nodeIndex, G, Ihis, warnings = null, GSymbolUsage = null) {
       const fromSide = branch.direction === "AtoB" ? "A" : "B";
       const toSide = branch.direction === "AtoB" ? "B" : "A";
       const fromNode = netForSide(fromSide);
@@ -9418,14 +9749,17 @@
           return;
         }
         addTerm(G[fromRow][col], term.coefficient, branch.id);
-        addTerm(G[toRow][col], negateExpr(term.coefficient), branch.id);
+        recordGSymbolUsage(GSymbolUsage, branch, term.coefficient, fromNode, controlNode);
+        const negated = negateExpr(term.coefficient);
+        addTerm(G[toRow][col], negated, branch.id);
+        recordGSymbolUsage(GSymbolUsage, branch, negated, toNode, controlNode);
       });
       const ihis = currentSourceIhis(branch);
       addTerm(Ihis[fromRow], ihis, branch.id);
       addTerm(Ihis[toRow], negateExpr(ihis), branch.id);
     }
 
-    function stampVoltageSourceSeriesRBranch(branch, netForSide, nodeIndex, G, Ihis, warnings = null) {
+    function stampVoltageSourceSeriesRBranch(branch, netForSide, nodeIndex, G, Ihis, warnings = null, GSymbolUsage = null) {
       validateVoltageSourceSeriesR(branch).forEach(message => warnings?.push(`${branch.name}: ${message}`));
       const pNode = netForSide("P");
       const nNode = netForSide("N");
@@ -9435,9 +9769,14 @@
       const gs = voltageSourceSeriesConductance(branch);
       const j = voltageSourceSeriesIhis(branch);
       addTerm(G[pRow][pRow], gs, branch.id);
-      addTerm(G[pRow][nRow], negateExpr(gs), branch.id);
-      addTerm(G[nRow][pRow], negateExpr(gs), branch.id);
+      recordGSymbolUsage(GSymbolUsage, branch, gs, pNode, pNode);
+      const negGs = negateExpr(gs);
+      addTerm(G[pRow][nRow], negGs, branch.id);
+      recordGSymbolUsage(GSymbolUsage, branch, negGs, pNode, nNode);
+      addTerm(G[nRow][pRow], negGs, branch.id);
+      recordGSymbolUsage(GSymbolUsage, branch, negGs, nNode, pNode);
       addTerm(G[nRow][nRow], gs, branch.id);
+      recordGSymbolUsage(GSymbolUsage, branch, gs, nNode, nNode);
       addTerm(Ihis[pRow], j, branch.id);
       addTerm(Ihis[nRow], negateExpr(j), branch.id);
     }
@@ -9446,10 +9785,11 @@
       return assembled.displayByNode?.get(node) || nodeDisplayName(node);
     }
 
-    function stampPackagedOriginal(branch, netByTerminal, nodeIndex, G, Ihis) {
+    function stampPackagedOriginal(branch, netByTerminal, nodeIndex, G, Ihis, GSymbolUsage = null) {
       const packed = packagedOriginalSystem(branch, netByTerminal);
       if (!packed) return false;
       let stamped = false;
+      const nodeIdByLocalId = new Map((packed.localNodeIds || []).map((id, index) => [id, packed.nodeIds[index]]));
       packed.nodeIds.forEach((rowNode, r) => {
         const row = nodeIndex.get(rowNode);
         if (row === undefined) return;
@@ -9462,6 +9802,18 @@
           const beforeG = G[row][col].length;
           addTerms(G[row][col], packed.G[r]?.[c] || []);
           if (G[row][col].length !== beforeG) stamped = true;
+        });
+      });
+      (packed.GSymbolUsage || []).forEach(record => {
+        const rowNode = nodeIdByLocalId.get(record.row_node);
+        const colNode = nodeIdByLocalId.get(record.col_node);
+        if (!rowNode || !colNode) return;
+        GSymbolUsage?.push({
+          ...record,
+          row_node: rowNode,
+          col_node: colNode,
+          packaged_source_id: branch.id,
+          packaged_source_name: branch.name
         });
       });
       return stamped;
@@ -9534,15 +9886,15 @@
       (pkg.externalGroups || []).forEach((group, index) => {
         const item = pick(group);
         const exposed = Boolean(packagedNodeExposePort(branch, "external", index));
-        if (item) ordered.push({ ...item, packageGroup: group, packageKind: "external", virtual: !exposed, virtualIndex: index });
+        if (item) ordered.push({ ...item, id: group.id, packageGroup: group, packageKind: "external", virtual: !exposed, virtualIndex: index });
       });
       (pkg.internalGroups || []).forEach((group, index) => {
         const item = pick(group);
         const exposed = Boolean(packagedNodeExposePort(branch, "internal", index));
-        if (item) ordered.push({ ...item, packageGroup: group, packageKind: "internal", virtual: !exposed, virtualIndex: index });
+        if (item) ordered.push({ ...item, id: group.id, packageGroup: group, packageKind: "internal", virtual: !exposed, virtualIndex: index });
       });
       annotated.forEach((item, index) => {
-        if (!used.has(index)) ordered.push({ ...item, virtual: item.internal, virtualIndex: ordered.length });
+        if (!used.has(index)) ordered.push({ ...item, id: item.globalNet || item.display || `pkg-extra:${branch.id}:${index}`, virtual: item.internal, virtualIndex: ordered.length });
       });
       const groupByTerminal = new Map();
       ordered.forEach((group, index) => group.members.forEach(member => groupByTerminal.set(member, index)));
@@ -9551,19 +9903,20 @@
       const size = ordered.length;
       const localG = Array.from({ length: size }, () => Array.from({ length: size }, () => []));
       const localIhis = Array.from({ length: size }, () => []);
+      const GSymbolUsage = [];
       originalBranches.forEach(item => {
         if (item.kind === "current_source") {
           stampCurrentSourceBranch(item, side => {
             const index = groupByTerminal.get(terminalKey(item.id, side));
             return index === undefined ? null : ordered[index]?.id;
-          }, orderedNodeLookup, orderedNodeIndex, localG, localIhis);
+          }, orderedNodeLookup, orderedNodeIndex, localG, localIhis, null, GSymbolUsage);
           return;
         }
         if (item.kind === "voltage_source_series_r") {
           stampVoltageSourceSeriesRBranch(item, side => {
             const index = groupByTerminal.get(terminalKey(item.id, side));
             return index === undefined ? null : ordered[index]?.id;
-          }, orderedNodeIndex, localG, localIhis);
+          }, orderedNodeIndex, localG, localIhis, null, GSymbolUsage);
           return;
         }
         const sourceId = item.id;
@@ -9577,7 +9930,9 @@
           sides.forEach((colSide, c) => {
             const col = groupByTerminal.get(terminalKey(item.id, colSide));
             if (col === undefined) return;
-            addTerm(localG[row][col], g[r]?.[c] || "0", sourceId);
+            const term = g[r]?.[c] || "0";
+            addTerm(localG[row][col], term, sourceId);
+            recordGSymbolUsage(GSymbolUsage, item, term, ordered[row]?.id, ordered[col]?.id);
           });
         });
       });
@@ -9592,7 +9947,7 @@
         const port = group.packageKind === "internal" ? group.packageGroup?.exposePort : group.packageGroup?.port;
         return port ? netByTerminal.get(terminalKey(branch.id, port)) : null;
       });
-      return { nodeIds, G: localG, Ihis: localIhis };
+      return { nodeIds, localNodeIds: ordered.map(group => group.id), G: localG, Ihis: localIhis, GSymbolUsage };
     }
 
     function bestSavedPackageNodeState(members, nodeState) {
@@ -9690,6 +10045,90 @@
       if (!cleaned || cleaned === "0") return;
       const ids = Array.isArray(sourceIds) ? sourceIds.filter(Boolean) : (sourceIds ? [sourceIds] : []);
       list.push(ids.length ? { expr: cleaned, sourceIds: ids } : cleaned);
+    }
+
+    function recordGSymbolUsage(records, branch, expr, rowNode, colNode) {
+      if (!records || !branch) return;
+      const constantSymbols = branchConstantGSymbols(branch);
+      extractExpressionSymbols(expr).forEach(symbol => {
+        records.push({
+          symbol,
+          row_node: rowNode,
+          col_node: colNode,
+          source_id: branch.id,
+          source_name: branch.name,
+          is_constant: constantSymbols.has(symbol)
+        });
+      });
+    }
+
+    function globallyConstantGSymbols(records) {
+      const bySymbol = new Map();
+      (records || []).forEach(record => {
+        if (!record.symbol) return;
+        const current = bySymbol.get(record.symbol);
+        bySymbol.set(record.symbol, current === undefined ? Boolean(record.is_constant) : current && Boolean(record.is_constant));
+      });
+      return [...bySymbol.entries()]
+        .filter(([, isConstant]) => isConstant)
+        .map(([symbol]) => symbol)
+        .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+    }
+
+    function parseSymbolDependencyOverrides() {
+      const text = String(state.optimizedSymbolDependencyOverrides || "").trim();
+      if (!text) return {};
+      try {
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        return Object.fromEntries(Object.entries(parsed).map(([symbol, category]) => [symbol, String(category || "").trim().toUpperCase()]));
+      } catch {
+        return {};
+      }
+    }
+
+    function buildSymbolDependencyTable(payload) {
+      const table = {};
+      const constantG = new Set(payload.G_constant_symbols || []);
+      const addSymbols = (items, category, overwrite = false) => {
+        (items || []).forEach(item => {
+          extractExpressionSymbols(item).forEach(symbol => {
+            if (overwrite || !table[symbol]) table[symbol] = category;
+          });
+        });
+      };
+      const gItems = (payload.G_full || []).flat();
+      addSymbols(gItems, "CODE_VARIABLE", true);
+      constantG.forEach(symbol => {
+        if (symbol) table[symbol] = "RAM_CONSTANT";
+      });
+      addSymbols(payload.Ihis_full || [], "STEP_HISTORY", false);
+      Object.entries(parseSymbolDependencyOverrides()).forEach(([symbol, category]) => {
+        if (/^[A-Za-z_]\w*$/.test(symbol) && ["RAM_CONSTANT", "CODE_VARIABLE", "STEP_HISTORY", "UNKNOWN"].includes(category)) {
+          table[symbol] = category;
+        }
+      });
+      return Object.fromEntries(Object.entries(table).sort(([a], [b]) => a.localeCompare(b, "en", { numeric: true })));
+    }
+
+    function buildTaggedSymbolDependencyTable(payload) {
+      const table = { ...(payload.symbol_dependency_table || {}) };
+      (payload.G_symbol_usage || []).forEach(record => {
+        if (!record?.symbol || !record?.source_id) return;
+        table[`${record.symbol}${sourceMarkerForBranch(record.source_id)}`] = record.is_constant ? "RAM_CONSTANT" : "CODE_VARIABLE";
+      });
+      (payload.Ihis_full_tagged || []).forEach(expr => {
+        extractExpressionSymbols(expr).forEach(symbol => {
+          if (!table[symbol]) table[symbol] = "STEP_HISTORY";
+        });
+      });
+      Object.entries(parseSymbolDependencyOverrides()).forEach(([symbol, category]) => {
+        if (!["RAM_CONSTANT", "CODE_VARIABLE", "STEP_HISTORY", "UNKNOWN"].includes(category)) return;
+        Object.keys(table).forEach(key => {
+          if (key === symbol || key.startsWith(`${symbol}__bbsrc_`)) table[key] = category;
+        });
+      });
+      return Object.fromEntries(Object.entries(table).sort(([a], [b]) => a.localeCompare(b, "en", { numeric: true })));
     }
 
     function addTerms(list, terms, fallbackSourceId = null) {
@@ -9878,6 +10317,26 @@
       if (field === "formulaHighlightColor") {
         branch.formulaHighlightColor = /^#[0-9A-Fa-f]{6}$/.test(String(value)) ? String(value) : "#ef4444";
         render();
+        return;
+      }
+      if (field.startsWith("packedG.")) {
+        const [, indexText, key] = field.split(".");
+        const inner = branch.packageOriginal?.branches?.[Number(indexText)];
+        if (inner) {
+          if (key === "gIsConstant") inner.gIsConstant = value === true || value === "1" || value === "true";
+          else if (key === "constantGSymbols") inner.constantGSymbols = String(value || "").trim();
+        }
+        renderAfterSidePanelEdit();
+        return;
+      }
+      if (field === "gIsConstant") {
+        branch.gIsConstant = Boolean(value);
+        renderAfterSidePanelEdit();
+        return;
+      }
+      if (field === "constantGSymbols") {
+        branch.constantGSymbols = value.trim();
+        renderAfterSidePanelEdit();
         return;
       }
       if (field === "width" || field === "height") {
@@ -10139,6 +10598,7 @@
         const mathModel = branch.sourceMode === "node_voltage"
           ? `
             ${controlRowsEditor}
+            ${constantGEditor(branch, true)}
             ${editableField("输出电流 / Ihis", "sourceIhis", branch.sourceIhis || "0")}
             ${warnings.length ? `<div class="validation-warning">${warnings.map(escapeHtml).join("<br>")}</div>` : ""}
             <div class="field">
@@ -10149,6 +10609,7 @@
           `
           : `
             ${editableField("输出电流 / Ihis", "currentExpression", branch.currentExpression || branch.name || "I")}
+            ${constantGEditor(branch, true)}
             <div class="field">
               <label>${escapeHtml(tr("Stamp 预览"))}</label>
               <div class="stamp-preview">${escapeHtml(currentSourceStampPreview(branch))}</div>
@@ -10194,6 +10655,7 @@
             ${editableField("电压源 / Vs", "voltage", branch.voltage || "Vs")}
             ${editableField("串联导纳 / G", "conductance", voltageSourceSeriesConductance(branch))}
           </div>
+          ${constantGEditor(branch)}
           ${warnings.length ? `<div class="validation-warning">${warnings.map(escapeHtml).join("<br>")}</div>` : ""}
           <div class="field">
             <label>${escapeHtml(tr("Stamp 预览"))}</label>
@@ -10261,7 +10723,7 @@
         `;
         const mathModel = branch.packageOriginal
             ? `${readonlyMultilineField("局部 G 矩阵", branchValue(branch, "gMatrix"))}${readonlyMultilineField("局部 Ihis 向量", branchValue(branch, "ihisVector"))}`
-            : `${editableField("局部 G 矩阵", "gMatrix", branchValue(branch, "gMatrix"), true)}${editableField("局部 Ihis 向量", "ihisVector", branchValue(branch, "ihisVector"), true)}`;
+            : `${editableField("局部 G 矩阵", "gMatrix", branchValue(branch, "gMatrix"), true)}${constantGEditor(branch)}${editableField("局部 Ihis 向量", "ihisVector", branchValue(branch, "ihisVector"), true)}`;
         const currents = branch.currents.map((current, index) => {
           const pair = index === 0 ? ["P", "N"] : ["S", "T"];
           const directionValue = current.from === pair[1] && current.to === pair[0] ? `${pair[1]}to${pair[0]}` : `${pair[0]}to${pair[1]}`;
@@ -10353,12 +10815,14 @@
             <div class="field-caption">${escapeHtml(tr("一致性校验"))}</div>
             <div id="blackBoxValidationResult" class="formula-empty">${escapeHtml(tr("正在校验黑盒支路电流观测器..."))}</div>
           `;
+        const gConstEditor = branch.packageOriginal ? packagedGConstEditor(branch, false) : constantGEditor(branch);
         editor.innerHTML = editorGroupList([
           editorGroup("package", "打包信息", packageInfo, false),
           editorGroup("basics", "基本信息", basics, false),
           editorGroup("cases", "工况", branch.packageOriginal ? packagedCaseEditor(branch, false) : switchCaseEditor(branch, false), false),
           editorGroup("highlight", "高亮", branchHighlightEditor(branch, false), false),
           editorGroup("math", "数学模型", mathModel, true),
+          editorGroup("gconst", "G 常数属性", gConstEditor, false),
           editorGroup("currents", "观测电流", currents, false),
           editorGroup("validation", "一致性校验", validationCheck, false)
         ]);
@@ -10366,6 +10830,7 @@
         bindEditorEditButtons();
         bindEditorGroups();
         bindAutoAlignPortsButton(branch.id);
+        bindPackagedGConstButtons(branch.id);
         if (!branch.packageOriginal) renderBlackBoxValidationAsync(branch.id);
         return;
       }
@@ -10385,6 +10850,7 @@
       `;
       const mathModel = `
         ${editableField("G", "g", branchValue(branch, "g"))}
+        ${constantGEditor(branch)}
         ${editableField("Ihis", "ihis", branchValue(branch, "ihis"))}
         <div class="field">
           <label for="direction">电流方向</label>
@@ -10535,6 +11001,27 @@
       bindEditorActionButton("alignPortEnds", () => alignSameSidePortEnds(branchId));
     }
 
+    function bindPackagedGConstButtons(branchId) {
+      editor.querySelectorAll("[data-packaged-gconst-all]").forEach(button => {
+        const action = () => setPackagedGConstAll(branchId, button.getAttribute("data-packaged-gconst-all") === "1");
+        button.addEventListener("pointerdown", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          button.dataset.pointerHandled = "1";
+          action();
+        });
+        button.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (button.dataset.pointerHandled === "1") {
+            delete button.dataset.pointerHandled;
+            return;
+          }
+          action();
+        });
+      });
+    }
+
     function bindEditorActionButton(id, action) {
       const button = document.getElementById(id);
       if (!button) return;
@@ -10558,6 +11045,17 @@
     function autoAlignPorts(branchId) {
       alignPortRoots(branchId);
       alignSameSidePortEnds(branchId);
+    }
+
+    function setPackagedGConstAll(branchId, isConstant) {
+      const branch = findBranch(branchId);
+      if (!branch?.packageOriginal) return;
+      commitHistory();
+      invalidateMathCaches();
+      packagedGBranches(branch).forEach(({ inner }) => {
+        inner.gIsConstant = Boolean(isConstant);
+      });
+      render();
     }
 
     function alignPortRoots(branchId) {
@@ -12739,7 +13237,9 @@ function startResizeDrag(branch, handle, event) {
     outputMinimapObserver.observe(outputText, { childList: true, subtree: true, characterData: true });
     const outputResizeObserver = new ResizeObserver(scheduleOutputMinimapUpdate);
     outputResizeObserver.observe(outputText);
+    outputResizeObserver.observe(outputDialogBody);
     outputText.addEventListener("scroll", updateOutputMinimapThumb);
+    outputDialogBody.addEventListener("scroll", updateOutputMinimapThumb);
     window.addEventListener("resize", scheduleOutputMinimapUpdate);
     outputMinimap.addEventListener("pointerdown", event => {
       outputMinimapDragging = true;
@@ -12759,6 +13259,24 @@ function startResizeDrag(branch, handle, event) {
     outputMinimap.addEventListener("pointercancel", () => {
       outputMinimapDragging = false;
     });
+    outputDialogMinimap.addEventListener("pointerdown", event => {
+      outputDialogMinimapDragging = true;
+      outputDialogMinimap.setPointerCapture(event.pointerId);
+      scrollOutputFromMinimap(event.clientX, event.clientY, outputDialogModal, outputDialogBody, outputDialogMinimap);
+      event.preventDefault();
+    });
+    outputDialogMinimap.addEventListener("pointermove", event => {
+      if (!outputDialogMinimapDragging) return;
+      scrollOutputFromMinimap(event.clientX, event.clientY, outputDialogModal, outputDialogBody, outputDialogMinimap);
+      event.preventDefault();
+    });
+    outputDialogMinimap.addEventListener("pointerup", event => {
+      outputDialogMinimapDragging = false;
+      outputDialogMinimap.releasePointerCapture(event.pointerId);
+    });
+    outputDialogMinimap.addEventListener("pointercancel", () => {
+      outputDialogMinimapDragging = false;
+    });
     outputText.addEventListener("pointerover", handleFormulaHover);
     outputText.addEventListener("pointerout", handleFormulaHoverOut);
     outputText.addEventListener("change", event => {
@@ -12768,26 +13286,72 @@ function startResizeDrag(branch, handle, event) {
       if (kind === "display") state.optimizedEliminationDisplay = control.value || "compact";
       if (kind === "simplify") state.optimizedEliminationSimplify = control.value || "light";
       if (kind === "spd") state.optimizedEliminationAssumeSpd = Boolean(control.checked);
+      if (kind === "symbolDeps") state.optimizedSymbolDependencyOverrides = control.value || "";
       optimizedEliminationRenderToken += 1;
       renderOutput();
     });
-    outputText.addEventListener("click", event => {
+    function handleCodeDraftKeydown(event) {
+      const code = event.target.closest?.("[data-c-draft-code]");
+      if (!code) return;
+      const isCopy = (event.ctrlKey || event.metaKey) && event.key?.toLowerCase() === "c";
+      if (!isCopy) return;
+      const selection = window.getSelection?.();
+      const hasCodeSelection = selection && !selection.isCollapsed && code.contains(selection.anchorNode) && code.contains(selection.focusNode);
+      if (hasCodeSelection) return;
+      event.preventDefault();
+      copyTextToClipboard(code.textContent || "", code).then(ok => {
+        statusEl.textContent = ok ? optText("已复制 C 草稿", "C draft copied") : optText("复制 C 草稿失败", "Failed to copy C draft");
+      });
+    }
+
+    function elementFromSelectionNode(node) {
+      if (!node) return null;
+      return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    }
+
+    function codeDraftFromSelection(selection) {
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+      const anchorCode = elementFromSelectionNode(selection.anchorNode)?.closest?.("[data-c-draft-code]");
+      const focusCode = elementFromSelectionNode(selection.focusNode)?.closest?.("[data-c-draft-code]");
+      if (anchorCode && anchorCode === focusCode) return anchorCode;
+      const rangeCode = elementFromSelectionNode(selection.getRangeAt(0).commonAncestorContainer)?.closest?.("[data-c-draft-code]");
+      return rangeCode || null;
+    }
+
+    function handleCodeDraftCopy(event) {
+      const selection = window.getSelection?.();
+      const code = codeDraftFromSelection(selection);
+      if (!code) return;
+      const text = selection.toString();
+      if (!text) return;
+      event.preventDefault();
+      event.clipboardData?.setData("text/plain", text);
+      statusEl.textContent = optText("已复制选中的 C 草稿", "Selected C draft copied");
+    }
+
+    function handleCopyDraftClick(event) {
       const copyButton = event.target.closest?.("[data-copy-c-draft]");
-      if (copyButton) {
-        const card = copyButton.closest("[data-c-draft-card]");
-        const code = card?.querySelector("[data-c-draft-code]");
-        const text = code?.textContent || "";
-        copyTextToClipboard(text, code).then(ok => {
-          copyButton.textContent = ok ? optText("已复制", "Copied") : optText("复制失败", "Copy failed");
-          copyButton.classList.toggle("copied", ok);
-          statusEl.textContent = ok ? optText("已复制 C 草稿", "C draft copied") : optText("复制 C 草稿失败", "Failed to copy C draft");
-          window.setTimeout(() => {
-            copyButton.textContent = optText("复制 C", "Copy C");
-            copyButton.classList.remove("copied");
-          }, 1400);
-        });
-        return;
-      }
+      if (!copyButton) return false;
+      const card = copyButton.closest("[data-c-draft-card]");
+      const code = card?.querySelector("[data-c-draft-code]");
+      const text = code?.textContent || "";
+      copyTextToClipboard(text, code).then(ok => {
+        copyButton.textContent = ok ? optText("已复制", "Copied") : optText("复制失败", "Copy failed");
+        copyButton.classList.toggle("copied", ok);
+        statusEl.textContent = ok ? optText("已复制 C 草稿", "C draft copied") : optText("复制 C 草稿失败", "Failed to copy C draft");
+        window.setTimeout(() => {
+          copyButton.textContent = optText("复制 C", "Copy C");
+          copyButton.classList.remove("copied");
+        }, 1400);
+      });
+      return true;
+    }
+
+    outputText.addEventListener("keydown", handleCodeDraftKeydown);
+    outputDialogBody.addEventListener("keydown", handleCodeDraftKeydown);
+    document.addEventListener("copy", handleCodeDraftCopy, true);
+    outputText.addEventListener("click", event => {
+      if (handleCopyDraftClick(event)) return;
       const action = event.target.closest?.("[data-optimized-action]");
       if (!action) return;
       if (action.dataset.optimizedAction === "useSuggested") {
@@ -12795,6 +13359,9 @@ function startResizeDrag(branch, handle, event) {
         optimizedEliminationRenderToken += 1;
         renderOutput();
       }
+    });
+    outputDialogBody.addEventListener("click", event => {
+      handleCopyDraftClick(event);
     });
     outputDialogBody.addEventListener("pointerover", handleFormulaHover);
     outputDialogBody.addEventListener("pointerout", handleFormulaHoverOut);

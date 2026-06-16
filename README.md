@@ -104,7 +104,8 @@ i(p -> n) = G * (V_p - V_n - Vs)
 ## Recent Updates / 最近更新
 
 - Refined the lower results panel with denser branch-current cards, clearer formula alignment, engineering-style matrix cards, and a minimap navigator for long node-equation, reduced-equation, C export, JSON, and Python draft outputs.
-- Improved the Optimized Elimination / C Export tab for RTDS-style C drafting. It shows real `G` and `Ihis` r/k block previews, automatically uses the effective reordered k-node sequence when needed, keeps user-defined node names in generated voltage recovery variables, and emits compact matrix-form C steps without expanding large scalar expressions.
+- Improved the Optimized Elimination / C Export tab for RTDS-style C drafting. It now tracks final-expression RAM/CODE dependencies, splits constant and runtime conductance stamps, keeps `Ihisred` and internal-node voltage recovery in CODE/T1_T2-style matrix flows, and emits compact `Grr/Grk/Gkr/W` aliases instead of fully expanded scalar Schur formulas.
+- Dynamic C export stamps only the RAM-side nonzero node subset through `g_mat_nods/g_mat_over/setupGMatrix`, so sparse constant stamps use compact local indices. Repeated block expressions are reused through neutral shared aliases such as `Gkr_shared_1`, with comments listing every represented matrix position.
 - The one-click Windows launcher `start.bat` is now the recommended way to run the project. It finds Python, checks/installs `sympy`, starts `local_server.py`, and opens `http://127.0.0.1:4177/`.
 - Canvas tabs can be reordered by dragging. Circuit exports now use `version: 3` and preserve more project state, including all canvases, node styling, switch cases, packaged-box settings, UI options, and cached derivation results.
 - Switch cases are stored with each component. For ordinary branches, edit case-specific `G` and `Ihis`; for matrix components, edit case-specific local `G` and `Ihis` matrices. Double-click the component to cycle cases.
@@ -115,7 +116,8 @@ i(p -> n) = G * (V_p - V_n - Vs)
 
 中文最近更新：
 
-- 新增“优化消元 / C导出”结果 tab。它不改变现有完整矩阵和消去矩阵页面；保留用户定义的 internal node 顺序，显示真实 `G` 和 `Ihis` 的 r/k 分块预览，并在可行时建议更清晰的 `Gkk = [[D, U], [U^T, S]]` 分块顺序；C 草稿只导出紧凑矩阵步骤，不展开巨大标量表达式。
+- 改进“优化消元 / C导出”结果 tab。它不改变现有完整矩阵和消去矩阵页面；保留用户定义的节点名，显示真实 `G` 和 `Ihis` 的 r/k 分块预览，并按最终表达式做 RAM/CODE 依赖切分：常量 `Gred` 可在 RAM stamp，动态 `Gred` 和 `Ihisred` 使用 CODE 矩阵流程，内部节点电压恢复放在 T1_T2。
+- RTDS C 草稿会为 `Grr/Grk/Gkr/W` 生成可复用别名，避免展开巨大 Schur 标量公式；相同表达式使用 `Gkr_shared_1` 这类中性 shared alias，并在注释中列出对应矩阵位置。RAM 侧 `g_mat_nods/g_mat_over/setupGMatrix` 只注册实际有非零常量 stamp 的节点子集，并使用压缩后的局部索引。
 - 画布标签支持拖拽排序。电路导出升级为 `version: 3`，会保存更完整的工程状态，包括所有画布、节点样式、开关工况、打包黑盒设置、界面选项和已缓存的推导结果。
 - 开关工况保存在每个元件上。普通支路可编辑每个工况的 `G` 和 `Ihis`；矩阵元件可编辑每个工况的局部 `G` 矩阵和 `Ihis` 向量。画布中双击元件可切换工况。
 - 打包后的 YBox 不使用外层 switch case。它会在编辑器中列出内部具有多个工况的支路；切换内部工况后，通过本地 SymPy 后端重新计算打包黑盒。

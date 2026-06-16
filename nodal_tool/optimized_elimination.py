@@ -5,6 +5,8 @@ from typing import Sequence
 
 import sympy as sp
 
+from .dependency_analysis import analyze_reduced_model_dependencies, classify_expr_stage
+
 
 def _as_column_vector(vec: sp.Matrix, expected_rows: int, name: str) -> sp.Matrix:
     out = sp.Matrix(vec)
@@ -190,11 +192,190 @@ def _ccode(expr: sp.Expr) -> str:
     return re.sub(r"(?<![eE][+-])(?<![\w.])(\d+)(?![\w.])", r"\1.0", code)
 
 
+def find_dynamic_entries(stage_matrix: Sequence[Sequence[str]]) -> list[tuple[int, int]]:
+    entries: list[tuple[int, int]] = []
+    for row, values in enumerate(stage_matrix or []):
+        for col, stage in enumerate(values):
+            if str(stage) == "CODE_UPDATE":
+                entries.append((row, col))
+    return entries
+
+
+def _find_code_owned_entries(stage_matrix: Sequence[Sequence[str]]) -> list[tuple[int, int]]:
+    entries: list[tuple[int, int]] = []
+    for row, values in enumerate(stage_matrix or []):
+        for col, stage in enumerate(values):
+            if str(stage) != "RAM_INIT":
+                entries.append((row, col))
+    return entries
+
+
+def detect_rectangular_dynamic_blocks(dynamic_entries: Sequence[tuple[int, int]]) -> dict:
+    entries = sorted({(int(row), int(col)) for row, col in dynamic_entries})
+    if not entries:
+        return {"entries": [], "rows": [], "cols": [], "is_rectangular": False, "blocks": []}
+    rows = sorted({row for row, _ in entries})
+    cols = sorted({col for _, col in entries})
+    rectangle = {(row, col) for row in rows for col in cols}
+    is_rectangular = rectangle == set(entries)
+    return {
+        "entries": entries,
+        "rows": rows if is_rectangular else [],
+        "cols": cols if is_rectangular else [],
+        "is_rectangular": is_rectangular,
+        "blocks": [{"rows": rows, "cols": cols, "entries": entries}] if is_rectangular else [],
+    }
+
+
+def _slice_matrix(matrix: sp.Matrix, rows: Sequence[int], cols: Sequence[int]) -> sp.Matrix:
+    matrix = sp.Matrix(matrix)
+    return sp.Matrix([[matrix[row, col] for col in cols] for row in rows])
+
+
+def build_sliced_schur_for_block(
+    Grr: sp.Matrix,
+    Grk: sp.Matrix,
+    W: sp.Matrix,
+    Gkr: sp.Matrix,
+    rows: Sequence[int],
+    cols: Sequence[int],
+) -> sp.Matrix:
+    rows = [int(row) for row in rows]
+    cols = [int(col) for col in cols]
+    if not rows or not cols:
+        return sp.zeros(len(rows), len(cols))
+    Grr_BC = _slice_matrix(sp.Matrix(Grr), rows, cols)
+    Grk_Bk = _slice_matrix(sp.Matrix(Grk), rows, range(sp.Matrix(Grk).cols))
+    Gkr_kC = _slice_matrix(sp.Matrix(Gkr), range(sp.Matrix(Gkr).rows), cols)
+    return sp.simplify(Grr_BC - Grk_Bk * sp.Matrix(W) * Gkr_kC)
+
+
+def build_sliced_schur_for_entry(
+    Grr: sp.Matrix,
+    Grk: sp.Matrix,
+    W: sp.Matrix,
+    Gkr: sp.Matrix,
+    row: int,
+    col: int,
+) -> sp.Expr:
+    return sp.simplify(build_sliced_schur_for_block(Grr, Grk, W, Gkr, [row], [col])[0, 0])
+
+
+def _symbol_name_set(items: Sequence[str] | None) -> set[str]:
+    return {str(item).strip() for item in (items or []) if str(item).strip()}
+
+
+def _split_expr_by_ram_symbols(expr: sp.Expr, ram_symbols: set[str]) -> tuple[sp.Expr, sp.Expr]:
+    expr = sp.sympify(expr)
+    if expr == 0:
+        return sp.Integer(0), sp.Integer(0)
+    terms = expr.as_ordered_terms() if isinstance(expr, sp.Add) else [expr]
+    ram_terms: list[sp.Expr] = []
+    code_terms: list[sp.Expr] = []
+    for term in terms:
+        free_names = {symbol.name for symbol in term.free_symbols}
+        if not free_names or free_names <= ram_symbols:
+            ram_terms.append(term)
+        else:
+            code_terms.append(term)
+    return sp.Add(*ram_terms) if ram_terms else sp.Integer(0), sp.Add(*code_terms) if code_terms else sp.Integer(0)
+
+
+def _extract_symbols_from_expr(expr: sp.Expr) -> set[str]:
+    return {symbol.name for symbol in sp.sympify(expr).free_symbols}
+
+
+def build_rtds_stage_plan(
+    G: sp.Matrix,
+    node_order: Sequence[str],
+    external_nodes: Sequence[str],
+    internal_nodes: Sequence[str],
+    constant_symbols: Sequence[str] | None = None,
+    symbol_usage: Sequence[dict] | None = None,
+) -> dict:
+    """Split G symbols into RAM-safe and CODE-stage parts for RTDS C snippets.
+
+    A symbol is RAM-safe only if the user marked it constant and no occurrence
+    touches an eliminated/internal node. Expressions are split term-by-term, so
+    X + Y + Z can place only Z in RAM when Z is the only RAM-safe symbol.
+    """
+    G = sp.Matrix(G)
+    node_order = list(node_order)
+    external_nodes = list(external_nodes)
+    internal_nodes = list(internal_nodes)
+    constant_set = _symbol_name_set(constant_symbols)
+    internal_set = set(internal_nodes)
+    index_by_node = {node: index for index, node in enumerate(node_order)}
+    external_indices = [index_by_node[node] for node in external_nodes]
+
+    disqualified: set[str] = set()
+    for item in symbol_usage or []:
+        symbol = str(item.get("symbol", "")).strip()
+        if not symbol or symbol not in constant_set:
+            continue
+        if item.get("row_node") in internal_set or item.get("col_node") in internal_set:
+            disqualified.add(symbol)
+
+    for row, row_node in enumerate(node_order):
+        for col, col_node in enumerate(node_order):
+            if row_node not in internal_set and col_node not in internal_set:
+                continue
+            disqualified.update(_extract_symbols_from_expr(G[row, col]) & constant_set)
+
+    ram_symbols = constant_set - disqualified
+    ram_G = sp.zeros(G.rows, G.cols)
+    code_G = sp.Matrix(G)
+    external_set = set(external_nodes)
+    for row, row_node in enumerate(node_order):
+        if row_node not in external_set:
+            continue
+        for col, col_node in enumerate(node_order):
+            if col_node not in external_set:
+                continue
+            ram_expr, code_expr = _split_expr_by_ram_symbols(G[row, col], ram_symbols)
+            ram_G[row, col] = ram_expr
+            code_G[row, col] = code_expr
+
+    ram_G_rr = ram_G.extract(external_indices, external_indices) if external_indices else sp.zeros(0, 0)
+    code_blocks = _permute_internal_blocks(
+        code_G,
+        sp.zeros(G.rows, 1),
+        node_order,
+        external_nodes,
+        internal_nodes,
+    )
+    return {
+        "constant_symbols": sorted(constant_set),
+        "ram_symbols": sorted(ram_symbols),
+        "code_symbols": sorted((constant_set - ram_symbols) | (set().union(*[
+            _extract_symbols_from_expr(G[row, col]) for row in range(G.rows) for col in range(G.cols)
+        ]) - constant_set if G.rows and G.cols else set())),
+        "disqualified_constant_symbols": sorted(disqualified),
+        "ram_G": ram_G,
+        "code_G": code_G,
+        "ram_G_rr": ram_G_rr,
+        "code_blocks": code_blocks,
+        "external_nodes": external_nodes,
+        "internal_nodes": internal_nodes,
+        "node_order": node_order,
+    }
+
+
 def analyze_internal_block_structure(Gii: sp.Matrix, internal_nodes: Sequence[str]) -> dict:
     Gii = sp.Matrix(Gii)
     internal_nodes = list(internal_nodes)
     if Gii.shape != (len(internal_nodes), len(internal_nodes)):
         raise ValueError("Gii shape must match internal_nodes")
+    if not internal_nodes:
+        return {
+            "is_symmetric": True,
+            "diagonal_nodes": [],
+            "coupled_nodes": [],
+            "suggested_order": [],
+            "warnings": [],
+            "block_type": "no_elimination",
+            "asymmetric_entries": [],
+        }
 
     is_symmetric, mismatches = check_symmetric(Gii)
     warnings: list[str] = []
@@ -302,7 +483,9 @@ def build_structured_formula(
     coupled_nodes = effective_analysis["coupled_nodes"]
     node_pos = {node: index for index, node in enumerate(effective_internal_nodes)}
 
-    if block_type == "pure_diagonal":
+    if block_type == "no_elimination":
+        details = {"W": sp.zeros(0, 0)}
+    elif block_type == "pure_diagonal":
         D_values = [Gii[index, index] for index in range(Gii.rows)]
         W = sp.diag(*[1 / value for value in D_values])
         details = {
@@ -369,6 +552,79 @@ def build_structured_formula(
     }
 
 
+def structured_dependency_model(structured: dict, simplify_level: str = "light") -> dict:
+    blocks = structured.get("blocks", {})
+    Grr = sp.Matrix(blocks.get("G_rr", []))
+    Grk = sp.Matrix(blocks.get("G_ri", []))
+    Gkr = sp.Matrix(blocks.get("G_ir", []))
+    Gkk = sp.Matrix(blocks.get("G_ii", []))
+    Ihisr = sp.Matrix(blocks.get("Ihis_r", []))
+    Ihisk = sp.Matrix(blocks.get("Ihis_i", []))
+    details = structured.get("details", {})
+    W = details.get("W")
+    if W is None:
+        W = Gkk.inv() if Gkk.rows else sp.zeros(0, 0)
+    W = sp.Matrix(W)
+    if Gkk.rows == 0:
+        Gred = _simplify_matrix(Grr, simplify_level) if Grr.rows else sp.zeros(0, 0)
+        Ihisred = _simplify_matrix(Ihisr, simplify_level) if Ihisr.rows else sp.zeros(0, 1)
+    else:
+        Gred = _simplify_matrix(Grr - Grk * W * Gkr, simplify_level) if Grr.rows else sp.zeros(0, 0)
+        Ihisred = _simplify_matrix(Ihisr - Grk * W * Ihisk, simplify_level) if Ihisr.rows else sp.zeros(0, 1)
+    Kv = _simplify_matrix(-W * Gkr, simplify_level) if W.rows and Gkr.cols else sp.zeros(W.rows, Gkr.cols)
+    Kh = _simplify_matrix(-W * Ihisk, simplify_level) if W.rows else sp.zeros(0, 1)
+    return {
+        "Gred": Gred,
+        "Ihisred": Ihisred,
+        "W": W,
+        "Kv": Kv,
+        "Kh": Kh,
+    }
+
+
+def build_dependency_stage_plan(
+    structured: dict,
+    symbol_table: dict[str, str] | None = None,
+    simplify_level: str = "light",
+    analysis_structured: dict | None = None,
+) -> dict:
+    model = structured_dependency_model(structured, simplify_level)
+    analysis_model = structured_dependency_model(analysis_structured or structured, simplify_level)
+    analysis = analyze_reduced_model_dependencies(analysis_model, symbol_table or {})
+    dynamic_entries = find_dynamic_entries(analysis.get("Gred_stage") or [])
+    dynamic_block = detect_rectangular_dynamic_blocks(dynamic_entries)
+    blocks = structured.get("blocks", {})
+    return {
+        **model,
+        "Grr": sp.Matrix(blocks.get("G_rr", [])),
+        "Grk": sp.Matrix(blocks.get("G_ri", [])),
+        "Gkr": sp.Matrix(blocks.get("G_ir", [])),
+        "Gkk": sp.Matrix(blocks.get("G_ii", [])),
+        "Ihisr": sp.Matrix(blocks.get("Ihis_r", [])),
+        "Ihisk": sp.Matrix(blocks.get("Ihis_i", [])),
+        "dependency_analysis": analysis,
+        "dynamic_subblock": {
+            **dynamic_block,
+            "owner_matrix": analysis.get("Gred_stage") or [],
+            "ram_entries": [
+                (row, col)
+                for row, values in enumerate(analysis.get("Gred_stage") or [])
+                for col, stage in enumerate(values)
+                if stage == "RAM_INIT"
+            ],
+            "code_entries": dynamic_entries,
+            "unknown_entries": [
+                (row, col)
+                for row, values in enumerate(analysis.get("Gred_stage") or [])
+                for col, stage in enumerate(values)
+                if stage == "UNKNOWN"
+            ],
+        },
+        "external_nodes": list(structured.get("external_nodes", [])),
+        "internal_nodes": list(structured.get("effective_internal_nodes", [])),
+    }
+
+
 def cse_c_draft_for_formula_mode(G_red: sp.Matrix, Ihis_red: sp.Matrix) -> str:
     G_red = sp.Matrix(G_red)
     Ihis_red = sp.Matrix(Ihis_red)
@@ -412,6 +668,36 @@ def _c_zero_matrix(name: str, rows: int, cols: int) -> str:
     if rows == 0 or cols == 0:
         return f"double {name}[1][1] = {{ {{0.0}} }};  /* Empty {rows}x{cols} workspace. */"
     return f"double {name}[{rows}][{cols}] = {{0.0}};"
+
+
+def _c_matrix_set_lines(
+    matrix: sp.Matrix,
+    matrix_name: str,
+    fn: str = "set",
+    indent: str = "    ",
+    skip_zero: bool = False,
+) -> list[str]:
+    matrix = sp.Matrix(matrix)
+    lines: list[str] = []
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            if skip_zero and sp.simplify(matrix[row, col]) == 0:
+                continue
+            lines.append(f"{indent}{fn}(&{matrix_name}, {row}, {col}, {_ccode(matrix[row, col])});")
+    return lines
+
+
+def _c_vector_set_lines(vector: sp.Matrix, matrix_name: str, fn: str = "set", indent: str = "    ") -> list[str]:
+    vector = _as_column_vector(sp.Matrix(vector), sp.Matrix(vector).rows, matrix_name)
+    return [f"{indent}{fn}(&{matrix_name}, {row}, 0, {_ccode(vector[row, 0])});" for row in range(vector.rows)]
+
+
+def _c_condition_lines(names: Sequence[str], indent: str = "        ") -> list[str]:
+    return [f"{indent}conditionMatrixForCODE(&{name});" for name in names]
+
+
+def _c_register_lines(names: Sequence[str], indent: str = "    ") -> list[str]:
+    return [f"{indent}matrix_register(&{name});" for name in names]
 
 
 def _c_copy_subblock(dst: str, src: str, row_offset: int, col_offset: int, rows: int, cols: int) -> list[str]:
@@ -468,6 +754,10 @@ def _c_symbol_name(name: str) -> str:
     return suffix
 
 
+def _c_node_variable_name(node: str, node_display_names: dict[str, str] | None = None) -> str:
+    return _c_symbol_name(_c_display_node(node, node_display_names))
+
+
 def _c_voltage_variable_name(node: str, node_display_names: dict[str, str] | None = None) -> str:
     display = (node_display_names or {}).get(str(node), str(node))
     suffix = _c_symbol_name(display)
@@ -483,6 +773,967 @@ def _c_node_symbol_vector(name: str, nodes: Sequence[str], node_display_names: d
         display = (node_display_names or {}).get(str(node), str(node))
         rows.append(f"    {{{_c_symbol_name(display)}}}")
     return f"double {name}[{len(nodes)}][1] = {{\n" + ",\n".join(rows) + "\n};"
+
+
+def _c_display_node(node: str, node_display_names: dict[str, str] | None = None) -> str:
+    return (node_display_names or {}).get(str(node), str(node))
+
+
+def _stage_entries(matrix: sp.Matrix, stages: Sequence[Sequence[str]], wanted: str) -> sp.Matrix:
+    matrix = sp.Matrix(matrix)
+    out = sp.zeros(matrix.rows, matrix.cols)
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            if row < len(stages) and col < len(stages[row]) and stages[row][col] == wanted:
+                out[row, col] = matrix[row, col]
+    return out
+
+
+def _stage_vector_entries(vector: sp.Matrix, stages: Sequence[str], wanted: str) -> sp.Matrix:
+    vector = _as_column_vector(sp.Matrix(vector), sp.Matrix(vector).rows, "stage_vector")
+    out = sp.zeros(vector.rows, 1)
+    for row in range(vector.rows):
+        if row < len(stages) and stages[row] == wanted:
+            out[row, 0] = vector[row, 0]
+    return out
+
+
+def _split_expr_ram_and_code(expr: sp.Expr, symbol_table: dict[str, str]) -> tuple[sp.Expr, sp.Expr]:
+    ram_expr = sp.Integer(0)
+    code_expr = sp.Integer(0)
+    for term in sp.Add.make_args(sp.expand(sp.sympify(expr))):
+        if classify_expr_stage(term, symbol_table) == "RAM_INIT":
+            ram_expr += term
+        else:
+            code_expr += term
+    return sp.simplify(ram_expr), sp.simplify(code_expr)
+
+
+def _split_matrix_ram_and_code_terms(matrix: sp.Matrix, symbol_table: dict[str, str]) -> tuple[sp.Matrix, sp.Matrix]:
+    matrix = sp.Matrix(matrix)
+    ram_matrix = sp.zeros(matrix.rows, matrix.cols)
+    code_matrix = sp.zeros(matrix.rows, matrix.cols)
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            ram_matrix[row, col], code_matrix[row, col] = _split_expr_ram_and_code(matrix[row, col], symbol_table)
+    return ram_matrix, code_matrix
+
+
+def _matrix_symbol_names(*matrices: sp.Matrix) -> set[str]:
+    names: set[str] = set()
+    for matrix in matrices:
+        matrix = sp.Matrix(matrix)
+        for value in matrix:
+            names.update(symbol.name for symbol in sp.sympify(value).free_symbols)
+    return names
+
+
+def _ram_overlay_node_subset(matrix: sp.Matrix, nodes: Sequence[str]) -> tuple[list[str], dict[int, int]]:
+    matrix = sp.Matrix(matrix)
+    touched: set[int] = set()
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            if sp.simplify(matrix[row, col]) != 0:
+                touched.add(row)
+                touched.add(col)
+    overlay_nodes = [node for index, node in enumerate(nodes) if index in touched]
+    compact_index = {original_index: compact for compact, original_index in enumerate(index for index in range(len(nodes)) if index in touched)}
+    return overlay_nodes, compact_index
+
+
+def _c_double_declarations(names: Sequence[str], indent: str = "    ") -> list[str]:
+    lines: list[str] = []
+    for name in sorted({_c_symbol_name(item) for item in names if str(item).strip()}):
+        lines.append(f"{indent}double {name} = 0.0;")
+    return lines
+
+
+def _c_declaration_group(title: str, names: Sequence[str], indent: str = "    ") -> list[str]:
+    declarations = _c_double_declarations(names, indent)
+    if not declarations:
+        return []
+    return [f"{indent}/* {title} */", *declarations]
+
+
+def _c_should_cse_scalar(expr: sp.Expr) -> bool:
+    expr = sp.simplify(expr)
+    if expr == 0:
+        return False
+    return int(sp.count_ops(expr, visual=False)) >= 3
+
+
+def _c_scalar_assignment_cse(
+    assignments: Sequence[tuple[str, sp.Expr, str | None, str | None, str | None]],
+    fallback_prefix: str,
+    indent: str = "    ",
+) -> tuple[list[str], list[str], list[str]]:
+    normalized = [(target, sp.simplify(expr), comment) for target, expr, comment, _, _ in assignments]
+    used_names: set[str] = set()
+    expr_to_temp: dict[str, str] = {}
+    expr_codes: list[str] = []
+    temp_names: list[str] = []
+    compute_lines: list[str] = []
+    for index, item in enumerate(assignments):
+        target, raw_expr, _, suggested_name, formula_label = item
+        expr = sp.simplify(raw_expr)
+        if not _c_should_cse_scalar(expr):
+            expr_codes.append(_ccode(expr))
+            continue
+        key = sp.srepr(expr)
+        neg_key = sp.srepr(sp.simplify(-expr))
+        if key in expr_to_temp:
+            expr_codes.append(expr_to_temp[key])
+            continue
+        if neg_key in expr_to_temp:
+            expr_codes.append(f"-{expr_to_temp[neg_key]}")
+            continue
+        base_name = _c_symbol_name(suggested_name or f"{fallback_prefix}_{index}")
+        name = base_name
+        suffix = 1
+        while name in used_names:
+            suffix += 1
+            name = f"{base_name}_{suffix}"
+        used_names.add(name)
+        expr_to_temp[key] = name
+        temp_names.append(name)
+        label = formula_label or target
+        compute_lines.append(f"{indent}/* {name} represents {label}: {_ccode(expr)}. */")
+        compute_lines.append(f"{indent}{name} = {_ccode(expr)};")
+        expr_codes.append(name)
+    assignment_lines: list[str] = []
+    for (target, _, comment), expr_code in zip(normalized, expr_codes):
+        if comment:
+            assignment_lines.append(f"{indent}{comment}")
+        assignment_lines.append(f"{indent}{target} = {expr_code};")
+    return temp_names, compute_lines, assignment_lines
+
+
+def _c_section_warning(title: str, body: Sequence[str], indent: str = "    ") -> list[str]:
+    bar = "*" * 72
+    lines = [f"{indent}/* {bar}", f"{indent} * {title}"]
+    lines.extend(f"{indent} * {line}" for line in body)
+    lines.append(f"{indent} * {bar} */")
+    lines.extend(["", "", ""])
+    return lines
+
+
+def _var_g_name(row_node: str, col_node: str, node_display_names: dict[str, str] | None = None) -> str:
+    row_name = _c_node_variable_name(row_node, node_display_names)
+    col_name = _c_node_variable_name(col_node, node_display_names)
+    return f"varG_{row_name}_{col_name}"
+
+
+def _scalar_g_name(prefix: str, row_node: str, col_node: str, node_display_names: dict[str, str] | None = None) -> str:
+    row_name = _c_node_variable_name(row_node, node_display_names)
+    col_name = _c_node_variable_name(col_node, node_display_names)
+    return f"{prefix}_{row_name}_{col_name}"
+
+
+def _block_element_name(
+    block: str,
+    row: int,
+    col: int,
+    external_nodes: Sequence[str],
+    node_display_names: dict[str, str] | None = None,
+) -> str:
+    if block == "Grr":
+        return _scalar_g_name("Grr", external_nodes[row], external_nodes[col], node_display_names)
+    if block == "Grk":
+        row_name = _c_node_variable_name(external_nodes[row], node_display_names)
+        return f"Grk_{row_name}_k{col + 1}"
+    if block == "Gkr":
+        col_name = _c_node_variable_name(external_nodes[col], node_display_names)
+        return f"Gkr_k{row + 1}_{col_name}"
+    if block == "W":
+        return f"W_{row + 1}_{col + 1}"
+    raise ValueError(f"Unsupported block alias kind: {block}")
+
+
+def _block_element_label(
+    block: str,
+    row: int,
+    col: int,
+    external_nodes: Sequence[str],
+    node_display_names: dict[str, str] | None = None,
+) -> str:
+    if block == "Grr":
+        return f"Grr[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]"
+    if block == "Grk":
+        return f"Grk[{_c_display_node(external_nodes[row], node_display_names)},k{col + 1}]"
+    if block == "Gkr":
+        return f"Gkr[k{row + 1},{_c_display_node(external_nodes[col], node_display_names)}]"
+    if block == "W":
+        return f"W[{row + 1},{col + 1}]"
+    raise ValueError(f"Unsupported block alias kind: {block}")
+
+
+def _block_alias_entries(
+    matrix: sp.Matrix,
+    block: str,
+    external_nodes: Sequence[str],
+    node_display_names: dict[str, str] | None = None,
+) -> list[dict[str, object]]:
+    matrix = sp.Matrix(matrix)
+    entries: list[dict[str, object]] = []
+    grouped: dict[str, list[tuple[int, int, str, sp.Expr]]] = {}
+    order: list[str] = []
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            expr = sp.simplify(matrix[row, col])
+            if expr == 0:
+                continue
+            label = _block_element_label(block, row, col, external_nodes, node_display_names)
+            expr_key = sp.srepr(expr)
+            if expr_key not in grouped:
+                grouped[expr_key] = []
+                order.append(expr_key)
+            grouped[expr_key].append((row, col, label, expr))
+    shared_index = 0
+    for expr_key in order:
+        items = grouped[expr_key]
+        labels = [label for _, _, label, _ in items]
+        expr = items[0][3]
+        if len(items) == 1:
+            row, col, _, _ = items[0]
+            name = _block_element_name(block, row, col, external_nodes, node_display_names)
+        else:
+            shared_index += 1
+            name = f"{block}_shared_{shared_index}"
+        for item_index, (row, col, label, item_expr) in enumerate(items):
+            entries.append(
+                {
+                    "row": row,
+                    "col": col,
+                    "name": name,
+                    "label": label,
+                    "labels": labels,
+                    "expr": item_expr,
+                    "primary": item_index == 0,
+                }
+            )
+    return entries
+
+
+def _block_alias_compute_lines(entries: Sequence[dict[str, object]], indent: str = "    ") -> list[str]:
+    lines: list[str] = []
+    for entry in entries:
+        if not bool(entry.get("primary", True)):
+            continue
+        name = str(entry["name"])
+        labels = [str(label) for label in entry.get("labels", [entry["label"]])]
+        label = ", ".join(labels)
+        expr = sp.sympify(entry["expr"])
+        lines.append(f"{indent}/* {name} represents {label}: {_ccode(expr)}. */")
+        lines.append(f"{indent}{name} = {_ccode(expr)};")
+    return lines
+
+
+def _matrix_set_alias_lines(
+    entries: Sequence[dict[str, object]],
+    matrix_name: str,
+    fn: str = "set",
+    row_map: Sequence[int] | None = None,
+    col_map: Sequence[int] | None = None,
+    indent: str = "    ",
+) -> list[str]:
+    lines: list[str] = []
+    for entry in entries:
+        row = int(entry["row"])
+        col = int(entry["col"])
+        if row_map is not None:
+            if row not in row_map:
+                continue
+            target_row = list(row_map).index(row)
+        else:
+            target_row = row
+        if col_map is not None:
+            if col not in col_map:
+                continue
+            target_col = list(col_map).index(col)
+        else:
+            target_col = col
+        lines.append(f"{indent}{fn}(&{matrix_name}, {target_row}, {target_col}, {entry['name']});")
+    return lines
+
+
+def _alias_lookup(entries: Sequence[dict[str, object]]) -> dict[tuple[int, int], str]:
+    return {(int(entry["row"]), int(entry["col"])): str(entry["name"]) for entry in entries}
+
+
+def _gred_alias_formula(
+    row: int,
+    col: int,
+    Grr_aliases: Sequence[dict[str, object]],
+    Grk_aliases: Sequence[dict[str, object]],
+    W_aliases: Sequence[dict[str, object]],
+    Gkr_aliases: Sequence[dict[str, object]],
+    nk: int,
+) -> str:
+    grr = _alias_lookup(Grr_aliases)
+    grk = _alias_lookup(Grk_aliases)
+    w = _alias_lookup(W_aliases)
+    gkr = _alias_lookup(Gkr_aliases)
+    expr = grr.get((row, col), "0.0")
+    for left_k in range(nk):
+        grk_name = grk.get((row, left_k))
+        if not grk_name:
+            continue
+        for right_k in range(nk):
+            w_name = w.get((left_k, right_k))
+            gkr_name = gkr.get((right_k, col))
+            if not w_name or not gkr_name:
+                continue
+            product = f"{grk_name}*{w_name}*{gkr_name}"
+            expr = f"{expr} - {product}" if expr != "0.0" else f"-{product}"
+    return expr
+
+
+def _upper_triangular_node_pairs(nodes: Sequence[str]) -> list[tuple[int, int, str, str]]:
+    pairs: list[tuple[int, int, str, str]] = []
+    for row, row_node in enumerate(nodes):
+        for col in range(row, len(nodes)):
+            pairs.append((row, col, row_node, nodes[col]))
+    return pairs
+
+
+def _upper_triangular_nonzero_node_pairs(
+    nodes: Sequence[str],
+    matrix: sp.Matrix,
+) -> list[tuple[int, int, str, str]]:
+    matrix = sp.Matrix(matrix)
+    pairs: list[tuple[int, int, str, str]] = []
+    for row, row_node in enumerate(nodes):
+        for col in range(row, len(nodes)):
+            if row < matrix.rows and col < matrix.cols and sp.simplify(matrix[row, col]) != 0:
+                pairs.append((row, col, row_node, nodes[col]))
+    return pairs
+
+
+def _upper_triangular_stage_node_pairs(
+    nodes: Sequence[str],
+    stage_matrix: Sequence[Sequence[str]],
+    stages: set[str],
+) -> list[tuple[int, int, str, str]]:
+    pairs: list[tuple[int, int, str, str]] = []
+    for row, row_node in enumerate(nodes):
+        for col in range(row, len(nodes)):
+            upper_stage = str(stage_matrix[row][col]) if row < len(stage_matrix) and col < len(stage_matrix[row]) else "UNKNOWN"
+            lower_stage = str(stage_matrix[col][row]) if col < len(stage_matrix) and row < len(stage_matrix[col]) else upper_stage
+            if upper_stage in stages or lower_stage in stages:
+                pairs.append((row, col, row_node, nodes[col]))
+    return pairs
+
+
+def _c_matrix_set_nonzero_lines(matrix: sp.Matrix, name: str, setter: str = "set_CODE") -> list[str]:
+    matrix = sp.Matrix(matrix)
+    lines: list[str] = []
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            value = sp.simplify(matrix[row, col])
+            if value != 0:
+                lines.append(f"    {setter}(&{name}, {row}, {col}, {_ccode(value)});")
+    return lines
+
+
+def _c_emit_rtds_stage_sections(
+    plan: dict | None,
+    node_display_names: dict[str, str] | None = None,
+) -> list[str]:
+    if not plan:
+        return []
+    external_nodes = list(plan.get("external_nodes", []))
+    internal_nodes = list(plan.get("internal_nodes", []))
+    analysis = plan.get("dependency_analysis") or {}
+    Grr = sp.Matrix(plan.get("Grr", []))
+    Grk = sp.Matrix(plan.get("Grk", []))
+    Gkr = sp.Matrix(plan.get("Gkr", []))
+    Ihisr = sp.Matrix(plan.get("Ihisr", []))
+    Ihisk = sp.Matrix(plan.get("Ihisk", []))
+    Gred = sp.Matrix(plan.get("Gred", []))
+    W = sp.Matrix(plan.get("W", []))
+    Gred_stage = analysis.get("Gred_stage") or []
+    ram_Gred = _stage_entries(Gred, Gred_stage, "RAM_INIT")
+    dynamic_gred = any(stage != "RAM_INIT" for row in Gred_stage for stage in row)
+    gred_stage_values = [str(stage) for row in Gred_stage for stage in row]
+    full_gred_code_path = bool(dynamic_gred and gred_stage_values and all(stage != "RAM_INIT" for stage in gred_stage_values))
+    partial_gred_code_path = bool(dynamic_gred and not full_gred_code_path)
+    dynamic_subblock = plan.get("dynamic_subblock") or {}
+    gred_dyn_rows = [int(row) for row in dynamic_subblock.get("rows", [])]
+    gred_dyn_cols = [int(col) for col in dynamic_subblock.get("cols", [])]
+    rectangular_gred_dyn_path = bool(partial_gred_code_path and dynamic_subblock.get("is_rectangular") and gred_dyn_rows and gred_dyn_cols)
+    need_gred_code = bool(dynamic_gred and (full_gred_code_path or not rectangular_gred_dyn_path))
+    Ihisred = _as_column_vector(sp.Matrix(plan.get("Ihisred", [])), len(external_nodes), "Ihisred")
+    Ihisred_stage = [str(stage) for stage in (analysis.get("Ihisred_stage") or [])]
+    Ihisred_correction = sp.Matrix(Grk) * W * sp.Matrix(Ihisk) if Grk.rows and W.rows and Ihisk.rows else sp.zeros(len(external_nodes), 1)
+    ihisred_dyn_rows = [
+        row
+        for row in range(Ihisred_correction.rows)
+        if sp.simplify(Ihisred_correction[row, 0]) != 0
+        and (row >= len(Ihisred_stage) or Ihisred_stage[row] != "RAM_INIT")
+    ]
+    partial_ihisred_code_path = bool(ihisred_dyn_rows and len(ihisred_dyn_rows) < len(external_nodes))
+    full_ihisred_code_path = bool(not partial_ihisred_code_path and len(external_nodes) > 0)
+    need_ihisred_code = full_ihisred_code_path
+    need_tmp_grk_w_code = full_gred_code_path or full_ihisred_code_path
+    var_g_pairs = (
+        _upper_triangular_stage_node_pairs(external_nodes, Gred_stage, {"CODE_UPDATE", "UNKNOWN", "CODE_PER_STEP"})
+        if dynamic_gred
+        else []
+    )
+    code_g_symbol_names = _matrix_symbol_names(Grr, Grk, Gkr, W)
+    code_ihis_symbol_names = _matrix_symbol_names(Ihisr, Ihisk) - code_g_symbol_names
+    code_symbol_names = code_g_symbol_names | code_ihis_symbol_names
+    ram_symbol_names = _matrix_symbol_names(ram_Gred) - code_symbol_names
+    if not internal_nodes:
+        Ihisred_no_elim = sp.Matrix(plan.get("Ihisred", []))
+        symbol_table = analysis.get("symbol_table") or {}
+        ram_Gred_no_elim, code_G_no_elim = _split_matrix_ram_and_code_terms(Gred, symbol_table)
+        ram_overlay_nodes_no_elim, ram_overlay_index_no_elim = _ram_overlay_node_subset(ram_Gred_no_elim, external_nodes)
+        dynamic_gred_no_elim = any(sp.simplify(value) != 0 for value in code_G_no_elim)
+        var_g_pairs_no_elim = (
+            _upper_triangular_nonzero_node_pairs(external_nodes, code_G_no_elim) if dynamic_gred_no_elim else []
+        )
+        ram_g_assignments_no_elim = [
+            (
+                f"g_mat_over[{ram_overlay_index_no_elim[row]}][{ram_overlay_index_no_elim[col]}]",
+                ram_Gred_no_elim[row, col],
+                None,
+                _scalar_g_name("ramG", external_nodes[row], external_nodes[col], node_display_names),
+                f"G[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]",
+            )
+            for row in range(ram_Gred_no_elim.rows)
+            for col in range(ram_Gred_no_elim.cols)
+            if sp.simplify(ram_Gred_no_elim[row, col]) != 0
+        ]
+        ram_g_temp_names_no_elim, ram_g_compute_lines_no_elim, ram_g_assignment_lines_no_elim = _c_scalar_assignment_cse(
+            ram_g_assignments_no_elim,
+            "ramG",
+        )
+        no_elim_code_names = ["G_code"] if dynamic_gred_no_elim else []
+        no_elim_g_symbol_names = _matrix_symbol_names(code_G_no_elim)
+        no_elim_ihis_symbol_names = _matrix_symbol_names(Ihisred_no_elim) - no_elim_g_symbol_names
+        no_elim_symbol_names = no_elim_g_symbol_names | no_elim_ihis_symbol_names
+        no_elim_ram_symbols = _matrix_symbol_names(ram_Gred_no_elim) - no_elim_symbol_names
+        lines = [
+            "/* RTDS lifecycle placement for a network with no eliminated internal nodes.",
+            "   No Schur complement is required: use the original G matrix and Ihis vector directly. */",
+            "STATIC:",
+            "    /* Runtime matrix objects */",
+            *(["    MATRIX_ G_code = {0};"] if dynamic_gred_no_elim else []),
+            "    /* Runtime state */",
+            "    int rtds_matrix_code_ready = 0;",
+            *_c_declaration_group("User G/CODE symbols", no_elim_g_symbol_names),
+            *_c_declaration_group("User Ihis/history symbols", no_elim_ihis_symbol_names),
+            "",
+            "LOCAL_STATIC:",
+            *_c_declaration_group("User RAM-only G symbols", no_elim_ram_symbols),
+            *_c_declaration_group("RAM G stamp scalar aliases", ram_g_temp_names_no_elim),
+            "",
+            "RAM_PASS1:",
+            "    err = 0;",
+            *_c_section_warning(
+                "RAM-SIDE G MATRIX VALUE SETUP",
+                [
+                    "No internal nodes are selected, so fixed RAM G stamping uses the original G matrix.",
+                    "Assign or compute every G-related value before writing g_mat_over.",
+                    "Dynamic entries are registered in GVALUES and refreshed in CODE.",
+                ],
+            ),
+        ]
+        for index, node in enumerate(ram_overlay_nodes_no_elim):
+            lines.append(f'    g_mat_nods[{index}] = getNodeNum(comp, "{_c_display_node(node, node_display_names)}");')
+        lines.extend([
+            "    /* g_mat_over is provided by the PSYS/CBuilder runtime; initialize, do not define it here. */",
+            f"    for (int row = 0; row < {len(ram_overlay_nodes_no_elim)}; row++) {{",
+            f"        for (int col = 0; col < {len(ram_overlay_nodes_no_elim)}; col++) {{",
+            "            g_mat_over[row][col] = 0.0;",
+            "        }",
+            "    }",
+            *ram_g_compute_lines_no_elim,
+            *ram_g_assignment_lines_no_elim,
+        ])
+        lines.extend([
+            (
+                f"    setupGMatrix({len(ram_overlay_nodes_no_elim)});"
+                if ram_overlay_nodes_no_elim
+                else "    /* No RAM-side G entries: no fixed G overlay is registered. */"
+            ),
+            "",
+            *(["    err += matrixDim(&G_code, NR, NR);"] if dynamic_gred_no_elim else []),
+            "    if (err > 0) {",
+            '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
+            '                       "RTDS matrix allocation failed for component %s.", Name);',
+            "    }",
+            *_c_register_lines(no_elim_code_names),
+        ])
+        if dynamic_gred_no_elim:
+            lines.extend([
+                "",
+                "GVALUES:",
+                "    /* Dynamic original-G stamp handles, ordered by upper triangle. */",
+                *[
+                    (
+                        f'    double {_var_g_name(row_node, col_node, node_display_names)} = '
+                        f'createGValue("{_var_g_name(row_node, col_node, node_display_names)}", '
+                        f'"{_c_display_node(row_node, node_display_names)}", '
+                        f'"{_c_display_node(col_node, node_display_names)}", 0, "TRUE");'
+                    )
+                    for _, _, row_node, col_node in var_g_pairs_no_elim
+                ],
+            ])
+        lines.extend([
+            "",
+            "CODE:",
+            "BEGIN_T0:",
+            "    if (!rtds_matrix_code_ready) {",
+            "        initializeMatricesForCode();",
+            *_c_condition_lines(no_elim_code_names),
+            "        rtds_matrix_code_ready = 1;",
+            "    }",
+            "",
+        ])
+        if dynamic_gred_no_elim:
+            lines.extend([
+                *_c_section_warning(
+                    "CODE-SIDE G MATRIX VALUE SETUP",
+                [
+                    "No internal-node elimination is required.",
+                    "Refresh only the non-RAM G terms split from the original G matrix.",
+                    "Then stamp dynamic G values before node-current injection.",
+                ],
+            ),
+                *_c_matrix_set_nonzero_lines(code_G_no_elim, "G_code", "set_CODE"),
+                "    /* Stamp dynamic G entries in row-major upper-triangular order. */",
+                *[
+                    f"    {_var_g_name(row_node, col_node, node_display_names)} = get_CODE(&G_code, {row}, {col});"
+                    for row, col, row_node, col_node in var_g_pairs_no_elim
+                ],
+                "",
+            ])
+        lines.extend([
+            *_c_section_warning(
+                "CODE-SIDE IHIS VALUE SETUP",
+                [
+                    "Update runtime Ihis/history-source values before node-current injection.",
+                    "No internal nodes are eliminated, so assign original Ihis entries directly to Inj.",
+                    "The row order follows the original retained-node order.",
+                ],
+            ),
+            "    /* Node injection currents follow the retained-node order of the original system. */",
+            *[
+                f"    Inj{_c_node_variable_name(node, node_display_names)} = {_ccode(Ihisred_no_elim[index, 0])};"
+                for index, node in enumerate(external_nodes)
+            ],
+            "",
+            "T1_T2:",
+            "    /* No internal nodes were eliminated, so there is no Vk recovery step. */",
+            "",
+        ])
+        return lines
+    ram_overlay_nodes, ram_overlay_index = _ram_overlay_node_subset(ram_Gred, external_nodes)
+    ram_g_assignments = [
+        (
+            f"g_mat_over[{ram_overlay_index[row]}][{ram_overlay_index[col]}]",
+            ram_Gred[row, col],
+            None,
+            _scalar_g_name("ramG", external_nodes[row], external_nodes[col], node_display_names),
+            f"Gred[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]",
+        )
+        for row in range(ram_Gred.rows)
+        for col in range(ram_Gred.cols)
+        if sp.simplify(ram_Gred[row, col]) != 0
+    ]
+    ram_g_temp_names, ram_g_compute_lines, ram_g_assignment_lines = _c_scalar_assignment_cse(
+        ram_g_assignments,
+        "ramG",
+    )
+    Grr_alias_entries = _block_alias_entries(Grr, "Grr", external_nodes, node_display_names)
+    Grk_alias_entries = _block_alias_entries(Grk, "Grk", external_nodes, node_display_names)
+    Gkr_alias_entries = _block_alias_entries(Gkr, "Gkr", external_nodes, node_display_names)
+    W_alias_entries = _block_alias_entries(W, "W", external_nodes, node_display_names)
+    block_alias_entries = [*Grr_alias_entries, *Grk_alias_entries, *Gkr_alias_entries, *W_alias_entries]
+    sparse_gred_scalar_assignments = (
+        [
+            (
+                _var_g_name(row_node, col_node, node_display_names),
+                (
+                    f"/* Gred[{_c_display_node(row_node, node_display_names)},"
+                    f"{_c_display_node(col_node, node_display_names)}] = "
+                    f"Grr[{_c_display_node(row_node, node_display_names)},"
+                    f"{_c_display_node(col_node, node_display_names)}] - "
+                    f"Grk[{_c_display_node(row_node, node_display_names)},k] * W * "
+                    f"Gkr[k,{_c_display_node(col_node, node_display_names)}]. */"
+                ),
+                _scalar_g_name("codeG", row_node, col_node, node_display_names),
+                _gred_alias_formula(
+                    row,
+                    col,
+                    Grr_alias_entries,
+                    Grk_alias_entries,
+                    W_alias_entries,
+                    Gkr_alias_entries,
+                    W.rows,
+                ),
+                f"Gred[{_c_display_node(row_node, node_display_names)},{_c_display_node(col_node, node_display_names)}]",
+            )
+            for row, col, row_node, col_node in var_g_pairs
+        ]
+        if dynamic_gred and not full_gred_code_path and not rectangular_gred_dyn_path
+        else []
+    )
+    code_gred_temp_names = [str(item[2]) for item in sparse_gred_scalar_assignments]
+    code_gred_compute_lines = [
+        line
+        for target, comment, name, expr, label in sparse_gred_scalar_assignments
+        for line in [
+            f"    /* {name} represents {label}: {expr}. */",
+            f"    {name} = {expr};",
+            f"    {comment}",
+            f"    {target} = {name};",
+        ]
+    ]
+    code_matrix_names = [
+        "Grr_code",
+        "Grk_code",
+        "Gkr_code",
+        "W_code",
+        "Ihisr_code",
+        "Ihisk_code",
+        "Vr_code",
+        "Vk_code",
+        "tmp_W_Gkr_code",
+        "tmp_W_Gkr_Vr_code",
+        "tmp_W_Ihisk_code",
+        "tmp_Vk_sum_code",
+    ]
+    if need_gred_code:
+        code_matrix_names.insert(4, "Gred_code")
+    if rectangular_gred_dyn_path:
+        code_matrix_names[5:5] = [
+            "Grr_dyn_code",
+            "Grk_dyn_code",
+            "Gkr_dyn_code",
+            "Gred_dyn_code",
+            "tmp_Grk_W_dyn_code",
+            "tmp_Grk_W_Gkr_dyn_code",
+        ]
+    if partial_ihisred_code_path:
+        code_matrix_names[5:5] = [
+            "Ihisr_ihis_dyn_code",
+            "Grk_ihis_dyn_code",
+            "Ihisred_dyn_code",
+            "tmp_Grk_W_ihis_dyn_code",
+            "tmp_Grk_W_Ihisk_dyn_code",
+        ]
+    if need_ihisred_code:
+        code_matrix_names.insert(7, "Ihisred_code")
+    if need_tmp_grk_w_code:
+        code_matrix_names.insert(10, "tmp_Grk_W_code")
+    if full_gred_code_path:
+        code_matrix_names.insert(11, "tmp_Grk_W_Gkr_code")
+    if full_ihisred_code_path:
+        code_matrix_names.insert(12, "tmp_Grk_W_Ihisk_code")
+    lines = [
+        "/* RTDS lifecycle placement generated from final-expression dependency analysis.",
+        "   RAM_PASS1 stamps only RAM_CONSTANT Gred entries through g_mat_over.",
+        "   CODE/BEGIN_T0 recomputes Ihisred every timestep using MATRIX_ CODE helpers.",
+        "   T1_T2 reads solved node voltages and recovers eliminated-node voltages. */",
+        "STATIC:",
+        "    /* Runtime matrix objects */",
+        "    MATRIX_ Grr_code = {0};",
+        "    MATRIX_ Grk_code = {0};",
+        "    MATRIX_ Gkr_code = {0};",
+        "    MATRIX_ W_code = {0};",
+        *(["    MATRIX_ Gred_code = {0};"] if need_gred_code else []),
+        *(["    MATRIX_ Grr_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
+        *(["    MATRIX_ Grk_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
+        *(["    MATRIX_ Gkr_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
+        *(["    MATRIX_ Gred_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
+        *(["    MATRIX_ tmp_Grk_W_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
+        *(["    MATRIX_ tmp_Grk_W_Gkr_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
+        "    MATRIX_ Ihisr_code = {0};",
+        "    MATRIX_ Ihisk_code = {0};",
+        *(["    MATRIX_ Ihisred_code = {0};"] if need_ihisred_code else []),
+        *(["    MATRIX_ Ihisr_ihis_dyn_code = {0};"] if partial_ihisred_code_path else []),
+        *(["    MATRIX_ Grk_ihis_dyn_code = {0};"] if partial_ihisred_code_path else []),
+        *(["    MATRIX_ Ihisred_dyn_code = {0};"] if partial_ihisred_code_path else []),
+        *(["    MATRIX_ tmp_Grk_W_ihis_dyn_code = {0};"] if partial_ihisred_code_path else []),
+        *(["    MATRIX_ tmp_Grk_W_Ihisk_dyn_code = {0};"] if partial_ihisred_code_path else []),
+        "    MATRIX_ Vr_code = {0};",
+        "    MATRIX_ Vk_code = {0};",
+        *(["    MATRIX_ tmp_Grk_W_code = {0};"] if need_tmp_grk_w_code else []),
+        *(["    MATRIX_ tmp_Grk_W_Gkr_code = {0};"] if full_gred_code_path else []),
+        *(["    MATRIX_ tmp_Grk_W_Ihisk_code = {0};"] if full_ihisred_code_path else []),
+        "    MATRIX_ tmp_W_Gkr_code = {0};",
+        "    MATRIX_ tmp_W_Gkr_Vr_code = {0};",
+        "    MATRIX_ tmp_W_Ihisk_code = {0};",
+        "    MATRIX_ tmp_Vk_sum_code = {0};",
+        "    /* Runtime state */",
+        "    int rtds_matrix_code_ready = 0;",
+        *_c_declaration_group("User G/CODE symbols", code_g_symbol_names),
+        *_c_declaration_group("User Ihis/history symbols", code_ihis_symbol_names),
+        *_c_declaration_group("Block-matrix scalar aliases", [str(entry["name"]) for entry in block_alias_entries]),
+        *_c_declaration_group("Dynamic G stamp scalar aliases", code_gred_temp_names),
+        "",
+        "LOCAL_STATIC:",
+        *_c_declaration_group("User RAM-only G symbols", ram_symbol_names),
+        *_c_declaration_group("RAM G stamp scalar aliases", ram_g_temp_names),
+        "",
+        "RAM_PASS1:",
+        "    err = 0;",
+        *_c_section_warning(
+            "RAM-SIDE G MATRIX VALUE SETUP",
+            [
+                "Assign or compute every G-related value before any RAM-side use.",
+                "This includes fixed g_mat_over stamping and MATRIX_ set(...) initialization.",
+                "Keep RAM set(...) calls and CODE set_CODE(...) calls in the same row/column order.",
+            ],
+        ),
+    ]
+    for index, node in enumerate(ram_overlay_nodes):
+        lines.append(f'    g_mat_nods[{index}] = getNodeNum(comp, "{_c_display_node(node, node_display_names)}");')
+    lines.extend([
+        "    /* g_mat_over is provided by the PSYS/CBuilder runtime; initialize, do not define it here. */",
+        f"    for (int row = 0; row < {len(ram_overlay_nodes)}; row++) {{",
+        f"        for (int col = 0; col < {len(ram_overlay_nodes)}; col++) {{",
+        "            g_mat_over[row][col] = 0.0;",
+        "        }",
+        "    }",
+        *ram_g_compute_lines,
+        *ram_g_assignment_lines,
+    ])
+    if ram_overlay_nodes:
+        lines.append(f"    setupGMatrix({len(ram_overlay_nodes)});")
+    else:
+        lines.append("    /* No RAM-side G entries: no fixed G overlay is registered. */")
+    lines.extend([
+        "",
+        "    err += matrixDim(&Grr_code, NR, NR);",
+        "    err += matrixDim(&Grk_code, NR, NK);",
+        "    err += matrixDim(&Gkr_code, NK, NR);",
+        "    err += matrixDim(&W_code, NK, NK);",
+        *(["    err += matrixDim(&Gred_code, NR, NR);"] if need_gred_code else []),
+        *( [f"    err += matrixDim(&Grr_dyn_code, {len(gred_dyn_rows)}, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
+        *( [f"    err += matrixDim(&Grk_dyn_code, {len(gred_dyn_rows)}, NK);"] if rectangular_gred_dyn_path else [] ),
+        *( [f"    err += matrixDim(&Gkr_dyn_code, NK, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
+        *( [f"    err += matrixDim(&Gred_dyn_code, {len(gred_dyn_rows)}, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
+        *( [f"    err += matrixDim(&tmp_Grk_W_dyn_code, {len(gred_dyn_rows)}, NK);"] if rectangular_gred_dyn_path else [] ),
+        *( [f"    err += matrixDim(&tmp_Grk_W_Gkr_dyn_code, {len(gred_dyn_rows)}, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
+        "    err += matrixDim(&Ihisr_code, NR, 1);",
+        "    err += matrixDim(&Ihisk_code, NK, 1);",
+        *(["    err += matrixDim(&Ihisred_code, NR, 1);"] if need_ihisred_code else []),
+        *( [f"    err += matrixDim(&Ihisr_ihis_dyn_code, {len(ihisred_dyn_rows)}, 1);"] if partial_ihisred_code_path else [] ),
+        *( [f"    err += matrixDim(&Grk_ihis_dyn_code, {len(ihisred_dyn_rows)}, NK);"] if partial_ihisred_code_path else [] ),
+        *( [f"    err += matrixDim(&Ihisred_dyn_code, {len(ihisred_dyn_rows)}, 1);"] if partial_ihisred_code_path else [] ),
+        *( [f"    err += matrixDim(&tmp_Grk_W_ihis_dyn_code, {len(ihisred_dyn_rows)}, NK);"] if partial_ihisred_code_path else [] ),
+        *( [f"    err += matrixDim(&tmp_Grk_W_Ihisk_dyn_code, {len(ihisred_dyn_rows)}, 1);"] if partial_ihisred_code_path else [] ),
+        "    err += matrixDim(&Vr_code, NR, 1);",
+        "    err += matrixDim(&Vk_code, NK, 1);",
+        *(["    err += matrixDim(&tmp_Grk_W_code, NR, NK);"] if need_tmp_grk_w_code else []),
+        *(["    err += matrixDim(&tmp_Grk_W_Gkr_code, NR, NR);"] if full_gred_code_path else []),
+        *(["    err += matrixDim(&tmp_Grk_W_Ihisk_code, NR, 1);"] if full_ihisred_code_path else []),
+        "    err += matrixDim(&tmp_W_Gkr_code, NK, NR);",
+        "    err += matrixDim(&tmp_W_Gkr_Vr_code, NK, 1);",
+        "    err += matrixDim(&tmp_W_Ihisk_code, NK, 1);",
+        "    err += matrixDim(&tmp_Vk_sum_code, NK, 1);",
+        "    if (err > 0) {",
+        '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
+        '                       "RTDS matrix allocation failed for component %s.", Name);',
+        "    }",
+        *_c_register_lines(code_matrix_names),
+        "",
+        "    /* Same MATRIX_ objects are used from RAM and CODE when needed.",
+        "       RAM uses set/get and matrix_mult; CODE uses set_CODE/get_CODE and matrix_*_CODE. */",
+        *_block_alias_compute_lines(block_alias_entries),
+        *_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set"),
+        *_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set"),
+        *_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set"),
+        *_matrix_set_alias_lines(W_alias_entries, "W_code", "set"),
+        *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
+        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
+        *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
+        *(_c_matrix_set_lines(_slice_matrix(Ihisr, ihisred_dyn_rows, [0]), "Ihisr_ihis_dyn_code", "set") if partial_ihisred_code_path else []),
+        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_ihis_dyn_code", "set", row_map=ihisred_dyn_rows, col_map=list(range(Grk.cols))) if partial_ihisred_code_path else []),
+        "",
+    ])
+    if dynamic_gred:
+        lines.extend([
+            "GVALUES:",
+            "    /* Dynamic reduced-G stamp handles, ordered by Gred upper triangle. */",
+            *[
+                (
+                    f'    double {_var_g_name(row_node, col_node, node_display_names)} = '
+                    f'createGValue("{_var_g_name(row_node, col_node, node_display_names)}", '
+                    f'"{_c_display_node(row_node, node_display_names)}", '
+                    f'"{_c_display_node(col_node, node_display_names)}", 0, "TRUE");'
+                )
+                for _, _, row_node, col_node in var_g_pairs
+            ],
+            "",
+        ])
+    lines.extend([
+        "CODE:",
+        "BEGIN_T0:",
+        "    if (!rtds_matrix_code_ready) {",
+        "        initializeMatricesForCode();",
+        *_c_condition_lines(code_matrix_names),
+        "        rtds_matrix_code_ready = 1;",
+        "    }",
+        "",
+        "",
+        *_c_section_warning(
+            "CODE-SIDE G MATRIX VALUE SETUP",
+            [
+                "Update runtime G-related symbols and matrices before the reduction math below.",
+                "Typical edits here: read parameter inputs, switch states, measured values,",
+                "or CODE-stage conductance variables, then refresh Grr/Grk/Gkr/W with set_CODE.",
+            ],
+        ),
+        "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */",
+        *_block_alias_compute_lines(block_alias_entries),
+        *_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set_CODE"),
+        *_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE"),
+        *_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE"),
+        *_matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE"),
+        *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
+        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
+        *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
+        "",
+        *_c_section_warning(
+            "CODE-SIDE IHIS VALUE SETUP",
+            [
+                "Update runtime Ihis/history-source values before per-step injection math.",
+                "Refresh Ihisr/Ihisk with set_CODE in retained/internal-node order.",
+                "Ihisred is then computed as Ihisr - Grk * W * Ihisk.",
+            ],
+        ),
+        *_c_vector_set_lines(Ihisr, "Ihisr_code", "set_CODE"),
+        *_c_vector_set_lines(Ihisk, "Ihisk_code", "set_CODE"),
+        *(_c_matrix_set_lines(_slice_matrix(Ihisr, ihisred_dyn_rows, [0]), "Ihisr_ihis_dyn_code", "set_CODE") if partial_ihisred_code_path else []),
+        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_ihis_dyn_code", "set_CODE", row_map=ihisred_dyn_rows, col_map=list(range(Grk.cols))) if partial_ihisred_code_path else []),
+        "",
+        *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if need_tmp_grk_w_code else []),
+    ])
+    if dynamic_gred and full_gred_code_path:
+        lines.extend([
+            "    /* Full Gred CODE path: all reduced entries are CODE-owned, so a full Schur update is allowed. */",
+            "    matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);",
+            "    matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);",
+            "    /* Stamp dynamic Gred entries in row-major upper-triangular order. */",
+            *[
+                f"    {_var_g_name(row_node, col_node, node_display_names)} = get_CODE(&Gred_code, {row}, {col});"
+                for row, col, row_node, col_node in var_g_pairs
+            ],
+            "",
+        ])
+    elif dynamic_gred:
+        if rectangular_gred_dyn_path:
+            row_names = ", ".join(_c_display_node(external_nodes[row], node_display_names) for row in gred_dyn_rows)
+            col_names = ", ".join(_c_display_node(external_nodes[col], node_display_names) for col in gred_dyn_cols)
+            dynamic_comment = [
+                "    /* Sliced Schur update for dynamic rectangular Gred block.",
+                f"       Rows: [{row_names}]",
+                f"       Cols: [{col_names}]",
+                "       Gred[B,C] = Grr[B,C] - Grk[B,k] * W * Gkr[k,C]. */",
+            ]
+        else:
+            dynamic_comment = [
+                "    /* Sliced Schur sparse updates for dynamic Gred entries.",
+                "       Each assignment uses Gred[i,j] = Grr[i,j] - Grk[i,k] * W * Gkr[k,j]. */",
+            ]
+        lines.extend([
+            *dynamic_comment,
+            *(
+                [
+                    "    matrix_mult_CODE(&tmp_Grk_W_dyn_code, &Grk_dyn_code, &W_code);",
+                    "    matrix_mult_CODE(&tmp_Grk_W_Gkr_dyn_code, &tmp_Grk_W_dyn_code, &Gkr_dyn_code);",
+                    "    matrix_subtract_CODE(&Gred_dyn_code, &Grr_dyn_code, &tmp_Grk_W_Gkr_dyn_code);",
+                ]
+                if rectangular_gred_dyn_path
+                else []
+            ),
+            "    /* Stamp dynamic Gred entries directly from the sliced dynamic block. */",
+            *(
+                [
+                    (
+                        f"    /* Gred[{_c_display_node(row_node, node_display_names)},"
+                        f"{_c_display_node(col_node, node_display_names)}] = "
+                        f"Grr[{_c_display_node(row_node, node_display_names)},"
+                        f"{_c_display_node(col_node, node_display_names)}] - "
+                        f"Grk[{_c_display_node(row_node, node_display_names)},k] * W * "
+                        f"Gkr[k,{_c_display_node(col_node, node_display_names)}]. */\n"
+                        f"    {_var_g_name(row_node, col_node, node_display_names)} = "
+                        f"get_CODE(&Gred_dyn_code, {gred_dyn_rows.index(row)}, {gred_dyn_cols.index(col)});"
+                    )
+                    for row, col, row_node, col_node in var_g_pairs
+                ]
+                if rectangular_gred_dyn_path
+                else code_gred_compute_lines
+            ),
+            "",
+        ])
+    lines.extend([
+        "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
+    ])
+    if partial_ihisred_code_path:
+        lines.extend([
+            "    /* Sliced Ihisred updates for CODE-owned retained rows. */",
+            "    matrix_mult_CODE(&tmp_Grk_W_ihis_dyn_code, &Grk_ihis_dyn_code, &W_code);",
+            "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_dyn_code, &tmp_Grk_W_ihis_dyn_code, &Ihisk_code);",
+            "    matrix_subtract_CODE(&Ihisred_dyn_code, &Ihisr_ihis_dyn_code, &tmp_Grk_W_Ihisk_dyn_code);",
+            *[
+                (
+                    f"    /* Ihisred[{_c_display_node(external_nodes[index], node_display_names)}] = "
+                    f"Ihisr[{_c_display_node(external_nodes[index], node_display_names)}] - "
+                    f"Grk[{_c_display_node(external_nodes[index], node_display_names)},k] * W * Ihisk. */\n"
+                    f"    /* Inj{_c_node_variable_name(external_nodes[index], node_display_names)} reads Ihisred_dyn_code[{ihisred_dyn_rows.index(index)}][0] below. */"
+                )
+                for index in ihisred_dyn_rows
+            ],
+        ])
+    else:
+        lines.extend([
+            "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+            "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+        ])
+    lines.extend([
+        "    /* Node injection currents follow the retained-node order of the reduced system. */",
+        *[
+            (
+                (
+                    f"    Inj{_c_node_variable_name(node, node_display_names)} = "
+                    f"get_CODE(&Ihisred_dyn_code, {ihisred_dyn_rows.index(index)}, 0);"
+                    if index in ihisred_dyn_rows
+                    else f"    Inj{_c_node_variable_name(node, node_display_names)} = {_ccode(Ihisred[index, 0])};"
+                )
+                if partial_ihisred_code_path
+                else f"    Inj{_c_node_variable_name(node, node_display_names)} = get_CODE(&Ihisred_code, {index}, 0);"
+            )
+            for index, node in enumerate(external_nodes)
+        ],
+        "",
+        "T1_T2:",
+        "    /* Internal-node voltage recovery after solved retained-node voltages are available. */",
+        *[
+            f"    set_CODE(&Vr_code, {index}, 0, {_c_symbol_name(_c_display_node(node, node_display_names))});"
+            for index, node in enumerate(external_nodes)
+        ],
+        "    matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);",
+        "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+        "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
+        "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
+        "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+        "",
+        "    /* One variable per eliminated node, in effective k order. */",
+        *[
+            f"    {_c_node_variable_name(node, node_display_names)} = get_CODE(&Vk_code, {index}, 0);"
+            for index, node in enumerate(internal_nodes)
+        ],
+        "",
+    ])
+    warnings = analysis.get("warnings") or []
+    lines.extend([*[f"/* WARNING: {warning} */" for warning in warnings], ""])
+    return lines
 
 
 def _c_emit_rtds_reduction_tail(
@@ -530,9 +1781,22 @@ def _c_emit_rtds_reduction_tail(
     ]
 
 
-def c_draft_for_structured_formula(structured: dict, node_display_names: dict[str, str] | None = None) -> str:
+def c_draft_for_structured_formula(
+    structured: dict,
+    node_display_names: dict[str, str] | None = None,
+    rtds_stage_plan: dict | None = None,
+) -> str:
     block_type = structured.get("block_type")
     blocks = structured.get("blocks", {})
+    if rtds_stage_plan and rtds_stage_plan.get("code_blocks"):
+        code_blocks = rtds_stage_plan["code_blocks"]
+        blocks = {
+            **blocks,
+            "G_rr": code_blocks.get("G_rr", blocks.get("G_rr", [])),
+            "G_ri": code_blocks.get("G_ri", blocks.get("G_ri", [])),
+            "G_ir": code_blocks.get("G_ir", blocks.get("G_ir", [])),
+            "G_ii": code_blocks.get("G_ii", blocks.get("G_ii", [])),
+        }
     Grr = sp.Matrix(blocks.get("G_rr", []))
     Grk = sp.Matrix(blocks.get("G_ri", []))
     Gkr = sp.Matrix(blocks.get("G_ir", []))
@@ -544,14 +1808,29 @@ def c_draft_for_structured_formula(structured: dict, node_display_names: dict[st
     external_nodes = list(structured.get("external_nodes", []))
     effective_internal_nodes = list(structured.get("effective_internal_nodes", []))
     node_display_names = {str(key): str(value) for key, value in (node_display_names or {}).items()}
+    reduction_tail = [] if rtds_stage_plan else _c_emit_rtds_reduction_tail(
+        nr,
+        nk,
+        external_nodes,
+        effective_internal_nodes,
+        node_display_names,
+    )
 
     lines = [
         "/* RTDS-style C draft for structured node elimination.",
-        "   Required math helpers: matrix_Add, matrix_Sub, matrix_Mul, matrix_Scale,",
-        "   matrix_Copy, MATH_matx_invert, mat_2x2_sym_inv_code,",
-        "   mat_3x3_sym_inv_code. See LOCAL_math_builtin_functions.md. */",
+        "   RAM math reference may use matrix_Add/Sub/Mul on raw arrays.",
+        "   Runtime sections use MATRIX_ matrixDim/register/condition plus set_CODE,",
+        "   matrix_mult_CODE, matrix_matXvec_CODE, matrix_add_CODE/subtract_CODE,",
+        "   matrix_scalarMult_CODE, MATH_matx_invert,",
+        "   mat_2x2_sym_inv_code, mat_3x3_sym_inv_code. See LOCAL_math_builtin_functions.md. */",
         f"enum {{ NR = {nr}, NK = {nk} }};",
         "",
+        *_c_emit_rtds_stage_sections(rtds_stage_plan, node_display_names),
+    ]
+    if rtds_stage_plan:
+        return "\n".join(lines)
+
+    lines.extend([
         "/* Input blocks: I = G * V + Ihis, partitioned as r = retained, k = eliminated. */",
         _c_matrix_literal(Grr, "Grr"),
         _c_matrix_literal(Grk, "Grk"),
@@ -560,7 +1839,7 @@ def c_draft_for_structured_formula(structured: dict, node_display_names: dict[st
         _c_vector_literal(Ihisr, "Ihisr"),
         _c_vector_literal(Ihisk, "Ihisk"),
         "",
-    ]
+    ])
 
     if block_type == "pure_diagonal":
         lines.extend([
@@ -573,7 +1852,7 @@ def c_draft_for_structured_formula(structured: dict, node_display_names: dict[st
         for index in range(nk):
             lines.append(f"inv_D[{index}][{index}] = 1.0 / D[{index}][{index}];")
         lines.append("matrix_Copy(NK, NK, W, inv_D);")
-        lines.extend(_c_emit_rtds_reduction_tail(nr, nk, external_nodes, effective_internal_nodes, node_display_names))
+        lines.extend(reduction_tail)
         return "\n".join(lines)
 
     if block_type == "diagonal_plus_coupled":
@@ -636,7 +1915,7 @@ def c_draft_for_structured_formula(structured: dict, node_display_names: dict[st
             *_c_copy_subblock("W", "W_SD", kd, 0, ks, kd),
             *_c_copy_subblock("W", "W_SS", kd, kd, ks, ks),
         ])
-        lines.extend(_c_emit_rtds_reduction_tail(nr, nk, external_nodes, effective_internal_nodes, node_display_names))
+        lines.extend(reduction_tail)
         return "\n".join(lines)
 
     lines = [
@@ -649,6 +1928,6 @@ def c_draft_for_structured_formula(structured: dict, node_display_names: dict[st
             else []
         ),
         f"MATH_matx_invert(NK, &(Gkk[0][0]), NK, &(W[0][0]), NK);",
-        *_c_emit_rtds_reduction_tail(nr, nk, external_nodes, effective_internal_nodes, node_display_names),
+        *reduction_tail,
     ]
     return "\n".join(lines)
