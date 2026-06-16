@@ -3089,6 +3089,7 @@
       "当前识别为常数的 G 符号": "Currently recognized constant G symbols",
       "勾选时会把当前 G 表达式中的符号默认视为常数；下方可补充常数符号。": "When checked, symbols in the current G expression are treated as constants by default; add extra constant symbols below.",
       "按变量名判断常数。若 G[0][0] = X + Y + Z 且只填 Z，则只有 Z 可进入 RAM；X/Y 留在 CODE。": "Constants are classified by variable name. If G[0][0] = X + Y + Z and only Z is entered, only Z can enter RAM; X/Y stay in CODE.",
+      "可选：主要用于 G 表达式里常数和变量混合的情况；普通单支路通常不用填写。": "Optional: mainly for mixed constant/variable G expressions; ordinary single branches usually do not need this field.",
       "打包黑盒会按内部支路变量名判断常数；批量按钮只改变内部支路 G 的常数/非常数标记。": "The packaged box classifies constants by internal-branch variable names; the batch buttons only change each internal branch G constant/non-constant flag.",
       "这个打包黑盒没有可设置 G 常数属性的内部支路。": "This packaged box has no internal branch with configurable G constant properties.",
       "工况数量": "Case Count",
@@ -4557,6 +4558,7 @@
       return `
         ${checkboxField("G 是否为常数？", "gIsConstant", checked, help)}
         ${editableField("常数 G 符号", "constantGSymbols", branch.constantGSymbols || "", false)}
+        <div class="modal-help">${escapeHtml(tr("可选：主要用于 G 表达式里常数和变量混合的情况；普通单支路通常不用填写。"))}</div>
         <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(inferred.join(", ") || tr("无"))}</div>
       `;
     }
@@ -5422,6 +5424,7 @@
                   inner.constantGSymbols || "",
                   false
                 )}
+                <div class="modal-help">${escapeHtml(tr("可选：主要用于 G 表达式里常数和变量混合的情况；普通单支路通常不用填写。"))}</div>
                 <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(symbols.join(", ") || tr("无"))}</div>
               `;
             }).join("")}
