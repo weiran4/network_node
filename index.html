@@ -3079,6 +3079,16 @@
       "内部工况": "Internal Cases",
       "没有内部支路包含多个工况。": "No internal branch has multiple cases.",
       "切换内部支路工况后，会重新计算这个打包黑盒的 G/Ihis 和观测公式。": "Changing an internal branch case recomputes this packaged box's G/Ihis and observer formulas.",
+      "G 是否为常数？": "Treat G as constant?",
+      "常数 G 符号": "Constant G Symbols",
+      "内部 G 常数属性": "Internal G Constant Properties",
+      "全部设为常数": "Set All Constant",
+      "全部设为非常数": "Set All Non-Constant",
+      "常数": "Constant",
+      "非常数": "Non-Constant",
+      "当前识别为常数的 G 符号": "Currently recognized constant G symbols",
+      "勾选时会把当前 G 表达式中的符号默认视为常数；下方可补充常数符号。": "When checked, symbols in the current G expression are treated as constants by default; add extra constant symbols below.",
+      "按变量名判断常数。若 G[0][0] = X + Y + Z 且只填 Z，则只有 Z 可进入 RAM；X/Y 留在 CODE。": "Constants are classified by variable name. If G[0][0] = X + Y + Z and only Z is entered, only Z can enter RAM; X/Y stay in CODE.",
       "打包黑盒会按内部支路变量名判断常数；批量按钮只改变内部支路 G 的常数/非常数标记。": "The packaged box classifies constants by internal-branch variable names; the batch buttons only change each internal branch G constant/non-constant flag.",
       "这个打包黑盒没有可设置 G 常数属性的内部支路。": "This packaged box has no internal branch with configurable G constant properties.",
       "工况数量": "Case Count",
@@ -4450,12 +4460,14 @@
     }
 
     function editableField(label, field, value, multiline = false) {
+      const displayLabel = tr(label);
+      const editTitle = tr(`编辑 ${label}`);
       return `
         <div class="field">
-          <label>${escapeHtml(label)}</label>
+          <label>${escapeHtml(displayLabel)}</label>
           <div class="editable-value">
             <span class="editable-text" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
-            <button class="node-edit-button" type="button" data-edit-field="${escapeHtml(field)}" data-edit-label="${escapeHtml(label)}" data-edit-multiline="${multiline ? "1" : "0"}" title="编辑 ${escapeHtml(label)}" aria-label="编辑 ${escapeHtml(label)}">
+            <button class="node-edit-button" type="button" data-edit-field="${escapeHtml(field)}" data-edit-label="${escapeHtml(displayLabel)}" data-edit-multiline="${multiline ? "1" : "0"}" title="${escapeHtml(editTitle)}" aria-label="${escapeHtml(editTitle)}">
               <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
@@ -4466,7 +4478,7 @@
     function selectField(label, field, value, options) {
       return `
         <div class="field">
-          <label>${escapeHtml(label)}</label>
+          <label>${escapeHtml(tr(label))}</label>
           <select data-field="${escapeHtml(field)}">
             ${options.map(option => `
               <option value="${escapeHtml(option.value)}" ${option.value === value ? "selected" : ""}>${escapeHtml(option.label)}</option>
@@ -5402,7 +5414,14 @@
                     <option value="0" ${!isConstant ? "selected" : ""}>${escapeHtml(tr("非常数"))}</option>
                   </select>
                 </div>
-                ${editableField(`${inner.name || inner.id} 常数 G 符号`, `packedG.${index}.constantGSymbols`, inner.constantGSymbols || "", false)}
+                ${editableField(
+                  state.language === "en"
+                    ? `${inner.name || inner.id} Constant G Symbols`
+                    : `${inner.name || inner.id} 常数 G 符号`,
+                  `packedG.${index}.constantGSymbols`,
+                  inner.constantGSymbols || "",
+                  false
+                )}
                 <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(symbols.join(", ") || tr("无"))}</div>
               `;
             }).join("")}
