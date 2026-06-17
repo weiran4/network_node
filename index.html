@@ -142,7 +142,8 @@
 
     .main {
       display: grid;
-      grid-template-columns: minmax(620px, 1fr) 380px;
+      --panel-width: 380px;
+      grid-template-columns: minmax(420px, 1fr) 8px minmax(280px, var(--panel-width));
       min-height: 0;
       overflow: hidden;
       background: var(--bg);
@@ -694,14 +695,18 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      max-width: 100%;
+      min-width: 0;
       min-height: 35px;
       border: 1px solid var(--line);
       border-radius: 7px;
       padding: 7px 8px;
       background: #ffffff;
+      overflow: hidden;
     }
 
     .editable-text {
+      display: block;
       flex: 1;
       min-width: 0;
       overflow: hidden;
@@ -710,6 +715,28 @@
       font-family: Consolas, "SFMono-Regular", monospace;
       font-size: 12px;
       color: var(--ink);
+    }
+
+    .editable-value.multiline-field {
+      align-items: stretch;
+    }
+
+    .editable-value.multiline-field .editable-text {
+      max-height: 150px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      padding-bottom: 2px;
+      resize: vertical;
+      scrollbar-gutter: stable both-edges;
+      text-overflow: clip;
+      white-space: pre;
+    }
+
+    textarea.readonly-math-field {
+      overflow: auto;
+      white-space: pre;
+      scrollbar-gutter: stable both-edges;
+      resize: vertical;
     }
 
     .branch-label {
@@ -777,6 +804,19 @@
       background: var(--panel);
       overflow: auto;
       box-shadow: -10px 0 24px rgba(15, 23, 42, 0.035);
+    }
+
+    .panel-resize-bar {
+      background: #d8e1eb;
+      border-left: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      cursor: col-resize;
+      min-width: 8px;
+    }
+
+    .panel-resize-bar:hover,
+    .panel-resize-bar.dragging {
+      background: #aebdcb;
     }
 
     .panel-section {
@@ -2124,7 +2164,8 @@
       }
 
       .main {
-        grid-template-columns: minmax(760px, 1fr) 410px;
+        --panel-width: 410px;
+        grid-template-columns: minmax(520px, 1fr) 9px minmax(300px, var(--panel-width));
       }
 
       .workspace {
@@ -2250,7 +2291,8 @@
       }
 
       .main {
-        grid-template-columns: minmax(860px, 1fr) 460px;
+        --panel-width: 460px;
+        grid-template-columns: minmax(620px, 1fr) 10px minmax(340px, var(--panel-width));
       }
 
       .workspace {
@@ -2342,6 +2384,10 @@
         grid-template-columns: 1fr;
         overflow: visible;
         min-height: 0;
+      }
+
+      .panel-resize-bar {
+        display: none;
       }
 
       .panel {
@@ -2536,6 +2582,7 @@
         </section>
       </section>
 
+      <div class="panel-resize-bar" id="panelResizeBar" title="拖动调整右侧栏宽度" aria-label="拖动调整右侧栏宽度"></div>
       <aside class="panel">
         <section class="panel-section">
           <h2 class="panel-title">选中支路</h2>
@@ -2689,6 +2736,8 @@
       portDrag: null,
       leadAnchorDrag: null,
       resizeDrag: null,
+      panelResizeDrag: null,
+      panelWidth: null,
       hoverCurrent: null,
       hoverNetId: null,
       showLocalLabels: false,
@@ -2998,7 +3047,9 @@
     const exportText = document.getElementById("exportText");
     const exportFileName = document.getElementById("exportFileName");
     const existingExportFiles = document.getElementById("existingExportFiles");
+    const mainLayout = document.querySelector(".main");
     const workspace = document.querySelector(".workspace");
+    const panelResizeBar = document.getElementById("panelResizeBar");
     const outputResizeBar = document.getElementById("outputResizeBar");
     const outputDialog = document.getElementById("outputDialog");
     const outputDialogModal = document.getElementById("outputDialogModal");
@@ -3316,6 +3367,59 @@
         const trailing = (node.textContent.match(/\s*$/) || [""])[0];
         node.textContent = `${leading}${tr(original)}${trailing}`;
       });
+    }
+
+    function clampPanelWidth(width) {
+      const mainWidth = mainLayout?.getBoundingClientRect().width || 0;
+      const maxByLayout = mainWidth ? Math.max(280, mainWidth - 420 - 12) : 560;
+      return Math.max(280, Math.min(maxByLayout, Number(width) || 380));
+    }
+
+    function applyPanelWidth(width = state.panelWidth) {
+      if (!mainLayout) return;
+      if (width == null || width === "") {
+        state.panelWidth = null;
+        mainLayout.style.removeProperty("--panel-width");
+        return;
+      }
+      const nextWidth = clampPanelWidth(width);
+      state.panelWidth = nextWidth;
+      mainLayout.style.setProperty("--panel-width", `${nextWidth}px`);
+    }
+
+    function startPanelResize(event) {
+      if (!panelResizeBar || event.button !== 0) return;
+      const startX = event.clientX;
+      const panel = document.querySelector(".panel");
+      const startWidth = panel?.getBoundingClientRect().width || state.panelWidth || 380;
+      state.panelResizeDrag = { pointerId: event.pointerId, startX, startWidth };
+      panelResizeBar.classList.add("dragging");
+      panelResizeBar.setPointerCapture?.(event.pointerId);
+
+      function move(moveEvent) {
+        if (!state.panelResizeDrag) return;
+        const nextWidth = state.panelResizeDrag.startWidth - (moveEvent.clientX - state.panelResizeDrag.startX);
+        applyPanelWidth(nextWidth);
+        moveEvent.preventDefault();
+      }
+
+      function finish(finishEvent) {
+        if (panelResizeBar.hasPointerCapture?.(event.pointerId)) {
+          panelResizeBar.releasePointerCapture(event.pointerId);
+        }
+        panelResizeBar.classList.remove("dragging");
+        state.panelResizeDrag = null;
+        panelResizeBar.removeEventListener("pointermove", move);
+        panelResizeBar.removeEventListener("pointerup", finish);
+        panelResizeBar.removeEventListener("pointercancel", finish);
+        finishEvent?.preventDefault?.();
+      }
+
+      panelResizeBar.addEventListener("pointermove", move);
+      panelResizeBar.addEventListener("pointerup", finish);
+      panelResizeBar.addEventListener("pointercancel", finish);
+      event.preventDefault();
+      event.stopPropagation();
     }
 
     const toolButtons = {
@@ -4470,7 +4574,7 @@
       return `
         <div class="field">
           <label>${escapeHtml(displayLabel)}</label>
-          <div class="editable-value">
+          <div class="editable-value ${multiline ? "multiline-field" : ""}">
             <span class="editable-text" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
             <button class="node-edit-button" type="button" data-edit-field="${escapeHtml(field)}" data-edit-label="${escapeHtml(displayLabel)}" data-edit-multiline="${multiline ? "1" : "0"}" title="${escapeHtml(editTitle)}" aria-label="${escapeHtml(editTitle)}">
               <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -4585,7 +4689,7 @@
       return `
         <div class="field">
           <label>${escapeHtml(label)}</label>
-          <textarea readonly>${escapeHtml(value)}</textarea>
+          <textarea class="readonly-math-field" readonly>${escapeHtml(value)}</textarea>
         </div>
       `;
     }
@@ -5762,6 +5866,7 @@
           activeOutput: state.activeOutput,
           showLocalLabels: state.showLocalLabels,
           showReducedBranchCurrents: state.showReducedBranchCurrents,
+          panelWidth: state.panelWidth,
           editorGroups: structuredClone(state.editorGroups || {})
         },
         canvasOrder: canvases.map(item => item.id),
@@ -5779,6 +5884,7 @@
         activeOutput: state.activeOutput,
         showLocalLabels: state.showLocalLabels,
         showReducedBranchCurrents: state.showReducedBranchCurrents,
+        panelWidth: state.panelWidth,
         editorGroups: structuredClone(state.editorGroups || {}),
         selectedId: state.selectedId,
         selectedIds: structuredClone(state.selectedIds || []),
@@ -5803,7 +5909,9 @@
       state.activeOutput = ui.activeOutput || data?.activeOutput || state.activeOutput || "formulas";
       state.showLocalLabels = ui.showLocalLabels ?? data?.showLocalLabels ?? state.showLocalLabels;
       state.showReducedBranchCurrents = ui.showReducedBranchCurrents ?? data?.showReducedBranchCurrents ?? state.showReducedBranchCurrents;
+      state.panelWidth = ui.panelWidth ?? data?.panelWidth ?? state.panelWidth;
       state.editorGroups = structuredClone(ui.editorGroups || data?.editorGroups || state.editorGroups || {});
+      applyPanelWidth();
     }
 
     function loadCircuitState(data) {
@@ -12920,6 +13028,7 @@ function startResizeDrag(branch, handle, event) {
     }
 
     function render() {
+      applyPanelWidth();
       renderCanvasTabs();
       applyCanvasView();
       renderWires();
@@ -13409,6 +13518,7 @@ function startResizeDrag(branch, handle, event) {
         event.stopPropagation();
       }
     });
+    panelResizeBar.addEventListener("pointerdown", startPanelResize);
     document.getElementById("selectTool").addEventListener("click", () => setTool("select"));
     document.getElementById("languageTool").addEventListener("click", () => {
       state.language = state.language === "zh" ? "en" : "zh";
@@ -13454,6 +13564,7 @@ function startResizeDrag(branch, handle, event) {
     outputText.addEventListener("scroll", updateOutputMinimapThumb);
     outputDialogBody.addEventListener("scroll", updateOutputMinimapThumb);
     window.addEventListener("resize", scheduleOutputMinimapUpdate);
+    window.addEventListener("resize", () => applyPanelWidth());
     outputMinimap.addEventListener("pointerdown", event => {
       outputMinimapDragging = true;
       outputMinimap.setPointerCapture(event.pointerId);

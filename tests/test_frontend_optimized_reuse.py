@@ -19,6 +19,15 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("direct_retained_stamps: payload.direct_retained_stamps", source)
         self.assertIn("Gred_direct", source)
 
+    def test_right_panel_has_resizable_width_controls(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("id=\"panelResizeBar\"", source)
+        self.assertIn("--panel-width", source)
+        self.assertIn("function applyPanelWidth", source)
+        self.assertIn("function startPanelResize", source)
+        self.assertIn("panelResizeBar.addEventListener(\"pointerdown\", startPanelResize)", source)
+
 
 if __name__ == "__main__":
     unittest.main()
