@@ -65,7 +65,7 @@ def run_python_json(script_name: str, payload: dict) -> dict:
         text=True,
         capture_output=True,
         cwd=str(ROOT),
-        timeout=240,
+        timeout=600,
     )
     try:
         data = json.loads(proc.stdout or "{}")

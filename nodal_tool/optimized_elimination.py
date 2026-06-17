@@ -828,6 +828,11 @@ def _matrix_symbol_names(*matrices: sp.Matrix) -> set[str]:
     return names
 
 
+def _matrix_has_nonzero(matrix: sp.Matrix) -> bool:
+    matrix = sp.Matrix(matrix)
+    return any(sp.simplify(value) != 0 for value in matrix)
+
+
 def _ram_overlay_node_subset(matrix: sp.Matrix, nodes: Sequence[str]) -> tuple[list[str], dict[int, int]]:
     matrix = sp.Matrix(matrix)
     touched: set[int] = set()
@@ -1172,16 +1177,47 @@ def _c_emit_rtds_stage_sections(
         and (row >= len(Ihisred_stage) or Ihisred_stage[row] != "RAM_INIT")
     ]
     partial_ihisred_code_path = bool(ihisred_dyn_rows and len(ihisred_dyn_rows) < len(external_nodes))
-    full_ihisred_code_path = bool(not partial_ihisred_code_path and len(external_nodes) > 0)
+    full_ihisred_code_path = bool(ihisred_dyn_rows and not partial_ihisred_code_path)
     need_ihisred_code = full_ihisred_code_path
+    vk_from_vr = W * sp.Matrix(Gkr) if W.rows and Gkr.rows else sp.zeros(len(internal_nodes), len(external_nodes))
+    vk_from_ihisk = W * sp.Matrix(Ihisk) if W.rows and Ihisk.rows else sp.zeros(len(internal_nodes), 1)
+    need_vk_recovery = bool(internal_nodes)
+    need_vk_vr_path = bool(need_vk_recovery and _matrix_has_nonzero(vk_from_vr))
+    need_vk_ihis_path = bool(need_vk_recovery and _matrix_has_nonzero(vk_from_ihisk))
     need_tmp_grk_w_code = full_gred_code_path or full_ihisred_code_path
+    need_Grr_code = bool(full_gred_code_path or (dynamic_gred and not rectangular_gred_dyn_path))
+    need_Grk_code = bool(full_gred_code_path or full_ihisred_code_path or (dynamic_gred and not rectangular_gred_dyn_path))
+    need_Gkr_code = bool(full_gred_code_path or need_vk_vr_path or (dynamic_gred and not rectangular_gred_dyn_path))
+    need_W_code = bool(dynamic_gred or full_ihisred_code_path or partial_ihisred_code_path or need_vk_vr_path or need_vk_ihis_path)
+    need_Ihisr_code = bool(full_ihisred_code_path)
+    need_Ihisk_code = bool(full_ihisred_code_path or partial_ihisred_code_path or need_vk_ihis_path)
+    need_Vr_code = bool(need_vk_vr_path)
+    need_Vk_code = bool(need_vk_recovery)
+    need_tmp_w_gkr_code = bool(need_vk_vr_path)
+    need_tmp_w_gkr_vr_code = bool(need_vk_vr_path)
+    need_tmp_w_ihisk_code = bool(need_vk_ihis_path)
+    need_tmp_vk_sum_code = bool(need_vk_vr_path and need_vk_ihis_path)
     var_g_pairs = (
         _upper_triangular_stage_node_pairs(external_nodes, Gred_stage, {"CODE_UPDATE", "UNKNOWN", "CODE_PER_STEP"})
         if dynamic_gred
         else []
     )
-    code_g_symbol_names = _matrix_symbol_names(Grr, Grk, Gkr, W)
-    code_ihis_symbol_names = _matrix_symbol_names(Ihisr, Ihisk) - code_g_symbol_names
+    code_g_matrices = []
+    if need_Grr_code:
+        code_g_matrices.append(Grr)
+    if need_Grk_code or partial_ihisred_code_path:
+        code_g_matrices.append(Grk)
+    if need_Gkr_code:
+        code_g_matrices.append(Gkr)
+    if need_W_code:
+        code_g_matrices.append(W)
+    code_g_symbol_names = _matrix_symbol_names(*code_g_matrices)
+    code_ihis_matrices = [Ihisred]
+    if need_Ihisr_code or partial_ihisred_code_path:
+        code_ihis_matrices.append(Ihisr)
+    if need_Ihisk_code:
+        code_ihis_matrices.append(Ihisk)
+    code_ihis_symbol_names = _matrix_symbol_names(*code_ihis_matrices) - code_g_symbol_names
     code_symbol_names = code_g_symbol_names | code_ihis_symbol_names
     ram_symbol_names = _matrix_symbol_names(ram_Gred) - code_symbol_names
     if not internal_nodes:
@@ -1351,7 +1387,12 @@ def _c_emit_rtds_stage_sections(
     Grk_alias_entries = _block_alias_entries(Grk, "Grk", external_nodes, node_display_names)
     Gkr_alias_entries = _block_alias_entries(Gkr, "Gkr", external_nodes, node_display_names)
     W_alias_entries = _block_alias_entries(W, "W", external_nodes, node_display_names)
-    block_alias_entries = [*Grr_alias_entries, *Grk_alias_entries, *Gkr_alias_entries, *W_alias_entries]
+    block_alias_entries = [
+        *(Grr_alias_entries if need_Grr_code or rectangular_gred_dyn_path else []),
+        *(Grk_alias_entries if need_Grk_code or rectangular_gred_dyn_path or partial_ihisred_code_path else []),
+        *(Gkr_alias_entries if need_Gkr_code or rectangular_gred_dyn_path else []),
+        *(W_alias_entries if need_W_code else []),
+    ]
     sparse_gred_scalar_assignments = (
         [
             (
@@ -1392,20 +1433,31 @@ def _c_emit_rtds_stage_sections(
             f"    {target} = {name};",
         ]
     ]
-    code_matrix_names = [
-        "Grr_code",
-        "Grk_code",
-        "Gkr_code",
-        "W_code",
-        "Ihisr_code",
-        "Ihisk_code",
-        "Vr_code",
-        "Vk_code",
-        "tmp_W_Gkr_code",
-        "tmp_W_Gkr_Vr_code",
-        "tmp_W_Ihisk_code",
-        "tmp_Vk_sum_code",
-    ]
+    code_matrix_names = []
+    if need_Grr_code:
+        code_matrix_names.append("Grr_code")
+    if need_Grk_code:
+        code_matrix_names.append("Grk_code")
+    if need_Gkr_code:
+        code_matrix_names.append("Gkr_code")
+    if need_W_code:
+        code_matrix_names.append("W_code")
+    if need_Ihisr_code:
+        code_matrix_names.append("Ihisr_code")
+    if need_Ihisk_code:
+        code_matrix_names.append("Ihisk_code")
+    if need_Vr_code:
+        code_matrix_names.append("Vr_code")
+    if need_Vk_code:
+        code_matrix_names.append("Vk_code")
+    if need_tmp_w_gkr_code:
+        code_matrix_names.append("tmp_W_Gkr_code")
+    if need_tmp_w_gkr_vr_code:
+        code_matrix_names.append("tmp_W_Gkr_Vr_code")
+    if need_tmp_w_ihisk_code:
+        code_matrix_names.append("tmp_W_Ihisk_code")
+    if need_tmp_vk_sum_code:
+        code_matrix_names.append("tmp_Vk_sum_code")
     if need_gred_code:
         code_matrix_names.insert(4, "Gred_code")
     if rectangular_gred_dyn_path:
@@ -1436,14 +1488,14 @@ def _c_emit_rtds_stage_sections(
     lines = [
         "/* RTDS lifecycle placement generated from final-expression dependency analysis.",
         "   RAM_PASS1 stamps only RAM_CONSTANT Gred entries through g_mat_over.",
-        "   CODE/BEGIN_T0 recomputes Ihisred every timestep using MATRIX_ CODE helpers.",
-        "   T1_T2 reads solved node voltages and recovers eliminated-node voltages. */",
+        "   CODE/BEGIN_T0 computes only dynamic reduced-G and non-direct Ihisred paths.",
+        "   T1_T2 reads solved node voltages and recovers eliminated-node voltages when needed. */",
         "STATIC:",
         "    /* Runtime matrix objects */",
-        "    MATRIX_ Grr_code = {0};",
-        "    MATRIX_ Grk_code = {0};",
-        "    MATRIX_ Gkr_code = {0};",
-        "    MATRIX_ W_code = {0};",
+        *(["    MATRIX_ Grr_code = {0};"] if need_Grr_code else []),
+        *(["    MATRIX_ Grk_code = {0};"] if need_Grk_code else []),
+        *(["    MATRIX_ Gkr_code = {0};"] if need_Gkr_code else []),
+        *(["    MATRIX_ W_code = {0};"] if need_W_code else []),
         *(["    MATRIX_ Gred_code = {0};"] if need_gred_code else []),
         *(["    MATRIX_ Grr_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
         *(["    MATRIX_ Grk_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
@@ -1451,23 +1503,23 @@ def _c_emit_rtds_stage_sections(
         *(["    MATRIX_ Gred_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
         *(["    MATRIX_ tmp_Grk_W_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
         *(["    MATRIX_ tmp_Grk_W_Gkr_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
-        "    MATRIX_ Ihisr_code = {0};",
-        "    MATRIX_ Ihisk_code = {0};",
+        *(["    MATRIX_ Ihisr_code = {0};"] if need_Ihisr_code else []),
+        *(["    MATRIX_ Ihisk_code = {0};"] if need_Ihisk_code else []),
         *(["    MATRIX_ Ihisred_code = {0};"] if need_ihisred_code else []),
         *(["    MATRIX_ Ihisr_ihis_dyn_code = {0};"] if partial_ihisred_code_path else []),
         *(["    MATRIX_ Grk_ihis_dyn_code = {0};"] if partial_ihisred_code_path else []),
         *(["    MATRIX_ Ihisred_dyn_code = {0};"] if partial_ihisred_code_path else []),
         *(["    MATRIX_ tmp_Grk_W_ihis_dyn_code = {0};"] if partial_ihisred_code_path else []),
         *(["    MATRIX_ tmp_Grk_W_Ihisk_dyn_code = {0};"] if partial_ihisred_code_path else []),
-        "    MATRIX_ Vr_code = {0};",
-        "    MATRIX_ Vk_code = {0};",
+        *(["    MATRIX_ Vr_code = {0};"] if need_Vr_code else []),
+        *(["    MATRIX_ Vk_code = {0};"] if need_Vk_code else []),
         *(["    MATRIX_ tmp_Grk_W_code = {0};"] if need_tmp_grk_w_code else []),
         *(["    MATRIX_ tmp_Grk_W_Gkr_code = {0};"] if full_gred_code_path else []),
         *(["    MATRIX_ tmp_Grk_W_Ihisk_code = {0};"] if full_ihisred_code_path else []),
-        "    MATRIX_ tmp_W_Gkr_code = {0};",
-        "    MATRIX_ tmp_W_Gkr_Vr_code = {0};",
-        "    MATRIX_ tmp_W_Ihisk_code = {0};",
-        "    MATRIX_ tmp_Vk_sum_code = {0};",
+        *(["    MATRIX_ tmp_W_Gkr_code = {0};"] if need_tmp_w_gkr_code else []),
+        *(["    MATRIX_ tmp_W_Gkr_Vr_code = {0};"] if need_tmp_w_gkr_vr_code else []),
+        *(["    MATRIX_ tmp_W_Ihisk_code = {0};"] if need_tmp_w_ihisk_code else []),
+        *(["    MATRIX_ tmp_Vk_sum_code = {0};"] if need_tmp_vk_sum_code else []),
         "    /* Runtime state */",
         "    int rtds_matrix_code_ready = 0;",
         *_c_declaration_group("User G/CODE symbols", code_g_symbol_names),
@@ -1508,10 +1560,10 @@ def _c_emit_rtds_stage_sections(
         lines.append("    /* No RAM-side G entries: no fixed G overlay is registered. */")
     lines.extend([
         "",
-        "    err += matrixDim(&Grr_code, NR, NR);",
-        "    err += matrixDim(&Grk_code, NR, NK);",
-        "    err += matrixDim(&Gkr_code, NK, NR);",
-        "    err += matrixDim(&W_code, NK, NK);",
+        *(["    err += matrixDim(&Grr_code, NR, NR);"] if need_Grr_code else []),
+        *(["    err += matrixDim(&Grk_code, NR, NK);"] if need_Grk_code else []),
+        *(["    err += matrixDim(&Gkr_code, NK, NR);"] if need_Gkr_code else []),
+        *(["    err += matrixDim(&W_code, NK, NK);"] if need_W_code else []),
         *(["    err += matrixDim(&Gred_code, NR, NR);"] if need_gred_code else []),
         *( [f"    err += matrixDim(&Grr_dyn_code, {len(gred_dyn_rows)}, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
         *( [f"    err += matrixDim(&Grk_dyn_code, {len(gred_dyn_rows)}, NK);"] if rectangular_gred_dyn_path else [] ),
@@ -1519,23 +1571,23 @@ def _c_emit_rtds_stage_sections(
         *( [f"    err += matrixDim(&Gred_dyn_code, {len(gred_dyn_rows)}, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
         *( [f"    err += matrixDim(&tmp_Grk_W_dyn_code, {len(gred_dyn_rows)}, NK);"] if rectangular_gred_dyn_path else [] ),
         *( [f"    err += matrixDim(&tmp_Grk_W_Gkr_dyn_code, {len(gred_dyn_rows)}, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
-        "    err += matrixDim(&Ihisr_code, NR, 1);",
-        "    err += matrixDim(&Ihisk_code, NK, 1);",
+        *(["    err += matrixDim(&Ihisr_code, NR, 1);"] if need_Ihisr_code else []),
+        *(["    err += matrixDim(&Ihisk_code, NK, 1);"] if need_Ihisk_code else []),
         *(["    err += matrixDim(&Ihisred_code, NR, 1);"] if need_ihisred_code else []),
         *( [f"    err += matrixDim(&Ihisr_ihis_dyn_code, {len(ihisred_dyn_rows)}, 1);"] if partial_ihisred_code_path else [] ),
         *( [f"    err += matrixDim(&Grk_ihis_dyn_code, {len(ihisred_dyn_rows)}, NK);"] if partial_ihisred_code_path else [] ),
         *( [f"    err += matrixDim(&Ihisred_dyn_code, {len(ihisred_dyn_rows)}, 1);"] if partial_ihisred_code_path else [] ),
         *( [f"    err += matrixDim(&tmp_Grk_W_ihis_dyn_code, {len(ihisred_dyn_rows)}, NK);"] if partial_ihisred_code_path else [] ),
         *( [f"    err += matrixDim(&tmp_Grk_W_Ihisk_dyn_code, {len(ihisred_dyn_rows)}, 1);"] if partial_ihisred_code_path else [] ),
-        "    err += matrixDim(&Vr_code, NR, 1);",
-        "    err += matrixDim(&Vk_code, NK, 1);",
+        *(["    err += matrixDim(&Vr_code, NR, 1);"] if need_Vr_code else []),
+        *(["    err += matrixDim(&Vk_code, NK, 1);"] if need_Vk_code else []),
         *(["    err += matrixDim(&tmp_Grk_W_code, NR, NK);"] if need_tmp_grk_w_code else []),
         *(["    err += matrixDim(&tmp_Grk_W_Gkr_code, NR, NR);"] if full_gred_code_path else []),
         *(["    err += matrixDim(&tmp_Grk_W_Ihisk_code, NR, 1);"] if full_ihisred_code_path else []),
-        "    err += matrixDim(&tmp_W_Gkr_code, NK, NR);",
-        "    err += matrixDim(&tmp_W_Gkr_Vr_code, NK, 1);",
-        "    err += matrixDim(&tmp_W_Ihisk_code, NK, 1);",
-        "    err += matrixDim(&tmp_Vk_sum_code, NK, 1);",
+        *(["    err += matrixDim(&tmp_W_Gkr_code, NK, NR);"] if need_tmp_w_gkr_code else []),
+        *(["    err += matrixDim(&tmp_W_Gkr_Vr_code, NK, 1);"] if need_tmp_w_gkr_vr_code else []),
+        *(["    err += matrixDim(&tmp_W_Ihisk_code, NK, 1);"] if need_tmp_w_ihisk_code else []),
+        *(["    err += matrixDim(&tmp_Vk_sum_code, NK, 1);"] if need_tmp_vk_sum_code else []),
         "    if (err > 0) {",
         '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
         '                       "RTDS matrix allocation failed for component %s.", Name);',
@@ -1545,10 +1597,10 @@ def _c_emit_rtds_stage_sections(
         "    /* Same MATRIX_ objects are used from RAM and CODE when needed.",
         "       RAM uses set/get and matrix_mult; CODE uses set_CODE/get_CODE and matrix_*_CODE. */",
         *_block_alias_compute_lines(block_alias_entries),
-        *_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set"),
-        *_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set"),
-        *_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set"),
-        *_matrix_set_alias_lines(W_alias_entries, "W_code", "set"),
+        *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set") if need_Grr_code else []),
+        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set") if need_Grk_code else []),
+        *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set") if need_Gkr_code else []),
+        *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set") if need_W_code else []),
         *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
         *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
         *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
@@ -1581,37 +1633,47 @@ def _c_emit_rtds_stage_sections(
         "    }",
         "",
         "",
-        *_c_section_warning(
-            "CODE-SIDE G MATRIX VALUE SETUP",
+        *(
             [
-                "Update runtime G-related symbols and matrices before the reduction math below.",
-                "Typical edits here: read parameter inputs, switch states, measured values,",
-                "or CODE-stage conductance variables, then refresh Grr/Grk/Gkr/W with set_CODE.",
-            ],
+                *_c_section_warning(
+                    "CODE-SIDE G MATRIX VALUE SETUP",
+                    [
+                        "Update runtime G-related symbols and matrices before the reduction math below.",
+                        "Only matrices required by dynamic G, Ihis reduction, or Vk recovery are refreshed.",
+                    ],
+                ),
+                "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */",
+                *_block_alias_compute_lines(block_alias_entries),
+                *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set_CODE") if need_Grr_code else []),
+                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE") if need_Grk_code else []),
+                *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE") if need_Gkr_code else []),
+                *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE") if need_W_code else []),
+                *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
+                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
+                *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
+                "",
+            ]
+            if block_alias_entries
+            else []
         ),
-        "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */",
-        *_block_alias_compute_lines(block_alias_entries),
-        *_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set_CODE"),
-        *_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE"),
-        *_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE"),
-        *_matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE"),
-        *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
-        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
-        *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
-        "",
-        *_c_section_warning(
-            "CODE-SIDE IHIS VALUE SETUP",
+        *(
             [
-                "Update runtime Ihis/history-source values before per-step injection math.",
-                "Refresh Ihisr/Ihisk with set_CODE in retained/internal-node order.",
-                "Ihisred is then computed as Ihisr - Grk * W * Ihisk.",
-            ],
+                *_c_section_warning(
+                    "CODE-SIDE IHIS VALUE SETUP",
+                    [
+                        "Update runtime Ihis/history-source values before per-step injection math.",
+                        "Only non-direct Ihisred rows are computed through MATRIX_ CODE helpers.",
+                    ],
+                ),
+                *(_c_vector_set_lines(Ihisr, "Ihisr_code", "set_CODE") if need_Ihisr_code else []),
+                *(_c_vector_set_lines(Ihisk, "Ihisk_code", "set_CODE") if need_Ihisk_code else []),
+                *(_c_matrix_set_lines(_slice_matrix(Ihisr, ihisred_dyn_rows, [0]), "Ihisr_ihis_dyn_code", "set_CODE") if partial_ihisred_code_path else []),
+                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_ihis_dyn_code", "set_CODE", row_map=ihisred_dyn_rows, col_map=list(range(Grk.cols))) if partial_ihisred_code_path else []),
+                "",
+            ]
+            if need_Ihisr_code or need_Ihisk_code or partial_ihisred_code_path
+            else []
         ),
-        *_c_vector_set_lines(Ihisr, "Ihisr_code", "set_CODE"),
-        *_c_vector_set_lines(Ihisk, "Ihisk_code", "set_CODE"),
-        *(_c_matrix_set_lines(_slice_matrix(Ihisr, ihisred_dyn_rows, [0]), "Ihisr_ihis_dyn_code", "set_CODE") if partial_ihisred_code_path else []),
-        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_ihis_dyn_code", "set_CODE", row_map=ihisred_dyn_rows, col_map=list(range(Grk.cols))) if partial_ihisred_code_path else []),
-        "",
         *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if need_tmp_grk_w_code else []),
     ])
     if dynamic_gred and full_gred_code_path:
@@ -1672,11 +1734,9 @@ def _c_emit_rtds_stage_sections(
             ),
             "",
         ])
-    lines.extend([
-        "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
-    ])
     if partial_ihisred_code_path:
         lines.extend([
+            "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
             "    /* Sliced Ihisred updates for CODE-owned retained rows. */",
             "    matrix_mult_CODE(&tmp_Grk_W_ihis_dyn_code, &Grk_ihis_dyn_code, &W_code);",
             "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_dyn_code, &tmp_Grk_W_ihis_dyn_code, &Ihisk_code);",
@@ -1691,8 +1751,9 @@ def _c_emit_rtds_stage_sections(
                 for index in ihisred_dyn_rows
             ],
         ])
-    else:
+    elif full_ihisred_code_path:
         lines.extend([
+            "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
             "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
             "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
         ])
@@ -1707,30 +1768,53 @@ def _c_emit_rtds_stage_sections(
                     else f"    Inj{_c_node_variable_name(node, node_display_names)} = {_ccode(Ihisred[index, 0])};"
                 )
                 if partial_ihisred_code_path
-                else f"    Inj{_c_node_variable_name(node, node_display_names)} = get_CODE(&Ihisred_code, {index}, 0);"
+                else (
+                    f"    Inj{_c_node_variable_name(node, node_display_names)} = get_CODE(&Ihisred_code, {index}, 0);"
+                    if full_ihisred_code_path
+                    else f"    Inj{_c_node_variable_name(node, node_display_names)} = {_ccode(Ihisred[index, 0])};"
+                )
             )
             for index, node in enumerate(external_nodes)
         ],
         "",
-        "T1_T2:",
-        "    /* Internal-node voltage recovery after solved retained-node voltages are available. */",
-        *[
-            f"    set_CODE(&Vr_code, {index}, 0, {_c_symbol_name(_c_display_node(node, node_display_names))});"
-            for index, node in enumerate(external_nodes)
-        ],
-        "    matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);",
-        "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
-        "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
-        "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
-        "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
-        "",
-        "    /* One variable per eliminated node, in effective k order. */",
-        *[
-            f"    {_c_node_variable_name(node, node_display_names)} = get_CODE(&Vk_code, {index}, 0);"
-            for index, node in enumerate(internal_nodes)
-        ],
-        "",
     ])
+    if need_vk_recovery:
+        lines.extend([
+            "T1_T2:",
+            "    /* Internal-node voltage recovery after solved retained-node voltages are available. */",
+            *(
+                [
+                    f"    set_CODE(&Vr_code, {index}, 0, {_c_symbol_name(_c_display_node(node, node_display_names))});"
+                    for index, node in enumerate(external_nodes)
+                ]
+                if need_vk_vr_path
+                else []
+            ),
+            *(["    matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);"] if need_vk_vr_path else []),
+            *(["    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);"] if need_vk_vr_path else []),
+            *(["    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);"] if need_vk_ihis_path else []),
+            *(["    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);"] if need_tmp_vk_sum_code else []),
+            *(
+                ["    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);"]
+                if need_tmp_vk_sum_code
+                else (
+                    ["    matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);"]
+                    if need_vk_vr_path
+                    else (
+                        ["    matrix_scalarMult_CODE(&Vk_code, &tmp_W_Ihisk_code, -1.0);"]
+                        if need_vk_ihis_path
+                        else [f"    set_CODE(&Vk_code, {index}, 0, 0.0);" for index in range(len(internal_nodes))]
+                    )
+                )
+            ),
+            "",
+            "    /* One variable per eliminated node, in effective k order. */",
+            *[
+                f"    {_c_node_variable_name(node, node_display_names)} = get_CODE(&Vk_code, {index}, 0);"
+                for index, node in enumerate(internal_nodes)
+            ],
+            "",
+        ])
     warnings = analysis.get("warnings") or []
     lines.extend([*[f"/* WARNING: {warning} */" for warning in warnings], ""])
     return lines
