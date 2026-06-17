@@ -28,6 +28,12 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("function startPanelResize", source)
         self.assertIn("panelResizeBar.addEventListener(\"pointerdown\", startPanelResize)", source)
 
+    def test_internal_node_changes_invalidate_math_caches(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("state.internalNodes = state.internalNodes.filter(item => item !== id);\n          }\n          invalidateMathCaches();", source)
+        self.assertIn("state.nodeOrder = Array.from(list.querySelectorAll(\".node-order-item[data-node-id]\")).map(row => row.dataset.nodeId);\n          invalidateMathCaches();", source)
+
 
 if __name__ == "__main__":
     unittest.main()

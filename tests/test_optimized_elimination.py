@@ -682,6 +682,56 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("set_CODE(&Vr_code, 2, 0, N6);", draft)
         self.assertNotIn("set_CODE(&Gkr_code, 0, 2", draft)
 
+    def test_direct_split_draft_does_not_simplify_final_gred_minus_direct(self):
+        A, G, D = sp.symbols("A G D")
+        nodes = ["N1", "N2", "N4"]
+        G_core = sp.Matrix(
+            [
+                [A, -A, 0],
+                [-A, A + G, -G],
+                [0, -G, G],
+            ]
+        )
+        structured = build_structured_formula(G_core, sp.zeros(3, 1), nodes, ["N1", "N4"], ["N2"])
+        plan = build_dependency_stage_plan(
+            structured,
+            {"A": "RAM_CONSTANT", "G": "CODE_VARIABLE", "D": "RAM_CONSTANT"},
+            dependency_model_override={
+                "Gred": sp.Matrix([[A - A * A / (A + G) + D, -A * G / (A + G) - D], [-A * G / (A + G) - D, G - G * G / (A + G) + D]]),
+                "Ihisred": sp.zeros(2, 1),
+                "W": sp.Matrix([[1 / (A + G)]]),
+                "Kv": sp.zeros(1, 2),
+                "Kh": sp.zeros(1, 1),
+            },
+            analysis_model_override={
+                "Gred": sp.Matrix([[A - A * A / (A + G) + D, -A * G / (A + G) - D], [-A * G / (A + G) - D, G - G * G / (A + G) + D]]),
+                "Ihisred": sp.zeros(2, 1),
+                "W": sp.zeros(1, 1),
+                "Kv": sp.zeros(1, 2),
+                "Kh": sp.zeros(1, 1),
+            },
+        )
+        plan["Gred_direct"] = sp.Matrix([[D, -D], [-D, D]])
+
+        import nodal_tool.optimized_elimination as optimized
+
+        original_simplify = optimized.sp.simplify
+
+        def reject_matrix_simplify(expr, *args, **kwargs):
+            if isinstance(expr, sp.MatrixBase):
+                raise AssertionError("C draft must not simplify borrowed final Gred matrices")
+            return original_simplify(expr, *args, **kwargs)
+
+        try:
+            optimized.sp.simplify = reject_matrix_simplify
+            draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+        finally:
+            optimized.sp.simplify = original_simplify
+
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", draft)
+        self.assertIn("matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);", draft)
+        self.assertNotIn("A**2/(A + G)", draft)
+
 
 
 if __name__ == "__main__":

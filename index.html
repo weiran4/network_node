@@ -11955,6 +11955,7 @@
           } else {
             state.internalNodes = state.internalNodes.filter(item => item !== id);
           }
+          invalidateMathCaches();
           renderNetList();
           renderOutput();
         });
@@ -11986,6 +11987,7 @@
         handle.addEventListener("dragend", () => {
           list.querySelectorAll(".node-order-item.dragging").forEach(row => row.classList.remove("dragging"));
           state.nodeOrder = Array.from(list.querySelectorAll(".node-order-item[data-node-id]")).map(row => row.dataset.nodeId);
+          invalidateMathCaches();
           draggedId = null;
           draggedIds = [];
           renderNetList();

@@ -1462,20 +1462,23 @@ def _c_emit_rtds_stage_sections(
     details = plan.get("details") or {}
     Gred_stage = analysis.get("Gred_stage") or []
     symbol_table = analysis.get("symbol_table") or {}
-    Gred_schur = sp.simplify(Gred - Gred_direct) if Gred.shape == Gred_direct.shape else Gred
-    ram_Gred_schur = _stage_entries(Gred_schur, Gred_stage, "RAM_INIT")
-    code_Gred_schur = sp.simplify(Gred_schur - ram_Gred_schur)
     ram_Gred_direct, code_Gred_direct = _split_matrix_ram_and_code_terms(Gred_direct, symbol_table)
-    ram_Gred = sp.simplify(ram_Gred_schur + ram_Gred_direct)
-    code_Gred = sp.simplify(code_Gred_schur + code_Gred_direct)
-    dynamic_gred = _matrix_has_nonzero(code_Gred)
-    code_gred_entries = [
+    ram_Gred = _stage_entries(Gred, Gred_stage, "RAM_INIT")
+    for row in range(ram_Gred_direct.rows):
+        for col in range(ram_Gred_direct.cols):
+            stage = str(Gred_stage[row][col]) if row < len(Gred_stage) and col < len(Gred_stage[row]) else "UNKNOWN"
+            if stage != "RAM_INIT":
+                ram_Gred[row, col] += ram_Gred_direct[row, col]
+    code_gred_entries = _find_code_owned_entries(Gred_stage)
+    direct_code_entries = [
         (row, col)
-        for row in range(code_Gred.rows)
-        for col in range(code_Gred.cols)
-        if sp.simplify(code_Gred[row, col]) != 0
+        for row in range(code_Gred_direct.rows)
+        for col in range(code_Gred_direct.cols)
+        if sp.simplify(code_Gred_direct[row, col]) != 0
     ]
-    full_gred_code_path = bool(dynamic_gred and code_gred_entries and len(code_gred_entries) == code_Gred.rows * code_Gred.cols)
+    code_gred_entries = sorted({*code_gred_entries, *direct_code_entries})
+    dynamic_gred = bool(code_gred_entries)
+    full_gred_code_path = bool(dynamic_gred and code_gred_entries and len(code_gred_entries) == Gred.rows * Gred.cols)
     partial_gred_code_path = bool(dynamic_gred and not full_gred_code_path)
     dynamic_subblock = {
         **detect_rectangular_dynamic_blocks(code_gred_entries),
@@ -1489,8 +1492,8 @@ def _c_emit_rtds_stage_sections(
         "code_entries": code_gred_entries,
         "unknown_entries": [
             (row, col)
-            for row in range(code_Gred.rows)
-            for col in range(code_Gred.cols)
+            for row in range(Gred.rows)
+            for col in range(Gred.cols)
             if row < len(Gred_stage)
             and col < len(Gred_stage[row])
             and str(Gred_stage[row][col]) == "UNKNOWN"
@@ -1551,7 +1554,14 @@ def _c_emit_rtds_stage_sections(
     need_tmp_w_gkr_vr_code = bool(need_vk_vr_path)
     need_tmp_w_ihisk_code = bool(need_vk_ihis_path)
     need_tmp_vk_sum_code = bool(need_vk_vr_path and need_vk_ihis_path)
-    var_g_pairs = _upper_triangular_nonzero_node_pairs(external_nodes, code_Gred) if dynamic_gred else []
+    var_g_pairs = (
+        _upper_triangular_stage_node_pairs(external_nodes, Gred_stage, {"CODE_UPDATE", "UNKNOWN", "CODE_PER_STEP"})
+        if dynamic_gred
+        else []
+    )
+    direct_var_pairs = _upper_triangular_nonzero_node_pairs(external_nodes, code_Gred_direct) if dynamic_gred else []
+    seen_var_pairs = {(row, col) for row, col, _, _ in var_g_pairs}
+    var_g_pairs.extend(pair for pair in direct_var_pairs if (pair[0], pair[1]) not in seen_var_pairs)
     code_g_matrices = []
     if need_Grr_code:
         code_g_matrices.append(Grr)
