@@ -6,6 +6,7 @@ import sys
 
 import sympy as sp
 
+from elimination import eliminate_internal_nodes
 from nodal_tool.ground import apply_ground_constraint, validate_ground_partition
 from nodal_tool.optimized_elimination import (
     build_dependency_stage_plan,
@@ -105,6 +106,80 @@ def _clean_value(value):
     return value
 
 
+def _reorder_rows(matrix: sp.Matrix, source_nodes: list[str], target_nodes: list[str]) -> sp.Matrix:
+    matrix = sp.Matrix(matrix)
+    if not target_nodes:
+        return sp.zeros(0, matrix.cols if matrix.cols else 0)
+    index_by_node = {node: index for index, node in enumerate(source_nodes)}
+    rows = [index_by_node[node] for node in target_nodes if node in index_by_node]
+    if len(rows) != len(target_nodes):
+        return matrix
+    return matrix.extract(rows, list(range(matrix.cols)))
+
+
+def _reorder_square_matrix(matrix: sp.Matrix, source_nodes: list[str], target_nodes: list[str]) -> sp.Matrix:
+    matrix = sp.Matrix(matrix)
+    if not target_nodes:
+        return sp.zeros(0, 0)
+    index_by_node = {node: index for index, node in enumerate(source_nodes)}
+    indices = [index_by_node[node] for node in target_nodes if node in index_by_node]
+    if len(indices) != len(target_nodes):
+        return matrix
+    return matrix.extract(indices, indices)
+
+
+def _reorder_vector(matrix: sp.Matrix, source_nodes: list[str], target_nodes: list[str]) -> sp.Matrix:
+    matrix = _parse_vector(matrix) if isinstance(matrix, list) else sp.Matrix(matrix)
+    if not target_nodes:
+        return sp.zeros(0, 1)
+    index_by_node = {node: index for index, node in enumerate(source_nodes)}
+    rows = [index_by_node[node] for node in target_nodes if node in index_by_node]
+    if len(rows) != len(target_nodes):
+        return matrix
+    return matrix.extract(rows, [0])
+
+
+def _reduced_dependency_model(result, effective_internal_nodes: list[str], W_value) -> dict:
+    K_v = _reorder_rows(result.K_v, result.internal_nodes, effective_internal_nodes)
+    K_h = _reorder_rows(result.K_h, result.internal_nodes, effective_internal_nodes)
+    return {
+        "Gred": result.G_red,
+        "Ihisred": result.Ihis_red,
+        "W": W_value,
+        "Kv": K_v,
+        "Kh": K_h,
+    }
+
+
+def _borrowed_reduced_dependency_model(
+    borrowed: dict,
+    external_nodes: list[str],
+    effective_internal_nodes: list[str],
+    W_value,
+    *,
+    tagged: bool = False,
+) -> dict | None:
+    if not borrowed:
+        return None
+    g_key = "G_red_tagged" if tagged else "G_red"
+    ihis_key = "Ihis_red_tagged" if tagged else "Ihis_red"
+    if borrowed.get(g_key) is None or borrowed.get(ihis_key) is None:
+        return None
+    source_external = list(borrowed.get("external_nodes") or external_nodes)
+    Gred = _reorder_square_matrix(_parse_matrix(borrowed[g_key]), source_external, external_nodes)
+    Ihisred = _reorder_vector(_parse_vector(borrowed[ihis_key]), source_external, external_nodes)
+    return {
+        "Gred": Gred,
+        "Ihisred": Ihisred,
+        "W": W_value,
+        # Borrowed reduction is only allowed to classify final Gred/Ihisred
+        # stages. Internal-node recovery must still come from the structured
+        # Gkr/W/Ihisk matrix path, so Kv/Kh are shape placeholders here.
+        "Kv": sp.zeros(len(effective_internal_nodes), len(external_nodes)),
+        "Kh": sp.zeros(len(effective_internal_nodes), 1),
+    }
+
+
 def _partition_payload(payload: dict) -> tuple[sp.Matrix, sp.Matrix, sp.Matrix | None, sp.Matrix | None, list[str], list[str], list[str], list[str]]:
     all_nodes = list(payload["all_nodes"])
     external_nodes = list(payload["external_nodes"])
@@ -161,6 +236,7 @@ def main() -> None:
 
     G, Ihis, G_tagged, Ihis_tagged, node_order, external_nodes, internal_nodes, partition_warnings = _partition_payload(payload)
     warnings = list(partition_warnings)
+    borrowed_dependency = payload.get("reduced_dependency_analysis") or payload.get("reduced_dependency")
 
     structured = build_structured_formula(
         G,
@@ -170,9 +246,10 @@ def main() -> None:
         internal_nodes,
         use_suggested_order=use_suggested_order,
         simplify_level=simplify_level,
+        skip_symbolic_w_details=bool(borrowed_dependency),
     )
     tagged_structured = None
-    if G_tagged is not None and Ihis_tagged is not None:
+    if G_tagged is not None and Ihis_tagged is not None and not borrowed_dependency:
         tagged_structured = build_structured_formula(
             G_tagged,
             Ihis_tagged,
@@ -182,11 +259,52 @@ def main() -> None:
             use_suggested_order=False,
             simplify_level=simplify_level,
         )
+    dependency_model_override = None
+    analysis_model_override = None
+    runtime_w = structured.get("block_type") == "general" and bool(structured.get("effective_internal_nodes"))
+    structured_w = None if runtime_w else structured.get("details", {}).get(
+        "W",
+        sp.zeros(len(structured["effective_internal_nodes"]), len(structured["effective_internal_nodes"])),
+    )
+    if borrowed_dependency:
+        dependency_model_override = _borrowed_reduced_dependency_model(
+            borrowed_dependency,
+            external_nodes,
+            structured["effective_internal_nodes"],
+            structured_w,
+        )
+        analysis_model_override = _borrowed_reduced_dependency_model(
+            borrowed_dependency,
+            external_nodes,
+            structured["effective_internal_nodes"],
+            sp.zeros(len(structured["effective_internal_nodes"]), len(structured["effective_internal_nodes"])),
+            tagged=True,
+        )
+        if dependency_model_override is None or analysis_model_override is None:
+            raise ValueError("reduced_dependency_analysis must include G_red/Ihis_red and tagged reduced entries")
+    if G_tagged is not None and Ihis_tagged is not None:
+        if dependency_model_override is None:
+            reduced = eliminate_internal_nodes(G, Ihis, node_order, external_nodes)
+            tagged_reduced = eliminate_internal_nodes(G_tagged, Ihis_tagged, node_order, external_nodes)
+            dependency_model_override = (
+                _reduced_dependency_model(
+                    reduced,
+                    structured["effective_internal_nodes"],
+                    structured_w,
+                )
+            )
+            analysis_model_override = _reduced_dependency_model(
+                tagged_reduced,
+                structured["effective_internal_nodes"],
+                sp.zeros(len(structured["effective_internal_nodes"]), len(structured["effective_internal_nodes"])),
+            )
     rtds_stage_plan = build_dependency_stage_plan(
         structured,
         payload.get("symbol_dependency_table_tagged") or payload.get("symbol_dependency_table") or {},
         simplify_level=simplify_level,
         analysis_structured=tagged_structured,
+        dependency_model_override=dependency_model_override,
+        analysis_model_override=analysis_model_override,
     )
     warnings.extend(structured.get("warnings", []))
     blocks = structured["blocks"]

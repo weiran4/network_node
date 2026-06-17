@@ -2723,6 +2723,8 @@
     let branchCurrentRenderToken = 0;
     let pythonDraftRenderToken = 0;
     let optimizedEliminationRenderToken = 0;
+    let mathPrecomputeToken = 0;
+    let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
@@ -2755,6 +2757,8 @@
       branchCurrentRenderToken += 1;
       pythonDraftRenderToken += 1;
       optimizedEliminationRenderToken += 1;
+      mathPrecomputeToken += 1;
+      scheduleMathPrecompute();
     }
 
     function blankCanvasData(name = "画布") {
@@ -8036,6 +8040,39 @@
       throw lastError || new Error("节点消去失败");
     }
 
+    async function ensureReducedResult(payload) {
+      const staticHtml = reducedStaticMessage(payload);
+      if (staticHtml) return null;
+      const key = reducedCacheKey(payload);
+      const cachedEntry = cacheGet(reducedCache, key);
+      if (cachedEntry?.result) return cachedEntry.result;
+      if (cachedEntry?.pending) return cachedEntry.pending;
+
+      const pending = requestReduction(payload).then(result => {
+        const current = reducedCache.get(key);
+        const html = current?.html || null;
+        if (current?.pending === pending) cacheSet(reducedCache, key, { html, result, pending: null });
+        return result;
+      }).catch(error => {
+        const current = reducedCache.get(key);
+        if (current?.pending === pending) reducedCache.delete(key);
+        throw error;
+      });
+      cacheSet(reducedCache, key, { html: cachedEntry?.html || null, result: null, pending });
+      return pending;
+    }
+
+    function reducedDependencyAnalysisFromResult(result) {
+      if (!result?.G_red || !result?.Ihis_red || !result?.G_red_tagged || !result?.Ihis_red_tagged) return null;
+      return {
+        external_nodes: result.external_nodes || [],
+        G_red: result.G_red,
+        Ihis_red: result.Ihis_red,
+        G_red_tagged: result.G_red_tagged,
+        Ihis_red_tagged: result.Ihis_red_tagged
+      };
+    }
+
     function optimizedEliminationPayload() {
       return {
         ...buildReducedPayload(),
@@ -8091,6 +8128,42 @@
         }
       }
       throw lastError || new Error(optText("优化消元失败", "Optimized elimination failed"));
+    }
+
+    function scheduleMathPrecompute() {
+      if (mathPrecomputeTimer) window.clearTimeout(mathPrecomputeTimer);
+      const token = mathPrecomputeToken;
+      mathPrecomputeTimer = window.setTimeout(() => {
+        mathPrecomputeTimer = null;
+        precomputeReducedAndOptimized(token).catch(() => {});
+      }, 250);
+    }
+
+    async function precomputeReducedAndOptimized(token) {
+      const basePayload = optimizedEliminationPayload();
+      if (reducedStaticMessage(basePayload) || optimizedStaticMessage(basePayload)) return;
+      const reducedResult = await ensureReducedResult(basePayload);
+      if (token !== mathPrecomputeToken) return;
+      const reducedDependency = reducedDependencyAnalysisFromResult(reducedResult);
+      if (!reducedDependency) return;
+      const key = optimizedEliminationCacheKey(basePayload);
+      const cachedEntry = cacheGet(optimizedEliminationCache, key);
+      if (cachedEntry?.result || cachedEntry?.pending) return;
+      const optimizedPayload = {
+        ...basePayload,
+        reduced_dependency_analysis: reducedDependency
+      };
+      const pending = requestOptimizedElimination(optimizedPayload).then(result => {
+        const current = optimizedEliminationCache.get(key);
+        if (current?.pending === pending) cacheSet(optimizedEliminationCache, key, { result, pending: null });
+        return result;
+      }).catch(error => {
+        const current = optimizedEliminationCache.get(key);
+        if (current?.pending === pending) optimizedEliminationCache.delete(key);
+        throw error;
+      });
+      cacheSet(optimizedEliminationCache, key, { result: null, pending });
+      await pending;
     }
 
     function renderOptimizedControls() {
@@ -8603,7 +8676,15 @@
         return;
       }
 
-      const pending = requestOptimizedElimination(payload).then(result => {
+      const basePayload = payload;
+      const pending = (async () => {
+        const reducedResult = await ensureReducedResult(basePayload);
+        const reducedDependency = reducedDependencyAnalysisFromResult(reducedResult);
+        const requestPayload = reducedDependency
+          ? { ...basePayload, reduced_dependency_analysis: reducedDependency }
+          : basePayload;
+        return requestOptimizedElimination(requestPayload);
+      })().then(result => {
         const current = optimizedEliminationCache.get(key);
         if (current?.pending === pending) cacheSet(optimizedEliminationCache, key, { result, pending: null });
         return result;

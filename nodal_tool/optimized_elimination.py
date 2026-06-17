@@ -467,6 +467,7 @@ def build_structured_formula(
     internal_nodes: Sequence[str],
     use_suggested_order: bool = False,
     simplify_level: str = "light",
+    skip_symbolic_w_details: bool = False,
 ) -> dict:
     external_nodes = list(external_nodes)
     internal_nodes = list(internal_nodes)
@@ -508,21 +509,27 @@ def build_structured_formula(
         U = Gii.extract(d_idx, s_idx)
         S = Gii.extract(s_idx, s_idx)
         D_inv = _inverse_diagonal(D)
-        M = _simplify_matrix(S - U.T * D_inv * U, simplify_level)
-        if M.shape == (2, 2):
-            M11, M12, M22 = M[0, 0], M[0, 1], M[1, 1]
-            detM = simplify_expr(M11 * M22 - M12**2, simplify_level)
-            M_inv = sp.Matrix([[M22 / detM, -M12 / detM], [-M12 / detM, M11 / detM]])
-        else:
+        if skip_symbolic_w_details:
+            M = sp.zeros(S.rows, S.cols)
             detM = None
-            M_inv = sp.MatrixSymbol("M_inv", M.rows, M.cols)
-        if isinstance(M_inv, sp.MatrixBase):
-            W = sp.Matrix.vstack(
-                sp.Matrix.hstack(D_inv + D_inv * U * M_inv * U.T * D_inv, -D_inv * U * M_inv),
-                sp.Matrix.hstack(-M_inv * U.T * D_inv, M_inv),
-            )
+            M_inv = None
+            W = sp.ones(Gii.rows, Gii.cols)
         else:
-            W = None
+            M = _simplify_matrix(S - U.T * D_inv * U, simplify_level)
+            if M.shape == (2, 2):
+                M11, M12, M22 = M[0, 0], M[0, 1], M[1, 1]
+                detM = simplify_expr(M11 * M22 - M12**2, simplify_level)
+                M_inv = sp.Matrix([[M22 / detM, -M12 / detM], [-M12 / detM, M11 / detM]])
+            else:
+                detM = None
+                M_inv = sp.MatrixSymbol("M_inv", M.rows, M.cols)
+            if isinstance(M_inv, sp.MatrixBase):
+                W = sp.Matrix.vstack(
+                    sp.Matrix.hstack(D_inv + D_inv * U * M_inv * U.T * D_inv, -D_inv * U * M_inv),
+                    sp.Matrix.hstack(-M_inv * U.T * D_inv, M_inv),
+                )
+            else:
+                W = None
         details = {
             "D": D,
             "U": U,
@@ -582,18 +589,47 @@ def structured_dependency_model(structured: dict, simplify_level: str = "light")
     }
 
 
+def _dependency_model_from_override(model: dict, nr: int, nk: int) -> tuple[dict, bool]:
+    W_value = model.get("W", None)
+    w_runtime_inverse = W_value is None
+    W = sp.zeros(nk, nk) if w_runtime_inverse else sp.Matrix(W_value)
+    return (
+        {
+            "Gred": sp.Matrix(model.get("Gred", sp.zeros(nr, nr))),
+            "Ihisred": _as_column_vector(sp.Matrix(model.get("Ihisred", sp.zeros(nr, 1))), nr, "Ihisred"),
+            "W": W,
+            "Kv": sp.Matrix(model.get("Kv", sp.zeros(nk, nr))),
+            "Kh": _as_column_vector(sp.Matrix(model.get("Kh", sp.zeros(nk, 1))), nk, "Kh") if nk else sp.zeros(0, 1),
+        },
+        w_runtime_inverse,
+    )
+
+
 def build_dependency_stage_plan(
     structured: dict,
     symbol_table: dict[str, str] | None = None,
     simplify_level: str = "light",
     analysis_structured: dict | None = None,
+    dependency_model_override: dict | None = None,
+    analysis_model_override: dict | None = None,
 ) -> dict:
-    model = structured_dependency_model(structured, simplify_level)
-    analysis_model = structured_dependency_model(analysis_structured or structured, simplify_level)
+    blocks = structured.get("blocks", {})
+    nr = sp.Matrix(blocks.get("G_rr", [])).rows
+    nk = sp.Matrix(blocks.get("G_ii", [])).rows
+    w_runtime_inverse = False
+    if dependency_model_override is None:
+        model = structured_dependency_model(structured, simplify_level)
+    else:
+        model, w_runtime_inverse = _dependency_model_from_override(dependency_model_override, nr, nk)
+    if analysis_model_override is not None:
+        analysis_model, _ = _dependency_model_from_override(analysis_model_override, nr, nk)
+    elif dependency_model_override is not None:
+        analysis_model = model
+    else:
+        analysis_model = structured_dependency_model(analysis_structured or structured, simplify_level)
     analysis = analyze_reduced_model_dependencies(analysis_model, symbol_table or {})
     dynamic_entries = find_dynamic_entries(analysis.get("Gred_stage") or [])
     dynamic_block = detect_rectangular_dynamic_blocks(dynamic_entries)
-    blocks = structured.get("blocks", {})
     return {
         **model,
         "Grr": sp.Matrix(blocks.get("G_rr", [])),
@@ -602,6 +638,9 @@ def build_dependency_stage_plan(
         "Gkk": sp.Matrix(blocks.get("G_ii", [])),
         "Ihisr": sp.Matrix(blocks.get("Ihis_r", [])),
         "Ihisk": sp.Matrix(blocks.get("Ihis_i", [])),
+        "block_type": structured.get("block_type"),
+        "details": structured.get("details", {}),
+        "W_runtime_inverse": w_runtime_inverse,
         "dependency_analysis": analysis,
         "dynamic_subblock": {
             **dynamic_block,
@@ -949,6 +988,8 @@ def _block_element_name(
     if block == "Gkr":
         col_name = _c_node_variable_name(external_nodes[col], node_display_names)
         return f"Gkr_k{row + 1}_{col_name}"
+    if block == "Gkk":
+        return f"Gkk_k{row + 1}_k{col + 1}"
     if block == "W":
         return f"W_{row + 1}_{col + 1}"
     raise ValueError(f"Unsupported block alias kind: {block}")
@@ -967,6 +1008,8 @@ def _block_element_label(
         return f"Grk[{_c_display_node(external_nodes[row], node_display_names)},k{col + 1}]"
     if block == "Gkr":
         return f"Gkr[k{row + 1},{_c_display_node(external_nodes[col], node_display_names)}]"
+    if block == "Gkk":
+        return f"Gkk[k{row + 1},k{col + 1}]"
     if block == "W":
         return f"W[{row + 1},{col + 1}]"
     raise ValueError(f"Unsupported block alias kind: {block}")
@@ -1061,8 +1104,211 @@ def _matrix_set_alias_lines(
     return lines
 
 
+def _matrix_copy_subblock_code(
+    dst: str,
+    src: str,
+    row_offset: int,
+    col_offset: int,
+    rows: int,
+    cols: int,
+    fn: str = "set_CODE",
+    getter: str = "get_CODE",
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}{fn}(&{dst}, {row + row_offset}, {col + col_offset}, {getter}(&{src}, {row}, {col}));"
+        for row in range(rows)
+        for col in range(cols)
+    ]
+
+
 def _alias_lookup(entries: Sequence[dict[str, object]]) -> dict[tuple[int, int], str]:
     return {(int(entry["row"]), int(entry["col"])): str(entry["name"]) for entry in entries}
+
+
+def _runtime_w_alias_entries(nk: int) -> list[dict[str, object]]:
+    return [
+        {
+            "row": row,
+            "col": col,
+            "name": f"get_CODE(&W_code, {row}, {col})",
+            "label": f"W[{row + 1},{col + 1}]",
+            "labels": [f"W[{row + 1},{col + 1}]"],
+            "expr": sp.Integer(0),
+            "primary": False,
+        }
+        for row in range(nk)
+        for col in range(nk)
+    ]
+
+
+def _diagonal_plus_coupled_w_matrix_names(details: dict) -> list[str]:
+    D = sp.Matrix(details.get("D", []))
+    U = sp.Matrix(details.get("U", []))
+    S = sp.Matrix(details.get("S", []))
+    kd = D.rows
+    ks = S.rows
+    if not kd or not ks or U.shape != (kd, ks):
+        return []
+    return [
+        "D",
+        "U",
+        "S",
+        "inv_D",
+        "U_T",
+        "tmp_UT_invD",
+        "tmp_UT_invD_U",
+        "M",
+        "M_inv",
+        "tmp_Dinv_U",
+        "tmp_Dinv_U_Minv",
+        "tmp_Dinv_U_Minv_UT",
+        "tmp_Dinv_U_Minv_UT_Dinv",
+        "W_DD",
+        "W_DS",
+        "tmp_Minv_UT",
+        "W_SD",
+        "W_SS",
+    ]
+
+
+def _diagonal_plus_coupled_w_matrix_dims(details: dict) -> list[tuple[str, int, int]]:
+    D = sp.Matrix(details.get("D", []))
+    U = sp.Matrix(details.get("U", []))
+    S = sp.Matrix(details.get("S", []))
+    kd = D.rows
+    ks = S.rows
+    if not kd or not ks or U.shape != (kd, ks):
+        return []
+    return [
+        ("D", kd, kd),
+        ("U", kd, ks),
+        ("S", ks, ks),
+        ("inv_D", kd, kd),
+        ("U_T", ks, kd),
+        ("tmp_UT_invD", ks, kd),
+        ("tmp_UT_invD_U", ks, ks),
+        ("M", ks, ks),
+        ("M_inv", ks, ks),
+        ("tmp_Dinv_U", kd, ks),
+        ("tmp_Dinv_U_Minv", kd, ks),
+        ("tmp_Dinv_U_Minv_UT", kd, kd),
+        ("tmp_Dinv_U_Minv_UT_Dinv", kd, kd),
+        ("W_DD", kd, kd),
+        ("W_DS", kd, ks),
+        ("tmp_Minv_UT", ks, kd),
+        ("W_SD", ks, kd),
+        ("W_SS", ks, ks),
+    ]
+
+
+def _diagonal_plus_coupled_w_code_lines(details: dict, fn: str = "set_CODE", getter: str = "get_CODE") -> list[str]:
+    D = sp.Matrix(details.get("D", []))
+    U = sp.Matrix(details.get("U", []))
+    S = sp.Matrix(details.get("S", []))
+    kd = D.rows
+    ks = S.rows
+    if not kd or not ks or U.shape != (kd, ks):
+        return []
+    lines = [
+        "    /* Build W = inverse(Gkk) from Gkk = [[D, U], [U^T, S]]. */",
+        "    /* Build M = S - U^T * inv_D * U using RTDS MATRIX_ helpers. */",
+        *_c_matrix_set_lines(D, "D", fn=fn),
+        *_c_matrix_set_lines(U, "U", fn=fn),
+        *_c_matrix_set_lines(S, "S", fn=fn),
+    ]
+    for index in range(kd):
+        lines.append(f"    {fn}(&inv_D, {index}, {index}, 1.0 / {getter}(&D, {index}, {index}));")
+    for row in range(ks):
+        for col in range(kd):
+            lines.append(f"    {fn}(&U_T, {row}, {col}, {getter}(&U, {col}, {row}));")
+    lines.extend(
+        [
+            "    matrix_mult_CODE(&tmp_UT_invD, &U_T, &inv_D);",
+            "    matrix_mult_CODE(&tmp_UT_invD_U, &tmp_UT_invD, &U);",
+            "    matrix_subtract_CODE(&M, &S, &tmp_UT_invD_U);",
+            *_matrix_code_sym_inverse_lines("M", "M_inv", ks, fn=fn, getter=getter),
+            "    matrix_mult_CODE(&tmp_Dinv_U, &inv_D, &U);",
+            "    matrix_mult_CODE(&tmp_Dinv_U_Minv, &tmp_Dinv_U, &M_inv);",
+            "    matrix_mult_CODE(&tmp_Dinv_U_Minv_UT, &tmp_Dinv_U_Minv, &U_T);",
+            "    matrix_mult_CODE(&tmp_Dinv_U_Minv_UT_Dinv, &tmp_Dinv_U_Minv_UT, &inv_D);",
+            "    matrix_add_CODE(&W_DD, &inv_D, &tmp_Dinv_U_Minv_UT_Dinv);",
+            "    matrix_scalarMult_CODE(&W_DS, &tmp_Dinv_U_Minv, -1.0);",
+            "    matrix_mult_CODE(&tmp_Minv_UT, &M_inv, &U_T);",
+            "    matrix_mult_CODE(&W_SD, &tmp_Minv_UT, &inv_D);",
+            "    matrix_scalarMult_CODE(&W_SD, &W_SD, -1.0);",
+        ]
+    )
+    lines.extend(_matrix_copy_subblock_code("W_SS", "M_inv", 0, 0, ks, ks, fn=fn, getter=getter))
+    lines.extend(_matrix_copy_subblock_code("W_code", "W_DD", 0, 0, kd, kd, fn=fn, getter=getter))
+    lines.extend(_matrix_copy_subblock_code("W_code", "W_DS", 0, kd, kd, ks, fn=fn, getter=getter))
+    lines.extend(_matrix_copy_subblock_code("W_code", "W_SD", kd, 0, ks, kd, fn=fn, getter=getter))
+    lines.extend(_matrix_copy_subblock_code("W_code", "W_SS", kd, kd, ks, ks, fn=fn, getter=getter))
+    return lines
+
+
+def _matrix_code_sym_inverse_lines(
+    matrix_name: str,
+    inverse_name: str,
+    dim: int,
+    fn: str = "set_CODE",
+    getter: str = "get_CODE",
+) -> list[str]:
+    if dim <= 0:
+        return []
+    if dim == 1:
+        return [f"    {fn}(&{inverse_name}, 0, 0, 1.0 / {getter}(&{matrix_name}, 0, 0));"]
+    if dim == 2:
+        return [
+            f"    double {inverse_name}_11 = 0.0;",
+            f"    double {inverse_name}_12 = 0.0;",
+            f"    double {inverse_name}_22 = 0.0;",
+            (
+                f"    mat_2x2_sym_inv_code({getter}(&{matrix_name}, 0, 0), "
+                f"{getter}(&{matrix_name}, 0, 1), {getter}(&{matrix_name}, 1, 1),"
+            ),
+            f"                         &{inverse_name}_11, &{inverse_name}_12, &{inverse_name}_22);",
+            f"    {fn}(&{inverse_name}, 0, 0, {inverse_name}_11);",
+            f"    {fn}(&{inverse_name}, 0, 1, {inverse_name}_12);",
+            f"    {fn}(&{inverse_name}, 1, 0, {inverse_name}_12);",
+            f"    {fn}(&{inverse_name}, 1, 1, {inverse_name}_22);",
+        ]
+    if dim == 3:
+        return [
+            f"    double {inverse_name}_11 = 0.0;",
+            f"    double {inverse_name}_12 = 0.0;",
+            f"    double {inverse_name}_13 = 0.0;",
+            f"    double {inverse_name}_22 = 0.0;",
+            f"    double {inverse_name}_23 = 0.0;",
+            f"    double {inverse_name}_33 = 0.0;",
+            (
+                f"    mat_3x3_sym_inv_code({getter}(&{matrix_name}, 0, 0), "
+                f"{getter}(&{matrix_name}, 0, 1), {getter}(&{matrix_name}, 0, 2),"
+            ),
+            (
+                f"                         {getter}(&{matrix_name}, 1, 1), "
+                f"{getter}(&{matrix_name}, 1, 2),"
+            ),
+            f"                         {getter}(&{matrix_name}, 2, 2),",
+            (
+                f"                         &{inverse_name}_11, &{inverse_name}_12, &{inverse_name}_13,"
+            ),
+            f"                         &{inverse_name}_22, &{inverse_name}_23,",
+            f"                         &{inverse_name}_33);",
+            f"    {fn}(&{inverse_name}, 0, 0, {inverse_name}_11);",
+            f"    {fn}(&{inverse_name}, 0, 1, {inverse_name}_12);",
+            f"    {fn}(&{inverse_name}, 0, 2, {inverse_name}_13);",
+            f"    {fn}(&{inverse_name}, 1, 0, {inverse_name}_12);",
+            f"    {fn}(&{inverse_name}, 1, 1, {inverse_name}_22);",
+            f"    {fn}(&{inverse_name}, 1, 2, {inverse_name}_23);",
+            f"    {fn}(&{inverse_name}, 2, 0, {inverse_name}_13);",
+            f"    {fn}(&{inverse_name}, 2, 1, {inverse_name}_23);",
+            f"    {fn}(&{inverse_name}, 2, 2, {inverse_name}_33);",
+        ]
+    return [
+        f"    /* WARNING: {matrix_name} is {dim}x{dim}; RTDS fast symmetric inverse helpers only cover 2x2 and 3x3. */",
+        f"    MATH_matx_invert({dim}, &({matrix_name}.p[0]), {dim}, &({inverse_name}.p[0]), {dim});",
+    ]
 
 
 def _gred_alias_formula(
@@ -1152,10 +1398,14 @@ def _c_emit_rtds_stage_sections(
     Grr = sp.Matrix(plan.get("Grr", []))
     Grk = sp.Matrix(plan.get("Grk", []))
     Gkr = sp.Matrix(plan.get("Gkr", []))
+    Gkk = sp.Matrix(plan.get("Gkk", []))
     Ihisr = sp.Matrix(plan.get("Ihisr", []))
     Ihisk = sp.Matrix(plan.get("Ihisk", []))
     Gred = sp.Matrix(plan.get("Gred", []))
     W = sp.Matrix(plan.get("W", []))
+    w_runtime_inverse = bool(plan.get("W_runtime_inverse"))
+    block_type = str(plan.get("block_type") or "")
+    details = plan.get("details") or {}
     Gred_stage = analysis.get("Gred_stage") or []
     ram_Gred = _stage_entries(Gred, Gred_stage, "RAM_INIT")
     dynamic_gred = any(stage != "RAM_INIT" for row in Gred_stage for stage in row)
@@ -1169,26 +1419,42 @@ def _c_emit_rtds_stage_sections(
     need_gred_code = bool(dynamic_gred and (full_gred_code_path or not rectangular_gred_dyn_path))
     Ihisred = _as_column_vector(sp.Matrix(plan.get("Ihisred", [])), len(external_nodes), "Ihisred")
     Ihisred_stage = [str(stage) for stage in (analysis.get("Ihisred_stage") or [])]
-    Ihisred_correction = sp.Matrix(Grk) * W * sp.Matrix(Ihisk) if Grk.rows and W.rows and Ihisk.rows else sp.zeros(len(external_nodes), 1)
+    runtime_w_matrix_path = bool(w_runtime_inverse or (block_type == "diagonal_plus_coupled" and sp.Matrix(details.get("W", [])).rows))
+    Ihisred_correction = sp.Matrix(Grk) * W * sp.Matrix(Ihisk) if Grk.rows and W.rows and Ihisk.rows and not runtime_w_matrix_path else sp.zeros(len(external_nodes), 1)
     ihisred_dyn_rows = [
         row
-        for row in range(Ihisred_correction.rows)
-        if sp.simplify(Ihisred_correction[row, 0]) != 0
+        for row in range(len(external_nodes))
+        if (
+            (
+                any(sp.simplify(Grk[row, col]) != 0 for col in range(Grk.cols))
+                and any(sp.simplify(Ihisk[col, 0]) != 0 for col in range(Ihisk.rows))
+            )
+            if runtime_w_matrix_path
+            else row < Ihisred_correction.rows and sp.simplify(Ihisred_correction[row, 0]) != 0
+        )
         and (row >= len(Ihisred_stage) or Ihisred_stage[row] != "RAM_INIT")
     ]
     partial_ihisred_code_path = bool(ihisred_dyn_rows and len(ihisred_dyn_rows) < len(external_nodes))
     full_ihisred_code_path = bool(ihisred_dyn_rows and not partial_ihisred_code_path)
     need_ihisred_code = full_ihisred_code_path
-    vk_from_vr = W * sp.Matrix(Gkr) if W.rows and Gkr.rows else sp.zeros(len(internal_nodes), len(external_nodes))
-    vk_from_ihisk = W * sp.Matrix(Ihisk) if W.rows and Ihisk.rows else sp.zeros(len(internal_nodes), 1)
+    vk_from_vr = W * sp.Matrix(Gkr) if W.rows and Gkr.rows and not w_runtime_inverse else sp.zeros(len(internal_nodes), len(external_nodes))
+    vk_from_ihisk = W * sp.Matrix(Ihisk) if W.rows and Ihisk.rows and not w_runtime_inverse else sp.zeros(len(internal_nodes), 1)
     need_vk_recovery = bool(internal_nodes)
-    need_vk_vr_path = bool(need_vk_recovery and _matrix_has_nonzero(vk_from_vr))
-    need_vk_ihis_path = bool(need_vk_recovery and _matrix_has_nonzero(vk_from_ihisk))
+    need_vk_vr_path = bool(
+        need_vk_recovery
+        and (_matrix_has_nonzero(Gkr) if w_runtime_inverse else _matrix_has_nonzero(vk_from_vr))
+    )
+    need_vk_ihis_path = bool(
+        need_vk_recovery
+        and (_matrix_has_nonzero(Ihisk) if w_runtime_inverse else _matrix_has_nonzero(vk_from_ihisk))
+    )
     need_tmp_grk_w_code = full_gred_code_path or full_ihisred_code_path
     need_Grr_code = bool(full_gred_code_path or (dynamic_gred and not rectangular_gred_dyn_path))
     need_Grk_code = bool(full_gred_code_path or full_ihisred_code_path or (dynamic_gred and not rectangular_gred_dyn_path))
     need_Gkr_code = bool(full_gred_code_path or need_vk_vr_path or (dynamic_gred and not rectangular_gred_dyn_path))
     need_W_code = bool(dynamic_gred or full_ihisred_code_path or partial_ihisred_code_path or need_vk_vr_path or need_vk_ihis_path)
+    need_Gkk_code = bool(w_runtime_inverse and need_W_code)
+    structured_w_builder = bool(block_type == "diagonal_plus_coupled" and need_W_code and not w_runtime_inverse)
     need_Ihisr_code = bool(full_ihisred_code_path)
     need_Ihisk_code = bool(full_ihisred_code_path or partial_ihisred_code_path or need_vk_ihis_path)
     need_Vr_code = bool(need_vk_vr_path)
@@ -1278,16 +1544,17 @@ def _c_emit_rtds_stage_sections(
         ]
         for index, node in enumerate(ram_overlay_nodes_no_elim):
             lines.append(f'    g_mat_nods[{index}] = getNodeNum(comp, "{_c_display_node(node, node_display_names)}");')
-        lines.extend([
-            "    /* g_mat_over is provided by the PSYS/CBuilder runtime; initialize, do not define it here. */",
-            f"    for (int row = 0; row < {len(ram_overlay_nodes_no_elim)}; row++) {{",
-            f"        for (int col = 0; col < {len(ram_overlay_nodes_no_elim)}; col++) {{",
-            "            g_mat_over[row][col] = 0.0;",
-            "        }",
-            "    }",
-            *ram_g_compute_lines_no_elim,
-            *ram_g_assignment_lines_no_elim,
-        ])
+        if ram_overlay_nodes_no_elim:
+            lines.extend([
+                "    /* g_mat_over is provided by the PSYS/CBuilder runtime; initialize, do not define it here. */",
+                f"    for (int row = 0; row < {len(ram_overlay_nodes_no_elim)}; row++) {{",
+                f"        for (int col = 0; col < {len(ram_overlay_nodes_no_elim)}; col++) {{",
+                "            g_mat_over[row][col] = 0.0;",
+                "        }",
+                "    }",
+                *ram_g_compute_lines_no_elim,
+                *ram_g_assignment_lines_no_elim,
+            ])
         lines.extend([
             (
                 f"    setupGMatrix({len(ram_overlay_nodes_no_elim)});"
@@ -1386,13 +1653,18 @@ def _c_emit_rtds_stage_sections(
     Grr_alias_entries = _block_alias_entries(Grr, "Grr", external_nodes, node_display_names)
     Grk_alias_entries = _block_alias_entries(Grk, "Grk", external_nodes, node_display_names)
     Gkr_alias_entries = _block_alias_entries(Gkr, "Gkr", external_nodes, node_display_names)
+    Gkk_alias_entries = _block_alias_entries(Gkk, "Gkk", external_nodes, node_display_names)
     W_alias_entries = _block_alias_entries(W, "W", external_nodes, node_display_names)
+    W_formula_alias_entries = _runtime_w_alias_entries(W.rows or Gkk.rows) if (w_runtime_inverse or structured_w_builder) else W_alias_entries
     block_alias_entries = [
         *(Grr_alias_entries if need_Grr_code or rectangular_gred_dyn_path else []),
         *(Grk_alias_entries if need_Grk_code or rectangular_gred_dyn_path or partial_ihisred_code_path else []),
         *(Gkr_alias_entries if need_Gkr_code or rectangular_gred_dyn_path else []),
-        *(W_alias_entries if need_W_code else []),
+        *(Gkk_alias_entries if need_Gkk_code else []),
+        *(W_alias_entries if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
     ]
+    w_builder_matrix_dims = _diagonal_plus_coupled_w_matrix_dims(details) if structured_w_builder else []
+    w_builder_matrix_names = [name for name, _, _ in w_builder_matrix_dims]
     sparse_gred_scalar_assignments = (
         [
             (
@@ -1411,9 +1683,9 @@ def _c_emit_rtds_stage_sections(
                     col,
                     Grr_alias_entries,
                     Grk_alias_entries,
-                    W_alias_entries,
+                    W_formula_alias_entries,
                     Gkr_alias_entries,
-                    W.rows,
+                    W.rows or Gkk.rows,
                 ),
                 f"Gred[{_c_display_node(row_node, node_display_names)},{_c_display_node(col_node, node_display_names)}]",
             )
@@ -1440,8 +1712,11 @@ def _c_emit_rtds_stage_sections(
         code_matrix_names.append("Grk_code")
     if need_Gkr_code:
         code_matrix_names.append("Gkr_code")
+    if need_Gkk_code:
+        code_matrix_names.append("Gkk_code")
     if need_W_code:
         code_matrix_names.append("W_code")
+    code_matrix_names.extend(w_builder_matrix_names)
     if need_Ihisr_code:
         code_matrix_names.append("Ihisr_code")
     if need_Ihisk_code:
@@ -1495,7 +1770,9 @@ def _c_emit_rtds_stage_sections(
         *(["    MATRIX_ Grr_code = {0};"] if need_Grr_code else []),
         *(["    MATRIX_ Grk_code = {0};"] if need_Grk_code else []),
         *(["    MATRIX_ Gkr_code = {0};"] if need_Gkr_code else []),
+        *(["    MATRIX_ Gkk_code = {0};"] if need_Gkk_code else []),
         *(["    MATRIX_ W_code = {0};"] if need_W_code else []),
+        *[f"    MATRIX_ {name} = {{0}};" for name in w_builder_matrix_names],
         *(["    MATRIX_ Gred_code = {0};"] if need_gred_code else []),
         *(["    MATRIX_ Grr_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
         *(["    MATRIX_ Grk_dyn_code = {0};"] if rectangular_gred_dyn_path else []),
@@ -1544,16 +1821,17 @@ def _c_emit_rtds_stage_sections(
     ]
     for index, node in enumerate(ram_overlay_nodes):
         lines.append(f'    g_mat_nods[{index}] = getNodeNum(comp, "{_c_display_node(node, node_display_names)}");')
-    lines.extend([
-        "    /* g_mat_over is provided by the PSYS/CBuilder runtime; initialize, do not define it here. */",
-        f"    for (int row = 0; row < {len(ram_overlay_nodes)}; row++) {{",
-        f"        for (int col = 0; col < {len(ram_overlay_nodes)}; col++) {{",
-        "            g_mat_over[row][col] = 0.0;",
-        "        }",
-        "    }",
-        *ram_g_compute_lines,
-        *ram_g_assignment_lines,
-    ])
+    if ram_overlay_nodes:
+        lines.extend([
+            "    /* g_mat_over is provided by the PSYS/CBuilder runtime; initialize, do not define it here. */",
+            f"    for (int row = 0; row < {len(ram_overlay_nodes)}; row++) {{",
+            f"        for (int col = 0; col < {len(ram_overlay_nodes)}; col++) {{",
+            "            g_mat_over[row][col] = 0.0;",
+            "        }",
+            "    }",
+            *ram_g_compute_lines,
+            *ram_g_assignment_lines,
+        ])
     if ram_overlay_nodes:
         lines.append(f"    setupGMatrix({len(ram_overlay_nodes)});")
     else:
@@ -1563,7 +1841,9 @@ def _c_emit_rtds_stage_sections(
         *(["    err += matrixDim(&Grr_code, NR, NR);"] if need_Grr_code else []),
         *(["    err += matrixDim(&Grk_code, NR, NK);"] if need_Grk_code else []),
         *(["    err += matrixDim(&Gkr_code, NK, NR);"] if need_Gkr_code else []),
+        *(["    err += matrixDim(&Gkk_code, NK, NK);"] if need_Gkk_code else []),
         *(["    err += matrixDim(&W_code, NK, NK);"] if need_W_code else []),
+        *[f"    err += matrixDim(&{name}, {rows}, {cols});" for name, rows, cols in w_builder_matrix_dims],
         *(["    err += matrixDim(&Gred_code, NR, NR);"] if need_gred_code else []),
         *( [f"    err += matrixDim(&Grr_dyn_code, {len(gred_dyn_rows)}, {len(gred_dyn_cols)});"] if rectangular_gred_dyn_path else [] ),
         *( [f"    err += matrixDim(&Grk_dyn_code, {len(gred_dyn_rows)}, NK);"] if rectangular_gred_dyn_path else [] ),
@@ -1600,7 +1880,9 @@ def _c_emit_rtds_stage_sections(
         *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set") if need_Grr_code else []),
         *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set") if need_Grk_code else []),
         *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set") if need_Gkr_code else []),
-        *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set") if need_W_code else []),
+        *(_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_code", "set") if need_Gkk_code else []),
+        *(["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code else []),
+        *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set") if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
         *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
         *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
         *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
@@ -1647,7 +1929,10 @@ def _c_emit_rtds_stage_sections(
                 *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set_CODE") if need_Grr_code else []),
                 *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE") if need_Grk_code else []),
                 *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE") if need_Gkr_code else []),
-                *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE") if need_W_code else []),
+                *(_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_code", "set_CODE") if need_Gkk_code else []),
+                *(["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code else []),
+                *(_diagonal_plus_coupled_w_code_lines(details) if structured_w_builder else []),
+                *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE") if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
                 *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
                 *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
                 *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
