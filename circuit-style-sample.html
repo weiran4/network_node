@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Circuit Style Sample</title>
+  <style>
+    :root {
+      --paper: #f2fbf3;
+      --grid: #cfe8d5;
+      --wire: #34424a;
+      --ink: #172026;
+      --muted: #68737b;
+      --blue: #2563eb;
+      --red: #c62828;
+      --panel: #fffefa;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #fbfaf6;
+      color: var(--ink);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+
+    .sample {
+      width: min(900px, 94vw);
+      border: 1px solid #d9ddda;
+      background: var(--paper);
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 24px 24px;
+      box-shadow: 0 18px 38px rgba(23, 32, 38, 0.10);
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .wire {
+      stroke: var(--wire);
+      stroke-width: 3;
+      stroke-linecap: round;
+      fill: none;
+    }
+
+    .junction {
+      fill: var(--panel);
+      stroke: var(--wire);
+      stroke-width: 2.2;
+    }
+
+    .node-name {
+      fill: var(--blue);
+      font-size: 14px;
+      font-weight: 800;
+      text-anchor: middle;
+    }
+
+    .node-local {
+      fill: var(--muted);
+      font-size: 11px;
+      text-anchor: middle;
+    }
+
+    .component-body {
+      fill: var(--panel);
+      stroke: var(--wire);
+      stroke-width: 2.5;
+    }
+
+    .coil {
+      fill: none;
+      stroke: var(--wire);
+      stroke-width: 2.2;
+      stroke-linecap: round;
+    }
+
+    .core {
+      stroke: #80909a;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+    }
+
+    .source-shape {
+      fill: var(--panel);
+      stroke: var(--wire);
+      stroke-width: 2.4;
+    }
+
+    .source-arrow {
+      stroke: var(--red);
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      fill: none;
+      marker-end: url(#currentArrow);
+    }
+
+    .blackbox {
+      fill: #fffefa;
+      stroke: #3b4850;
+      stroke-width: 2.4;
+      stroke-dasharray: 0;
+    }
+
+    .port-pin {
+      fill: #fffefa;
+      stroke: var(--wire);
+      stroke-width: 2;
+    }
+
+    .component-title {
+      fill: var(--ink);
+      font-size: 16px;
+      font-weight: 800;
+      text-anchor: middle;
+    }
+
+    .component-value {
+      fill: var(--muted);
+      font-size: 13px;
+      font-family: Consolas, "SFMono-Regular", monospace;
+      text-anchor: middle;
+    }
+
+    .current-arrow {
+      stroke: var(--red);
+      stroke-width: 2;
+      stroke-linecap: round;
+      fill: none;
+      marker-end: url(#currentArrow);
+    }
+
+    .current-label {
+      fill: var(--red);
+      font-size: 12px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+  </style>
+</head>
+<body>
+  <div class="sample">
+    <svg viewBox="0 0 900 790" role="img" aria-label="Circuit style branch sample">
+      <defs>
+        <marker id="currentArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--red)"></path>
+        </marker>
+      </defs>
+
+      <text x="450" y="42" class="component-title">Circuit Style Samples</text>
+      <text x="450" y="66" class="component-value">wire-first drawing, current arrows are drawn on the branch line</text>
+
+      <line class="wire" x1="180" y1="134" x2="342" y2="134"></line>
+      <line class="wire" x1="558" y1="134" x2="720" y2="134"></line>
+
+      <rect class="component-body" x="342" y="102" width="216" height="64" rx="4"></rect>
+      <text x="450" y="128" class="component-title">G9</text>
+      <text x="450" y="152" class="component-value">G = 1/R, Ihis = 0</text>
+
+      <path class="current-arrow" d="M 392 134 H 508"></path>
+      <text x="450" y="90" class="current-label">conductance branch</text>
+
+      <circle class="junction" cx="180" cy="134" r="9"></circle>
+      <circle class="junction" cx="720" cy="134" r="9"></circle>
+
+      <text x="180" y="110" class="node-name">N1</text>
+      <text x="720" y="110" class="node-name">N3</text>
+
+      <text x="450" y="206" class="current-label">compact transformer symbol</text>
+      <text x="450" y="236" class="component-title">Tr5</text>
+      <line class="core" x1="440" y1="252" x2="440" y2="354"></line>
+      <line class="core" x1="460" y1="252" x2="460" y2="354"></line>
+      <path class="coil" d="M 412 254 C 436 258, 436 270, 412 274 C 436 278, 436 290, 412 294 C 436 298, 436 310, 412 314 C 436 318, 436 330, 412 334 C 436 338, 436 350, 412 354"></path>
+      <path class="coil" d="M 488 254 C 464 258, 464 270, 488 274 C 464 278, 464 290, 488 294 C 464 298, 464 310, 488 314 C 464 318, 464 330, 488 334 C 464 338, 464 350, 488 354"></path>
+      <line class="wire" x1="330" y1="252" x2="412" y2="252"></line>
+      <line class="wire" x1="330" y1="354" x2="412" y2="354"></line>
+      <line class="wire" x1="488" y1="252" x2="570" y2="252"></line>
+      <line class="wire" x1="488" y1="354" x2="570" y2="354"></line>
+      <circle class="junction" cx="330" cy="252" r="7"></circle>
+      <circle class="junction" cx="330" cy="354" r="7"></circle>
+      <circle class="junction" cx="570" cy="252" r="7"></circle>
+      <circle class="junction" cx="570" cy="354" r="7"></circle>
+      <circle cx="412" cy="270" r="4" fill="var(--blue)"></circle>
+      <circle cx="488" cy="270" r="4" fill="var(--blue)"></circle>
+      <path class="current-arrow" d="M 344 252 H 386"></path>
+      <path class="current-arrow" d="M 556 354 H 514"></path>
+      <text x="450" y="382" class="component-value">G11, G12, G22</text>
+
+      <line class="wire" x1="450" y1="394" x2="450" y2="426"></line>
+      <line class="wire" x1="450" y1="490" x2="450" y2="528"></line>
+      <circle class="source-shape" cx="450" cy="458" r="32"></circle>
+      <path class="source-arrow" d="M 450 480 V 438"></path>
+      <text x="450" y="384" class="current-label">independent / controlled current source</text>
+      <text x="450" y="552" class="component-value">i = gm*(V_N1 - V_N2) + h</text>
+      <text x="450" y="586" class="component-title">I10</text>
+      <circle class="junction" cx="450" cy="394" r="7"></circle>
+      <circle class="junction" cx="450" cy="528" r="7"></circle>
+      <text x="430" y="398" class="node-name">A</text>
+      <text x="430" y="532" class="node-name">B</text>
+
+      <line class="wire" x1="150" y1="630" x2="314" y2="630"></line>
+      <line class="wire" x1="586" y1="630" x2="750" y2="630"></line>
+      <line class="wire" x1="150" y1="704" x2="314" y2="704"></line>
+      <line class="wire" x1="586" y1="704" x2="750" y2="704"></line>
+      <rect class="blackbox" x="314" y="590" width="272" height="154" rx="5"></rect>
+      <text x="450" y="650" class="component-title">YBox2</text>
+      <text x="450" y="676" class="component-value">packed G/Ihis network</text>
+      <text x="450" y="700" class="component-value">ports: P1, P2, P3, P4</text>
+      <circle class="port-pin" cx="314" cy="630" r="6"></circle>
+      <circle class="port-pin" cx="586" cy="630" r="6"></circle>
+      <circle class="port-pin" cx="314" cy="704" r="6"></circle>
+      <circle class="port-pin" cx="586" cy="704" r="6"></circle>
+      <path class="current-arrow" d="M 186 630 H 276"></path>
+      <path class="current-arrow" d="M 714 704 H 624"></path>
+      <text x="450" y="578" class="current-label">black box / packed subnetwork</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -1,0 +1,490 @@
+{
+  "fileType": "branch-builder-circuit",
+  "version": 3,
+  "savedAt": "2026-06-16T18:37:25.178Z",
+  "generator": "Branch Builder",
+  "world": {
+    "width": 1600,
+    "height": 1000
+  },
+  "ui": {
+    "language": "zh",
+    "activeOutput": "optimizedElimination",
+    "showLocalLabels": false,
+    "showReducedBranchCurrents": false,
+    "editorGroups": {}
+  },
+  "canvasOrder": [
+    "canvas1"
+  ],
+  "canvases": [
+    {
+      "id": "canvas1",
+      "name": "画布 1",
+      "data": {
+        "name": "画布 1",
+        "branches": [
+          {
+            "id": "B10",
+            "name": "R10",
+            "kind": "two_node_branch",
+            "x": 548.1837768554688,
+            "y": 334.722412109375,
+            "width": 150,
+            "height": 48,
+            "rotation": 0,
+            "nodeA": "n10a",
+            "nodeB": "n10b",
+            "g": "1/R",
+            "gIsConstant": true,
+            "constantGSymbols": "",
+            "ihis": "Ihis1",
+            "direction": "AtoB",
+            "activeSwitchCase": 0
+          },
+          {
+            "id": "B11",
+            "name": "R11",
+            "kind": "two_node_branch",
+            "x": 741.5699157714844,
+            "y": 334.722412109375,
+            "width": 150,
+            "height": 48,
+            "rotation": 0,
+            "nodeA": "n11a",
+            "nodeB": "n11b",
+            "g": "G",
+            "gIsConstant": false,
+            "constantGSymbols": "",
+            "ihis": "Ihis2",
+            "direction": "AtoB",
+            "activeSwitchCase": 0
+          },
+          {
+            "id": "B12",
+            "name": "R12",
+            "kind": "two_node_branch",
+            "x": 937.8505859375,
+            "y": 334.722412109375,
+            "width": 150,
+            "height": 48,
+            "rotation": 0,
+            "nodeA": "n12a",
+            "nodeB": "n12b",
+            "g": "1/R",
+            "gIsConstant": true,
+            "constantGSymbols": "",
+            "ihis": "Ihis3",
+            "direction": "AtoB",
+            "activeSwitchCase": 0
+          },
+          {
+            "id": "B13",
+            "name": "R13",
+            "kind": "two_node_branch",
+            "x": 763.6621704101562,
+            "y": 409.5968017578125,
+            "width": 150,
+            "height": 48,
+            "rotation": 0,
+            "nodeA": "n13a",
+            "nodeB": "n13b",
+            "g": "1/R",
+            "gIsConstant": true,
+            "constantGSymbols": "",
+            "ihis": "Ihis4",
+            "direction": "AtoB",
+            "activeSwitchCase": 0
+          }
+        ],
+        "wires": [
+          {
+            "id": "W12",
+            "from": "B10.B",
+            "to": "B11.A",
+            "mid": null
+          },
+          {
+            "id": "W13",
+            "from": "B11.B",
+            "to": "B12.A",
+            "mid": null
+          },
+          {
+            "id": "W14",
+            "from": "B12.B",
+            "to": "B13.B",
+            "mid": null
+          },
+          {
+            "id": "W15",
+            "from": "B13.A",
+            "to": "B10.A",
+            "mid": null
+          }
+        ],
+        "groups": [],
+        "nodeOrder": [
+          "N1",
+          "N2",
+          "N3",
+          "N4"
+        ],
+        "nodeLabels": {
+          "N1": "N1",
+          "N2": "N2",
+          "N3": "N4",
+          "N4": "N6"
+        },
+        "nodeColors": {},
+        "internalNodes": [
+          "N2"
+        ],
+        "selectedId": "B10",
+        "selectedIds": [
+          "B10",
+          "B11",
+          "B12",
+          "B13"
+        ],
+        "selectedNetIds": [],
+        "selectedWireId": null,
+        "nextBranch": 14,
+        "nextTransformer": 1,
+        "nextCustom": 1,
+        "nextWire": 16,
+        "nextGroup": 1,
+        "zoom": 2.475963176294812,
+        "viewCenter": {
+          "x": 646.7637180307722,
+          "y": 410.5336446183861
+        },
+        "reducedEquationCache": [
+          {
+            "key": "{\"language\":\"zh\",\"payload\":{\"all_nodes\":[\"N1\",\"N2\",\"N3\",\"N4\"],\"voltage_nodes\":[\"n10a\",\"n10b\",\"N4\",\"N6\"],\"node_display_names\":{\"N1\":\"n10a\",\"N2\":\"n10b\",\"N3\":\"N4\",\"N4\":\"N6\"},\"external_nodes\":[\"N1\",\"N3\",\"N4\"],\"internal_nodes\":[\"N2\"],\"ground_nodes\":[],\"warnings\":[],\"G_full\":[[\"2*1/R\",\"-1/R\",\"0\",\"-1/R\"],[\"-1/R\",\"1/R + G\",\"-G\",\"0\"],[\"0\",\"-G\",\"G + 1/R\",\"-1/R\"],[\"-1/R\",\"0\",\"-1/R\",\"2*1/R\"]],\"Ihis_full\":[\"Ihis1 + Ihis4\",\"-Ihis1 + Ihis2\",\"-Ihis2 + Ihis3\",\"-Ihis3 - Ihis4\"],\"G_full_tagged\":[[\"1/R__bbsrc_B10 + 1/R__bbsrc_B13\",\"-1/R__bbsrc_B10\",\"0\",\"-1/R__bbsrc_B13\"],[\"-1/R__bbsrc_B10\",\"1/R__bbsrc_B10 + G__bbsrc_B11\",\"-G__bbsrc_B11\",\"0\"],[\"0\",\"-G__bbsrc_B11\",\"G__bbsrc_B11 + 1/R__bbsrc_B12\",\"-1/R__bbsrc_B12\"],[\"-1/R__bbsrc_B13\",\"0\",\"-1/R__bbsrc_B12\",\"1/R__bbsrc_B12 + 1/R__bbsrc_B13\"]],\"Ihis_full_tagged\":[\"Ihis1__bbsrc_B10 + Ihis4__bbsrc_B13\",\"-Ihis1__bbsrc_B10 + Ihis2__bbsrc_B11\",\"-Ihis2__bbsrc_B11 + Ihis3__bbsrc_B12\",\"-Ihis3__bbsrc_B12 - Ihis4__bbsrc_B13\"],\"G_symbol_usage\":[{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N1\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N2\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N2\",\"col_node\":\"N1\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N2\",\"col_node\":\"N2\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"G\",\"row_node\":\"N2\",\"col_node\":\"N2\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"G\",\"row_node\":\"N2\",\"col_node\":\"N3\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"G\",\"row_node\":\"N3\",\"col_node\":\"N2\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"G\",\"row_node\":\"N3\",\"col_node\":\"N3\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"R\",\"row_node\":\"N3\",\"col_node\":\"N3\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N3\",\"col_node\":\"N4\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N3\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N4\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N1\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N4\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N1\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N4\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true}],\"G_constant_symbols\":[\"R\"],\"symbol_dependency_table\":{\"G\":\"CODE_VARIABLE\",\"Ihis1\":\"STEP_HISTORY\",\"Ihis2\":\"STEP_HISTORY\",\"Ihis3\":\"STEP_HISTORY\",\"Ihis4\":\"STEP_HISTORY\",\"R\":\"RAM_CONSTANT\"}}}",
+            "html": "\n        <div class=\"formula-list\">\n          <div class=\"formula-card\">\n            <div class=\"formula-name\">节点划分</div>\n            <div class=\"formula-line\">\n              <span class=\"formula-rhs\">外部: n10a, N4, N6; 内部: n10b</span>\n            </div>\n          </div>\n          <div class=\"formula-card\">\n            <div class=\"formula-name\">节点方程消去版本</div>\n            \n            <div class=\"matrix-equation\">\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">I<sub>n10a</sub></span><span class=\"matrix-cell\">I<sub>N4</sub></span><span class=\"matrix-cell\">I<sub>N6</sub></span></span>\n              <span class=\"formula-eq\">=</span>\n              <span class=\"matrix\" style=\"grid-template-columns: repeat(3, minmax(58px, auto));\"><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">2</span><span class=\"math-frac-den\">R</span></span> <span class=\"math-op\">-</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R<sup>2</sup> · (G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span>)</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">G<sup>2</sup></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> <span class=\"math-op\">+</span> G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">2</span><span class=\"math-frac-den\">R</span></span></span></span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">V<sub>n10a</sub></span><span class=\"matrix-cell\">V<sub>N4</sub></span><span class=\"matrix-cell\">V<sub>N6</sub></span></span>\n              <span class=\"formula-eq\">+</span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">Ihis<sub>1</sub> <span class=\"math-op\">+</span> Ihis<sub>4</sub> <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">-Ihis<sub>1</sub> <span class=\"math-op\">+</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">G · -Ihis<sub>1</sub> <span class=\"math-op\">+</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> <span class=\"math-op\">-</span> Ihis<sub>2</sub> <span class=\"math-op\">+</span> Ihis<sub>3</sub></span><span class=\"matrix-cell\">-Ihis<sub>3</sub> <span class=\"math-op\">-</span> Ihis<sub>4</sub></span></span>\n            </div>\n          </div>\n          <div class=\"formula-card\">\n            <div class=\"formula-name\">内部节点电压恢复公式</div>\n            <div class=\"matrix-equation\">\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">V<sub>n10b</sub></span></span>\n              <span class=\"formula-eq\">=</span>\n              <span class=\"matrix\" style=\"grid-template-columns: repeat(3, minmax(58px, auto));\"><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\">0</span></span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">V<sub>n10a</sub></span><span class=\"matrix-cell\">V<sub>N4</sub></span><span class=\"matrix-cell\">V<sub>N6</sub></span></span>\n              <span class=\"formula-eq\">+</span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">Ihis<sub>1</sub> <span class=\"math-op\">-</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span></span>\n            </div>\n          </div>\n          \n        <div class=\"formula-card\">\n          <div class=\"formula-name\">单内部节点展开式</div>\n          <div class=\"formula-line\">\n            <span class=\"formula-lhs\">V<sub>n10b</sub></span>\n            <span class=\"formula-eq\">=</span>\n            <span class=\"formula-rhs\"><span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> · V<sub>n10a</sub> <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> · V<sub>N4</sub> <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">Ihis<sub>1</sub> <span class=\"math-op\">-</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span>\n          </div>\n        </div>\n      \n        </div>\n      ",
+            "result": {
+              "ok": true,
+              "external_nodes": [
+                "N1",
+                "N3",
+                "N4"
+              ],
+              "internal_nodes": [
+                "N2"
+              ],
+              "ground_nodes": [],
+              "ground_voltage_map": {},
+              "warnings": [],
+              "G_red": [
+                [
+                  "2/R - 1/(R**2*(G + 1/R))",
+                  "-G/(R*(G + 1/R))",
+                  "-1/R"
+                ],
+                [
+                  "-G/(R*(G + 1/R))",
+                  "-G**2/(G + 1/R) + G + 1/R",
+                  "-1/R"
+                ],
+                [
+                  "-1/R",
+                  "-1/R",
+                  "2/R"
+                ]
+              ],
+              "Ihis_red": [
+                "Ihis1 + Ihis4 + (-Ihis1 + Ihis2)/(R*(G + 1/R))",
+                "G*(-Ihis1 + Ihis2)/(G + 1/R) - Ihis2 + Ihis3",
+                "-Ihis3 - Ihis4"
+              ],
+              "K_v": [
+                [
+                  "1/(R*(G + 1/R))",
+                  "G/(G + 1/R)",
+                  "0"
+                ]
+              ],
+              "K_h": [
+                "(Ihis1 - Ihis2)/(G + 1/R)"
+              ],
+              "reduced_observers": [],
+              "G_red_tagged": [
+                [
+                  "1/R__bbsrc_B13 + 1/R__bbsrc_B10 - 1/(R__bbsrc_B10**2*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+                  "-G__bbsrc_B11/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+                  "-1/R__bbsrc_B13"
+                ],
+                [
+                  "-G__bbsrc_B11/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+                  "-G__bbsrc_B11**2/(G__bbsrc_B11 + 1/R__bbsrc_B10) + G__bbsrc_B11 + 1/R__bbsrc_B12",
+                  "-1/R__bbsrc_B12"
+                ],
+                [
+                  "-1/R__bbsrc_B13",
+                  "-1/R__bbsrc_B12",
+                  "1/R__bbsrc_B13 + 1/R__bbsrc_B12"
+                ]
+              ],
+              "Ihis_red_tagged": [
+                "Ihis1__bbsrc_B10 + Ihis4__bbsrc_B13 + (-Ihis1__bbsrc_B10 + Ihis2__bbsrc_B11)/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+                "G__bbsrc_B11*(-Ihis1__bbsrc_B10 + Ihis2__bbsrc_B11)/(G__bbsrc_B11 + 1/R__bbsrc_B10) - Ihis2__bbsrc_B11 + Ihis3__bbsrc_B12",
+                "-Ihis3__bbsrc_B12 - Ihis4__bbsrc_B13"
+              ],
+              "K_v_tagged": [
+                [
+                  "1/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+                  "G__bbsrc_B11/(G__bbsrc_B11 + 1/R__bbsrc_B10)",
+                  "0"
+                ]
+              ],
+              "K_h_tagged": [
+                "(Ihis1__bbsrc_B10 - Ihis2__bbsrc_B11)/(G__bbsrc_B11 + 1/R__bbsrc_B10)"
+              ]
+            },
+            "savedAt": "2026-06-16T18:37:25.177Z"
+          }
+        ],
+        "branchCurrentCache": [],
+        "pythonDraftCache": [],
+        "history": [
+          "{\"branches\":[{\"id\":\"B3\",\"name\":\"R3\",\"kind\":\"two_node_branch\",\"x\":139.46432495117188,\"y\":666.0577621459961,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n1a\",\"nodeB\":\"n1b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B4\",\"name\":\"R4\",\"kind\":\"two_node_branch\",\"x\":374.26432495117206,\"y\":666.0577621459961,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n2a\",\"nodeB\":\"n2b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B5\",\"name\":\"R5\",\"kind\":\"two_node_branch\",\"x\":252.66432495117192,\"y\":732.2268905639648,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n3a\",\"nodeB\":\"n3b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"terminalLayout\":{\"A\":{\"x\":-188.2,\"y\":0},\"B\":{\"x\":196.6,\"y\":0}},\"activeSwitchCase\":0},{\"id\":\"B6\",\"name\":\"R6\",\"kind\":\"two_node_branch\",\"x\":139.46432495117188,\"y\":585.1785888671875,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n4a\",\"nodeB\":\"n4b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B7\",\"name\":\"R7\",\"kind\":\"two_node_branch\",\"x\":374.26432495117206,\"y\":585.1785888671875,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n5a\",\"nodeB\":\"n5b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B8\",\"name\":\"R8\",\"kind\":\"two_node_branch\",\"x\":140.07189178466797,\"y\":507.7388916015625,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n8a\",\"nodeB\":\"n8b\",\"g\":\"G8\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B9\",\"name\":\"R9\",\"kind\":\"two_node_branch\",\"x\":374.26432495117206,\"y\":507.7388916015625,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n9a\",\"nodeB\":\"n9b\",\"g\":\"G9\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[{\"id\":\"W2\",\"from\":\"B3.B\",\"to\":\"B4.A\",\"mid\":null},{\"id\":\"W3\",\"from\":\"B7.A\",\"to\":\"B6.B\",\"mid\":null},{\"id\":\"W4\",\"from\":\"B6.B\",\"to\":\"B3.B\",\"mid\":null},{\"id\":\"W5\",\"from\":\"B6.A\",\"to\":\"B3.A\",\"mid\":null},{\"id\":\"W6\",\"from\":\"B7.B\",\"to\":\"B4.B\",\"mid\":null},{\"id\":\"W7\",\"from\":\"B5.A\",\"to\":\"B3.A\",\"mid\":null},{\"id\":\"W8\",\"from\":\"B5.B\",\"to\":\"B4.B\",\"mid\":null},{\"id\":\"W9\",\"from\":\"B8.B\",\"to\":\"B9.A\",\"mid\":null},{\"id\":\"W10\",\"from\":\"B7.B\",\"to\":\"B9.B\",\"mid\":null},{\"id\":\"W11\",\"from\":\"B8.A\",\"to\":\"B6.A\",\"mid\":null}],\"selectedId\":\"B3\",\"selectedIds\":[\"B3\",\"B4\",\"B5\",\"B6\",\"B7\",\"B8\",\"B9\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[\"N2\",\"N4\"],\"nextBranch\":10,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[],\"wires\":[],\"selectedId\":null,\"selectedIds\":[],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":10,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B10\",\"name\":\"R10\",\"kind\":\"two_node_branch\",\"x\":885,\"y\":545,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n10a\",\"nodeB\":\"n10b\",\"g\":\"1/R\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"Ihis1\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B11\",\"name\":\"R11\",\"kind\":\"two_node_branch\",\"x\":1078.3861389160156,\"y\":545,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G\",\"gIsConstant\":false,\"constantGSymbols\":\"\",\"ihis\":\"Ihis2\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B12\",\"name\":\"R12\",\"kind\":\"two_node_branch\",\"x\":1274.6668090820312,\"y\":545,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"1/R\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"Ihis3\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B13\",\"name\":\"R13\",\"kind\":\"two_node_branch\",\"x\":1100.4783935546875,\"y\":619.8743896484375,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n13a\",\"nodeB\":\"n13b\",\"g\":\"1/R\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"Ihis4\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[{\"id\":\"W12\",\"from\":\"B10.B\",\"to\":\"B11.A\",\"mid\":null},{\"id\":\"W13\",\"from\":\"B11.B\",\"to\":\"B12.A\",\"mid\":null},{\"id\":\"W14\",\"from\":\"B12.B\",\"to\":\"B13.B\",\"mid\":null},{\"id\":\"W15\",\"from\":\"B13.A\",\"to\":\"B10.A\",\"mid\":null}],\"selectedId\":\"B10\",\"selectedIds\":[\"B10\",\"B11\",\"B12\",\"B13\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[\"N1\",\"N2\",\"N3\",\"N4\"],\"nodeLabels\":{\"N1\":\"n10a\",\"N2\":\"n10b\",\"N3\":\"N4\",\"N4\":\"N6\"},\"nodeColors\":{},\"internalNodes\":[\"N2\"],\"nextBranch\":14,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":16}"
+        ],
+        "future": []
+      }
+    }
+  ],
+  "activeCanvasId": "canvas1",
+  "nextCanvas": 2,
+  "branches": [
+    {
+      "id": "B10",
+      "name": "R10",
+      "kind": "two_node_branch",
+      "x": 548.1837768554688,
+      "y": 334.722412109375,
+      "width": 150,
+      "height": 48,
+      "rotation": 0,
+      "nodeA": "n10a",
+      "nodeB": "n10b",
+      "g": "1/R",
+      "gIsConstant": true,
+      "constantGSymbols": "",
+      "ihis": "Ihis1",
+      "direction": "AtoB",
+      "activeSwitchCase": 0
+    },
+    {
+      "id": "B11",
+      "name": "R11",
+      "kind": "two_node_branch",
+      "x": 741.5699157714844,
+      "y": 334.722412109375,
+      "width": 150,
+      "height": 48,
+      "rotation": 0,
+      "nodeA": "n11a",
+      "nodeB": "n11b",
+      "g": "G",
+      "gIsConstant": false,
+      "constantGSymbols": "",
+      "ihis": "Ihis2",
+      "direction": "AtoB",
+      "activeSwitchCase": 0
+    },
+    {
+      "id": "B12",
+      "name": "R12",
+      "kind": "two_node_branch",
+      "x": 937.8505859375,
+      "y": 334.722412109375,
+      "width": 150,
+      "height": 48,
+      "rotation": 0,
+      "nodeA": "n12a",
+      "nodeB": "n12b",
+      "g": "1/R",
+      "gIsConstant": true,
+      "constantGSymbols": "",
+      "ihis": "Ihis3",
+      "direction": "AtoB",
+      "activeSwitchCase": 0
+    },
+    {
+      "id": "B13",
+      "name": "R13",
+      "kind": "two_node_branch",
+      "x": 763.6621704101562,
+      "y": 409.5968017578125,
+      "width": 150,
+      "height": 48,
+      "rotation": 0,
+      "nodeA": "n13a",
+      "nodeB": "n13b",
+      "g": "1/R",
+      "gIsConstant": true,
+      "constantGSymbols": "",
+      "ihis": "Ihis4",
+      "direction": "AtoB",
+      "activeSwitchCase": 0
+    }
+  ],
+  "wires": [
+    {
+      "id": "W12",
+      "from": "B10.B",
+      "to": "B11.A",
+      "mid": null
+    },
+    {
+      "id": "W13",
+      "from": "B11.B",
+      "to": "B12.A",
+      "mid": null
+    },
+    {
+      "id": "W14",
+      "from": "B12.B",
+      "to": "B13.B",
+      "mid": null
+    },
+    {
+      "id": "W15",
+      "from": "B13.A",
+      "to": "B10.A",
+      "mid": null
+    }
+  ],
+  "groups": [],
+  "nodeOrder": [
+    "N1",
+    "N2",
+    "N3",
+    "N4"
+  ],
+  "nodeLabels": {
+    "N1": "N1",
+    "N2": "N2",
+    "N3": "N4",
+    "N4": "N6"
+  },
+  "nodeColors": {},
+  "internalNodes": [
+    "N2"
+  ],
+  "language": "zh",
+  "activeOutput": "optimizedElimination",
+  "showLocalLabels": false,
+  "showReducedBranchCurrents": false,
+  "editorGroups": {},
+  "selectedId": "B10",
+  "selectedIds": [
+    "B10",
+    "B11",
+    "B12",
+    "B13"
+  ],
+  "selectedNetIds": [],
+  "selectedWireId": null,
+  "zoom": 2.475963176294812,
+  "viewCenter": {
+    "x": 646.7637180307722,
+    "y": 410.5336446183861
+  },
+  "reducedEquationCache": [
+    {
+      "key": "{\"language\":\"zh\",\"payload\":{\"all_nodes\":[\"N1\",\"N2\",\"N3\",\"N4\"],\"voltage_nodes\":[\"n10a\",\"n10b\",\"N4\",\"N6\"],\"node_display_names\":{\"N1\":\"n10a\",\"N2\":\"n10b\",\"N3\":\"N4\",\"N4\":\"N6\"},\"external_nodes\":[\"N1\",\"N3\",\"N4\"],\"internal_nodes\":[\"N2\"],\"ground_nodes\":[],\"warnings\":[],\"G_full\":[[\"2*1/R\",\"-1/R\",\"0\",\"-1/R\"],[\"-1/R\",\"1/R + G\",\"-G\",\"0\"],[\"0\",\"-G\",\"G + 1/R\",\"-1/R\"],[\"-1/R\",\"0\",\"-1/R\",\"2*1/R\"]],\"Ihis_full\":[\"Ihis1 + Ihis4\",\"-Ihis1 + Ihis2\",\"-Ihis2 + Ihis3\",\"-Ihis3 - Ihis4\"],\"G_full_tagged\":[[\"1/R__bbsrc_B10 + 1/R__bbsrc_B13\",\"-1/R__bbsrc_B10\",\"0\",\"-1/R__bbsrc_B13\"],[\"-1/R__bbsrc_B10\",\"1/R__bbsrc_B10 + G__bbsrc_B11\",\"-G__bbsrc_B11\",\"0\"],[\"0\",\"-G__bbsrc_B11\",\"G__bbsrc_B11 + 1/R__bbsrc_B12\",\"-1/R__bbsrc_B12\"],[\"-1/R__bbsrc_B13\",\"0\",\"-1/R__bbsrc_B12\",\"1/R__bbsrc_B12 + 1/R__bbsrc_B13\"]],\"Ihis_full_tagged\":[\"Ihis1__bbsrc_B10 + Ihis4__bbsrc_B13\",\"-Ihis1__bbsrc_B10 + Ihis2__bbsrc_B11\",\"-Ihis2__bbsrc_B11 + Ihis3__bbsrc_B12\",\"-Ihis3__bbsrc_B12 - Ihis4__bbsrc_B13\"],\"G_symbol_usage\":[{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N1\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N2\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N2\",\"col_node\":\"N1\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N2\",\"col_node\":\"N2\",\"source_id\":\"B10\",\"source_name\":\"R10\",\"is_constant\":true},{\"symbol\":\"G\",\"row_node\":\"N2\",\"col_node\":\"N2\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"G\",\"row_node\":\"N2\",\"col_node\":\"N3\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"G\",\"row_node\":\"N3\",\"col_node\":\"N2\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"G\",\"row_node\":\"N3\",\"col_node\":\"N3\",\"source_id\":\"B11\",\"source_name\":\"R11\",\"is_constant\":false},{\"symbol\":\"R\",\"row_node\":\"N3\",\"col_node\":\"N3\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N3\",\"col_node\":\"N4\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N3\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N4\",\"source_id\":\"B12\",\"source_name\":\"R12\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N1\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N1\",\"col_node\":\"N4\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N1\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true},{\"symbol\":\"R\",\"row_node\":\"N4\",\"col_node\":\"N4\",\"source_id\":\"B13\",\"source_name\":\"R13\",\"is_constant\":true}],\"G_constant_symbols\":[\"R\"],\"symbol_dependency_table\":{\"G\":\"CODE_VARIABLE\",\"Ihis1\":\"STEP_HISTORY\",\"Ihis2\":\"STEP_HISTORY\",\"Ihis3\":\"STEP_HISTORY\",\"Ihis4\":\"STEP_HISTORY\",\"R\":\"RAM_CONSTANT\"}}}",
+      "html": "\n        <div class=\"formula-list\">\n          <div class=\"formula-card\">\n            <div class=\"formula-name\">节点划分</div>\n            <div class=\"formula-line\">\n              <span class=\"formula-rhs\">外部: n10a, N4, N6; 内部: n10b</span>\n            </div>\n          </div>\n          <div class=\"formula-card\">\n            <div class=\"formula-name\">节点方程消去版本</div>\n            \n            <div class=\"matrix-equation\">\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">I<sub>n10a</sub></span><span class=\"matrix-cell\">I<sub>N4</sub></span><span class=\"matrix-cell\">I<sub>N6</sub></span></span>\n              <span class=\"formula-eq\">=</span>\n              <span class=\"matrix\" style=\"grid-template-columns: repeat(3, minmax(58px, auto));\"><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">2</span><span class=\"math-frac-den\">R</span></span> <span class=\"math-op\">-</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R<sup>2</sup> · (G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span>)</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">G<sup>2</sup></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> <span class=\"math-op\">+</span> G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\">-<span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">2</span><span class=\"math-frac-den\">R</span></span></span></span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">V<sub>n10a</sub></span><span class=\"matrix-cell\">V<sub>N4</sub></span><span class=\"matrix-cell\">V<sub>N6</sub></span></span>\n              <span class=\"formula-eq\">+</span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">Ihis<sub>1</sub> <span class=\"math-op\">+</span> Ihis<sub>4</sub> <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">-Ihis<sub>1</sub> <span class=\"math-op\">+</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">G · -Ihis<sub>1</sub> <span class=\"math-op\">+</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> <span class=\"math-op\">-</span> Ihis<sub>2</sub> <span class=\"math-op\">+</span> Ihis<sub>3</sub></span><span class=\"matrix-cell\">-Ihis<sub>3</sub> <span class=\"math-op\">-</span> Ihis<sub>4</sub></span></span>\n            </div>\n          </div>\n          <div class=\"formula-card\">\n            <div class=\"formula-name\">内部节点电压恢复公式</div>\n            <div class=\"matrix-equation\">\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">V<sub>n10b</sub></span></span>\n              <span class=\"formula-eq\">=</span>\n              <span class=\"matrix\" style=\"grid-template-columns: repeat(3, minmax(58px, auto));\"><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span><span class=\"matrix-cell\">0</span></span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\">V<sub>n10a</sub></span><span class=\"matrix-cell\">V<sub>N4</sub></span><span class=\"matrix-cell\">V<sub>N6</sub></span></span>\n              <span class=\"formula-eq\">+</span>\n              <span class=\"matrix\" style=\"grid-template-columns: 1fr;\"><span class=\"matrix-cell\"><span class=\"math-frac\"><span class=\"math-frac-num\">Ihis<sub>1</sub> <span class=\"math-op\">-</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span></span>\n            </div>\n          </div>\n          \n        <div class=\"formula-card\">\n          <div class=\"formula-name\">单内部节点展开式</div>\n          <div class=\"formula-line\">\n            <span class=\"formula-lhs\">V<sub>n10b</sub></span>\n            <span class=\"formula-eq\">=</span>\n            <span class=\"formula-rhs\"><span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R · G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> · V<sub>n10a</sub> <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">G</span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span> · V<sub>N4</sub> <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">Ihis<sub>1</sub> <span class=\"math-op\">-</span> Ihis<sub>2</sub></span><span class=\"math-frac-den\">G <span class=\"math-op\">+</span> <span class=\"math-frac\"><span class=\"math-frac-num\">1</span><span class=\"math-frac-den\">R</span></span></span></span></span>\n          </div>\n        </div>\n      \n        </div>\n      ",
+      "result": {
+        "ok": true,
+        "external_nodes": [
+          "N1",
+          "N3",
+          "N4"
+        ],
+        "internal_nodes": [
+          "N2"
+        ],
+        "ground_nodes": [],
+        "ground_voltage_map": {},
+        "warnings": [],
+        "G_red": [
+          [
+            "2/R - 1/(R**2*(G + 1/R))",
+            "-G/(R*(G + 1/R))",
+            "-1/R"
+          ],
+          [
+            "-G/(R*(G + 1/R))",
+            "-G**2/(G + 1/R) + G + 1/R",
+            "-1/R"
+          ],
+          [
+            "-1/R",
+            "-1/R",
+            "2/R"
+          ]
+        ],
+        "Ihis_red": [
+          "Ihis1 + Ihis4 + (-Ihis1 + Ihis2)/(R*(G + 1/R))",
+          "G*(-Ihis1 + Ihis2)/(G + 1/R) - Ihis2 + Ihis3",
+          "-Ihis3 - Ihis4"
+        ],
+        "K_v": [
+          [
+            "1/(R*(G + 1/R))",
+            "G/(G + 1/R)",
+            "0"
+          ]
+        ],
+        "K_h": [
+          "(Ihis1 - Ihis2)/(G + 1/R)"
+        ],
+        "reduced_observers": [],
+        "G_red_tagged": [
+          [
+            "1/R__bbsrc_B13 + 1/R__bbsrc_B10 - 1/(R__bbsrc_B10**2*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+            "-G__bbsrc_B11/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+            "-1/R__bbsrc_B13"
+          ],
+          [
+            "-G__bbsrc_B11/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+            "-G__bbsrc_B11**2/(G__bbsrc_B11 + 1/R__bbsrc_B10) + G__bbsrc_B11 + 1/R__bbsrc_B12",
+            "-1/R__bbsrc_B12"
+          ],
+          [
+            "-1/R__bbsrc_B13",
+            "-1/R__bbsrc_B12",
+            "1/R__bbsrc_B13 + 1/R__bbsrc_B12"
+          ]
+        ],
+        "Ihis_red_tagged": [
+          "Ihis1__bbsrc_B10 + Ihis4__bbsrc_B13 + (-Ihis1__bbsrc_B10 + Ihis2__bbsrc_B11)/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+          "G__bbsrc_B11*(-Ihis1__bbsrc_B10 + Ihis2__bbsrc_B11)/(G__bbsrc_B11 + 1/R__bbsrc_B10) - Ihis2__bbsrc_B11 + Ihis3__bbsrc_B12",
+          "-Ihis3__bbsrc_B12 - Ihis4__bbsrc_B13"
+        ],
+        "K_v_tagged": [
+          [
+            "1/(R__bbsrc_B10*(G__bbsrc_B11 + 1/R__bbsrc_B10))",
+            "G__bbsrc_B11/(G__bbsrc_B11 + 1/R__bbsrc_B10)",
+            "0"
+          ]
+        ],
+        "K_h_tagged": [
+          "(Ihis1__bbsrc_B10 - Ihis2__bbsrc_B11)/(G__bbsrc_B11 + 1/R__bbsrc_B10)"
+        ]
+      },
+      "savedAt": "2026-06-16T18:37:25.178Z"
+    }
+  ],
+  "branchCurrentCache": [],
+  "pythonDraftCache": [],
+  "nextBranch": 14,
+  "nextTransformer": 1,
+  "nextCustom": 1,
+  "nextWire": 16,
+  "nextGroup": 1
+}
