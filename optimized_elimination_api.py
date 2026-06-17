@@ -228,6 +228,58 @@ def _partition_payload(payload: dict) -> tuple[sp.Matrix, sp.Matrix, sp.Matrix |
     )
 
 
+def _direct_retained_matrices(
+    payload: dict,
+    node_order: list[str],
+    external_nodes: list[str],
+    *,
+    tagged: bool = False,
+) -> tuple[sp.Matrix, sp.Matrix, list[dict]]:
+    node_index = {node: index for index, node in enumerate(node_order)}
+    external_set = set(external_nodes)
+    G_direct = sp.zeros(len(node_order), len(node_order))
+    Ihis_direct = sp.zeros(len(node_order), 1)
+    accepted: list[dict] = []
+    for stamp in payload.get("direct_retained_stamps") or []:
+        support = set(stamp.get("support_nodes") or [])
+        if not support or not support.issubset(external_set):
+            continue
+        accepted.append(
+            {
+                "id": stamp.get("id") or stamp.get("source_id") or "",
+                "support_nodes": sorted(support),
+            }
+        )
+        for entry in stamp.get("G") or []:
+            row = node_index.get(entry.get("row"))
+            col = node_index.get(entry.get("col"))
+            if row is None or col is None:
+                continue
+            expr_text = entry.get("tagged") if tagged and entry.get("tagged") is not None else entry.get("expr")
+            if expr_text is None:
+                continue
+            G_direct[row, col] += sp.sympify(str(expr_text))
+        for entry in stamp.get("Ihis") or []:
+            row = node_index.get(entry.get("row"))
+            if row is None:
+                continue
+            expr_text = entry.get("tagged") if tagged and entry.get("tagged") is not None else entry.get("expr")
+            if expr_text is None:
+                continue
+            Ihis_direct[row, 0] += sp.sympify(str(expr_text))
+    return G_direct, Ihis_direct, accepted
+
+
+def _slice_direct_retained(
+    direct_G: sp.Matrix,
+    direct_Ihis: sp.Matrix,
+    node_order: list[str],
+    external_nodes: list[str],
+) -> tuple[sp.Matrix, sp.Matrix]:
+    indices = [node_order.index(node) for node in external_nodes]
+    return direct_G.extract(indices, indices), direct_Ihis.extract(indices, [0])
+
+
 def main() -> None:
     payload = json.load(sys.stdin)
     simplify_level = payload.get("simplify_level") or "light"
@@ -237,6 +289,22 @@ def main() -> None:
     G, Ihis, G_tagged, Ihis_tagged, node_order, external_nodes, internal_nodes, partition_warnings = _partition_payload(payload)
     warnings = list(partition_warnings)
     borrowed_dependency = payload.get("reduced_dependency_analysis") or payload.get("reduced_dependency")
+    direct_G, direct_Ihis, direct_stamps = _direct_retained_matrices(payload, node_order, external_nodes)
+    direct_Grr, direct_Ihisr = _slice_direct_retained(direct_G, direct_Ihis, node_order, external_nodes)
+    if direct_stamps:
+        G = G - direct_G
+        Ihis = Ihis - direct_Ihis
+    direct_G_tagged = direct_Ihis_tagged = direct_Grr_tagged = direct_Ihisr_tagged = None
+    if direct_stamps and G_tagged is not None and Ihis_tagged is not None:
+        direct_G_tagged, direct_Ihis_tagged, _ = _direct_retained_matrices(payload, node_order, external_nodes, tagged=True)
+        direct_Grr_tagged, direct_Ihisr_tagged = _slice_direct_retained(
+            direct_G_tagged,
+            direct_Ihis_tagged,
+            node_order,
+            external_nodes,
+        )
+        G_tagged = G_tagged - direct_G_tagged
+        Ihis_tagged = Ihis_tagged - direct_Ihis_tagged
 
     structured = build_structured_formula(
         G,
@@ -306,6 +374,12 @@ def main() -> None:
         dependency_model_override=dependency_model_override,
         analysis_model_override=analysis_model_override,
     )
+    if direct_stamps:
+        rtds_stage_plan["Gred_direct"] = direct_Grr
+        rtds_stage_plan["Ihisred_direct"] = direct_Ihisr
+        if direct_Grr_tagged is not None and direct_Ihisr_tagged is not None:
+            rtds_stage_plan["Gred_direct_tagged"] = direct_Grr_tagged
+            rtds_stage_plan["Ihisred_direct_tagged"] = direct_Ihisr_tagged
     warnings.extend(structured.get("warnings", []))
     blocks = structured["blocks"]
 
@@ -332,6 +406,11 @@ def main() -> None:
                 "Ihis_i": _clean_vector(blocks["Ihis_i"]),
             },
             "details": _clean_value(structured["details"]),
+            "direct_retained": {
+                "stamps": _clean_value(direct_stamps),
+                "Gred_direct": _clean_matrix(direct_Grr),
+                "Ihisred_direct": _clean_vector(direct_Ihisr),
+            },
             "dependency_analysis": _clean_value(rtds_stage_plan.get("dependency_analysis", {})),
             "dynamic_subblock": _clean_value(rtds_stage_plan.get("dynamic_subblock", {})),
             "c_draft": c_draft_for_structured_formula(

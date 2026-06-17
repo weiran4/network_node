@@ -11,6 +11,14 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("reduced_dependency_analysis", source)
         self.assertIn("await ensureReducedResult(basePayload)", source)
 
+    def test_optimized_payload_includes_direct_retained_stamps(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function directRetainedStampsForPayload", source)
+        self.assertIn("direct_retained_stamps: directRetainedStampsForPayload", source)
+        self.assertIn("direct_retained_stamps: payload.direct_retained_stamps", source)
+        self.assertIn("Gred_direct", source)
+
 
 if __name__ == "__main__":
     unittest.main()

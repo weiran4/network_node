@@ -7973,6 +7973,7 @@
       const internal = assembled.nodes.filter(node => !groundSet.has(node) && (state.internalNodes.includes(node) || forcedInternal.has(node)));
       const external = assembled.nodes.filter(node => !groundSet.has(node) && !state.internalNodes.includes(node));
       const externalVisible = external.filter(node => !forcedInternal.has(node));
+      const retainedSet = new Set(externalVisible);
 
       const payload = {
         all_nodes: assembled.nodes,
@@ -7986,12 +7987,28 @@
         Ihis_full: assembled.Ihis.map(sumTerms),
         G_full_tagged: assembled.G.map(row => row.map(taggedSumTerms)),
         Ihis_full_tagged: assembled.Ihis.map(taggedSumTerms),
+        direct_retained_stamps: directRetainedStampsForPayload(assembled.elementStamps || [], retainedSet, groundSet),
         G_symbol_usage: assembled.GSymbolUsage || [],
         G_constant_symbols: globallyConstantGSymbols(assembled.GSymbolUsage || [])
       };
       payload.symbol_dependency_table = buildSymbolDependencyTable(payload);
       payload.symbol_dependency_table_tagged = buildTaggedSymbolDependencyTable(payload);
       return payload;
+    }
+
+    function directRetainedStampsForPayload(elementStamps, retainedSet, groundSet) {
+      return (elementStamps || [])
+        .filter(stamp => {
+          const support = stamp.support_nodes || [];
+          return support.length && support.every(node => retainedSet.has(node) && !groundSet.has(node));
+        })
+        .map(stamp => ({
+          id: stamp.id,
+          name: stamp.name,
+          support_nodes: [...stamp.support_nodes],
+          G: (stamp.G || []).map(entry => ({ ...entry })),
+          Ihis: (stamp.Ihis || []).map(entry => ({ ...entry }))
+        }));
     }
 
     function reducedStaticMessage(payload) {
@@ -8100,6 +8117,7 @@
         Ihis_full: payload.Ihis_full,
         G_symbol_usage: payload.G_symbol_usage,
         G_constant_symbols: payload.G_constant_symbols,
+        direct_retained_stamps: payload.direct_retained_stamps,
         symbol_dependency_table: payload.symbol_dependency_table,
         symbol_dependency_table_tagged: payload.symbol_dependency_table_tagged,
         G_full_tagged: payload.G_full_tagged,
@@ -8348,12 +8366,22 @@
     }
 
     function renderStructuredFormulaSummary(result = null) {
+      const direct = result?.structured?.direct_retained || {};
+      const hasDirectG = (direct.Gred_direct || []).some(row => (row || []).some(value => String(value || "0") !== "0"));
+      const hasDirectIhis = (direct.Ihisred_direct || []).some(value => String(value || "0") !== "0");
+      const directBlock = (hasDirectG || hasDirectIhis) ? `
+        <div class="formula-line"><span class="formula-lhs">${formatMath("Gred_final")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Gred_schur + Gred_direct")}</span></div>
+        <div class="formula-line"><span class="formula-lhs">${formatMath("Ihisred_final")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihisred_schur + Ihisred_direct")}</span></div>
+        ${hasDirectG ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gred_direct")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct)}</div>` : ""}
+        ${hasDirectIhis ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Ihisred_direct")}</span><span class="formula-eq">=</span>${renderMatrix((direct.Ihisred_direct || []).map(value => [value]))}</div>` : ""}
+      ` : "";
       if (result?.structured?.block_type === "no_elimination") {
         return `
           <div class="formula-card">
             <div class="formula-name">${optText("最终紧凑公式", "Final Compact Formulas")}</div>
             <div class="formula-line"><span class="formula-lhs">${formatMath("G_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("G")}</span></div>
             <div class="formula-line"><span class="formula-lhs">${formatMath("Ihis_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihis")}</span></div>
+            ${directBlock}
           </div>
         `;
       }
@@ -8362,6 +8390,7 @@
           <div class="formula-name">${optText("最终紧凑公式", "Final Compact Formulas")}</div>
           <div class="formula-line"><span class="formula-lhs">${formatMath("G_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("G_rr - G_rk*W*G_kr")}</span></div>
           <div class="formula-line"><span class="formula-lhs">${formatMath("Ihis_red")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihis_r - G_rk*W*Ihis_k")}</span></div>
+          ${directBlock}
           <div class="formula-line"><span class="formula-lhs">${formatMath("V_k")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("-W*G_kr*V_r - W*Ihis_k")}</span></div>
         </div>
       `;
@@ -9737,23 +9766,31 @@
       const G = Array.from({ length: size }, () => Array.from({ length: size }, () => []));
       const Ihis = Array.from({ length: size }, () => []);
       const GSymbolUsage = [];
+      const elementStamps = [];
       const warnings = [];
 
       const nodeLookup = nodeLookupFromGroups(groups);
       state.branches.forEach(branch => {
         if (branch.kind === "ground") return;
         if (expandPackaged && branch.packageOriginal) {
-          stampPackagedOriginal(branch, netByTerminal, nodeIndex, G, Ihis, GSymbolUsage);
+          const stampRecord = createElementStampRecord(branch);
+          stampPackagedOriginal(branch, netByTerminal, nodeIndex, G, Ihis, GSymbolUsage, stampRecord);
+          pushElementStamp(elementStamps, stampRecord);
           return;
         }
         if (branch.kind === "current_source") {
-          stampCurrentSourceBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeLookup, nodeIndex, G, Ihis, warnings, GSymbolUsage);
+          const stampRecord = createElementStampRecord(branch);
+          stampCurrentSourceBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeLookup, nodeIndex, G, Ihis, warnings, GSymbolUsage, stampRecord);
+          pushElementStamp(elementStamps, stampRecord);
           return;
         }
         if (branch.kind === "voltage_source_series_r") {
-          stampVoltageSourceSeriesRBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeIndex, G, Ihis, warnings, GSymbolUsage);
+          const stampRecord = createElementStampRecord(branch);
+          stampVoltageSourceSeriesRBranch(branch, side => netByTerminal.get(terminalKey(branch.id, side)), nodeIndex, G, Ihis, warnings, GSymbolUsage, stampRecord);
+          pushElementStamp(elementStamps, stampRecord);
           return;
         }
+        const stampRecord = createElementStampRecord(branch);
         const sourceId = branch.id;
         const sides = terminalSides(branch);
         const localG = localGMatrix(branch);
@@ -9765,6 +9802,7 @@
           if (row === undefined) return;
 
           addTerm(Ihis[row], localIhis[r], sourceId);
+          recordElementIhis(stampRecord, rowNet, localIhis[r], sourceId);
 
           sides.forEach((colSide, c) => {
             const colNet = netByTerminal.get(terminalKey(branch.id, colSide));
@@ -9772,12 +9810,14 @@
             if (col === undefined) return;
             const term = localG[r]?.[c] || "0";
             addTerm(G[row][col], term, sourceId);
+            recordElementG(stampRecord, rowNet, colNet, term, sourceId);
             recordGSymbolUsage(GSymbolUsage, branch, term, rowNet, colNet);
           });
         });
+        pushElementStamp(elementStamps, stampRecord);
       });
 
-      return { nodes, G, Ihis, GSymbolUsage, displayByNode, forcedInternalNodes, groundNodes: groundNodesFromGroups(groups), warnings };
+      return { nodes, G, Ihis, GSymbolUsage, elementStamps, displayByNode, forcedInternalNodes, groundNodes: groundNodesFromGroups(groups), warnings };
     }
 
     function groundNodesFromGroups(groups) {
@@ -9800,6 +9840,55 @@
       return (groups || [])
         .filter(group => (group.members || []).some(member => groundTerminals.has(member)))
         .map(group => group.id);
+    }
+
+    function createElementStampRecord(branch) {
+      return {
+        id: branch.id,
+        name: branch.name || branch.id,
+        support: new Set(),
+        G: [],
+        Ihis: []
+      };
+    }
+
+    function recordElementSupport(record, ...nodes) {
+      if (!record) return;
+      nodes.filter(Boolean).forEach(node => record.support.add(node));
+    }
+
+    function recordElementG(record, rowNode, colNode, expr, sourceId = null, taggedExpr = null) {
+      const cleaned = cleanExpr(expr);
+      if (!record || !cleaned || cleaned === "0") return;
+      recordElementSupport(record, rowNode, colNode);
+      record.G.push({
+        row: rowNode,
+        col: colNode,
+        expr: cleaned,
+        tagged: taggedExpr || tagExprForSource(cleaned, sourceId || record.id)
+      });
+    }
+
+    function recordElementIhis(record, rowNode, expr, sourceId = null, taggedExpr = null) {
+      const cleaned = cleanExpr(expr);
+      if (!record || !cleaned || cleaned === "0") return;
+      recordElementSupport(record, rowNode);
+      record.Ihis.push({
+        row: rowNode,
+        expr: cleaned,
+        tagged: taggedExpr || tagExprForSource(cleaned, sourceId || record.id)
+      });
+    }
+
+    function pushElementStamp(records, record) {
+      if (!record || (!record.G.length && !record.Ihis.length)) return;
+      records.push({
+        id: record.id,
+        name: record.name,
+        support_nodes: [...record.support],
+        G: record.G,
+        Ihis: record.Ihis
+      });
     }
 
     function constrainedAssembledSystem(assembled) {
@@ -9833,7 +9922,7 @@
       return lookup;
     }
 
-    function stampCurrentSourceBranch(branch, netForSide, nodeLookup, nodeIndex, G, Ihis, warnings = null, GSymbolUsage = null) {
+    function stampCurrentSourceBranch(branch, netForSide, nodeLookup, nodeIndex, G, Ihis, warnings = null, GSymbolUsage = null, stampRecord = null) {
       const fromSide = branch.direction === "AtoB" ? "A" : "B";
       const toSide = branch.direction === "AtoB" ? "B" : "A";
       const fromNode = netForSide(fromSide);
@@ -9854,17 +9943,21 @@
           return;
         }
         addTerm(G[fromRow][col], term.coefficient, branch.id);
+        recordElementG(stampRecord, fromNode, controlNode, term.coefficient, branch.id);
         recordGSymbolUsage(GSymbolUsage, branch, term.coefficient, fromNode, controlNode);
         const negated = negateExpr(term.coefficient);
         addTerm(G[toRow][col], negated, branch.id);
+        recordElementG(stampRecord, toNode, controlNode, negated, branch.id);
         recordGSymbolUsage(GSymbolUsage, branch, negated, toNode, controlNode);
       });
       const ihis = currentSourceIhis(branch);
       addTerm(Ihis[fromRow], ihis, branch.id);
+      recordElementIhis(stampRecord, fromNode, ihis, branch.id);
       addTerm(Ihis[toRow], negateExpr(ihis), branch.id);
+      recordElementIhis(stampRecord, toNode, negateExpr(ihis), branch.id);
     }
 
-    function stampVoltageSourceSeriesRBranch(branch, netForSide, nodeIndex, G, Ihis, warnings = null, GSymbolUsage = null) {
+    function stampVoltageSourceSeriesRBranch(branch, netForSide, nodeIndex, G, Ihis, warnings = null, GSymbolUsage = null, stampRecord = null) {
       validateVoltageSourceSeriesR(branch).forEach(message => warnings?.push(`${branch.name}: ${message}`));
       const pNode = netForSide("P");
       const nNode = netForSide("N");
@@ -9874,23 +9967,29 @@
       const gs = voltageSourceSeriesConductance(branch);
       const j = voltageSourceSeriesIhis(branch);
       addTerm(G[pRow][pRow], gs, branch.id);
+      recordElementG(stampRecord, pNode, pNode, gs, branch.id);
       recordGSymbolUsage(GSymbolUsage, branch, gs, pNode, pNode);
       const negGs = negateExpr(gs);
       addTerm(G[pRow][nRow], negGs, branch.id);
+      recordElementG(stampRecord, pNode, nNode, negGs, branch.id);
       recordGSymbolUsage(GSymbolUsage, branch, negGs, pNode, nNode);
       addTerm(G[nRow][pRow], negGs, branch.id);
+      recordElementG(stampRecord, nNode, pNode, negGs, branch.id);
       recordGSymbolUsage(GSymbolUsage, branch, negGs, nNode, pNode);
       addTerm(G[nRow][nRow], gs, branch.id);
+      recordElementG(stampRecord, nNode, nNode, gs, branch.id);
       recordGSymbolUsage(GSymbolUsage, branch, gs, nNode, nNode);
       addTerm(Ihis[pRow], j, branch.id);
+      recordElementIhis(stampRecord, pNode, j, branch.id);
       addTerm(Ihis[nRow], negateExpr(j), branch.id);
+      recordElementIhis(stampRecord, nNode, negateExpr(j), branch.id);
     }
 
     function displayNameForAssembledNode(assembled, node) {
       return assembled.displayByNode?.get(node) || nodeDisplayName(node);
     }
 
-    function stampPackagedOriginal(branch, netByTerminal, nodeIndex, G, Ihis, GSymbolUsage = null) {
+    function stampPackagedOriginal(branch, netByTerminal, nodeIndex, G, Ihis, GSymbolUsage = null, stampRecord = null) {
       const packed = packagedOriginalSystem(branch, netByTerminal);
       if (!packed) return false;
       let stamped = false;
@@ -9900,12 +9999,18 @@
         if (row === undefined) return;
         const beforeIhis = Ihis[row].length;
         addTerms(Ihis[row], packed.Ihis[r] || []);
+        const ihisExpr = sumTerms(packed.Ihis[r] || []);
+        const ihisTagged = taggedSumTerms(packed.Ihis[r] || []);
+        recordElementIhis(stampRecord, rowNode, ihisExpr, branch.id, ihisTagged);
         if (Ihis[row].length !== beforeIhis) stamped = true;
         packed.nodeIds.forEach((colNode, c) => {
           const col = nodeIndex.get(colNode);
           if (col === undefined) return;
           const beforeG = G[row][col].length;
           addTerms(G[row][col], packed.G[r]?.[c] || []);
+          const gExpr = sumTerms(packed.G[r]?.[c] || []);
+          const gTagged = taggedSumTerms(packed.G[r]?.[c] || []);
+          recordElementG(stampRecord, rowNode, colNode, gExpr, branch.id, gTagged);
           if (G[row][col].length !== beforeG) stamped = true;
         });
       });

@@ -89,6 +89,29 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("Gred[0][0]", draft)
         self.assertLess(draft.count("G1 + G2"), 2)
 
+    def test_structured_c_draft_declares_matrix_error_counter(self):
+        G1, G2 = sp.symbols("G1 G2")
+        nodes = ["A", "X", "B"]
+        G = sp.Matrix([[G1, -G1, 0], [-G1, G1 + G2, -G2], [0, -G2, G2]])
+        structured = build_structured_formula(G, sp.zeros(3, 1), nodes, ["A", "B"], ["X"])
+        plan = build_dependency_stage_plan(structured, {"G1": "CODE_VARIABLE", "G2": "CODE_VARIABLE"})
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertIn("RAM_PASS1:\n    int err = 0;", draft)
+        self.assertNotIn("STATIC:\n    int err", draft)
+
+    def test_no_elimination_c_draft_declares_matrix_error_counter(self):
+        G1, G2 = sp.symbols("G1 G2")
+        G = sp.Matrix([[G1, -G1], [-G1, G1 + G2]])
+        structured = build_structured_formula(G, sp.zeros(2, 1), ["A", "B"], ["A", "B"], [])
+        plan = build_dependency_stage_plan(structured, {"G1": "CODE_VARIABLE", "G2": "CODE_VARIABLE"})
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertIn("RAM_PASS1:\n    int err = 0;", draft)
+        self.assertNotIn("STATIC:\n    int err", draft)
+
     def test_dependency_stage_plan_accepts_borrowed_reduced_model_without_structured_inverse(self):
         G1, G2 = sp.symbols("G1 G2")
         nodes = ["A", "X", "B"]
@@ -419,6 +442,245 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("InjA = get_CODE(&Ihisred_code, 0, 0);", draft)
         self.assertNotIn("for (int row = 0; row < 0; row++)", draft)
         self.assertNotIn("g_mat_over[row][col] = 0.0;", draft)
+
+    def test_optimized_api_strips_retained_retained_direct_stamp_from_schur_core(self):
+        payload = {
+            "all_nodes": ["P", "X", "N"],
+            "external_nodes": ["P", "N"],
+            "internal_nodes": ["X"],
+            "ground_nodes": [],
+            "G_full": [
+                ["G1 + gC", "-G1", "-gC"],
+                ["-G1", "G1 + G2", "-G2"],
+                ["-gC", "-G2", "G2 + gC"],
+            ],
+            "Ihis_full": ["h", "0", "-h"],
+            "G_full_tagged": [
+                ["G1_tag + gC_tag", "-G1_tag", "-gC_tag"],
+                ["-G1_tag", "G1_tag + G2_tag", "-G2_tag"],
+                ["-gC_tag", "-G2_tag", "G2_tag + gC_tag"],
+            ],
+            "Ihis_full_tagged": ["h_tag", "0", "-h_tag"],
+            "symbol_dependency_table_tagged": {
+                "G1_tag": "RAM_CONSTANT",
+                "G2_tag": "RAM_CONSTANT",
+                "gC_tag": "CODE_VARIABLE",
+                "h_tag": "STEP_HISTORY",
+            },
+            "reduced_dependency_analysis": {
+                "external_nodes": ["P", "N"],
+                "G_red": [
+                    ["G1*G2/(G1 + G2) + gC", "-G1*G2/(G1 + G2) - gC"],
+                    ["-G1*G2/(G1 + G2) - gC", "G1*G2/(G1 + G2) + gC"],
+                ],
+                "Ihis_red": ["h", "-h"],
+                "G_red_tagged": [
+                    ["G1_tag*G2_tag/(G1_tag + G2_tag) + gC_tag", "-G1_tag*G2_tag/(G1_tag + G2_tag) - gC_tag"],
+                    ["-G1_tag*G2_tag/(G1_tag + G2_tag) - gC_tag", "G1_tag*G2_tag/(G1_tag + G2_tag) + gC_tag"],
+                ],
+                "Ihis_red_tagged": ["h_tag", "-h_tag"],
+            },
+            "direct_retained_stamps": [
+                {
+                    "id": "direct_PN",
+                    "support_nodes": ["P", "N"],
+                    "G": [
+                        {"row": "P", "col": "P", "expr": "gC", "tagged": "gC_tag"},
+                        {"row": "P", "col": "N", "expr": "-gC", "tagged": "-gC_tag"},
+                        {"row": "N", "col": "P", "expr": "-gC", "tagged": "-gC_tag"},
+                        {"row": "N", "col": "N", "expr": "gC", "tagged": "gC_tag"},
+                    ],
+                    "Ihis": [
+                        {"row": "P", "expr": "h", "tagged": "h_tag"},
+                        {"row": "N", "expr": "-h", "tagged": "-h_tag"},
+                    ],
+                }
+            ],
+        }
+
+        completed = subprocess.run(
+            [sys.executable, "optimized_elimination_api.py"],
+            input=json.dumps(payload),
+            cwd=".",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        response = json.loads(completed.stdout)
+
+        self.assertTrue(response["ok"], response)
+        blocks = response["structured"]["blocks"]
+        self.assertEqual(blocks["G_rr"], [["G1", "0"], ["0", "G2"]])
+        self.assertEqual(response["structured"]["direct_retained"]["Gred_direct"], [["gC", "-gC"], ["-gC", "gC"]])
+        draft = response["structured"]["c_draft"]
+        self.assertIn("double gC = 0.0;", draft)
+        self.assertIn("get_CODE(&Gred_code, 0, 0) + gC", draft)
+        self.assertIn("InjP = h;", draft)
+        self.assertIn("InjN = -h;", draft)
+
+    def test_optimized_api_does_not_strip_stamp_touching_internal_node(self):
+        payload = {
+            "all_nodes": ["P", "X", "N"],
+            "external_nodes": ["P", "N"],
+            "internal_nodes": ["X"],
+            "ground_nodes": [],
+            "G_full": [
+                ["G1 + gC", "-G1 - gC", "0"],
+                ["-G1 - gC", "G1 + G2 + gC", "-G2"],
+                ["0", "-G2", "G2"],
+            ],
+            "Ihis_full": ["0", "0", "0"],
+            "G_full_tagged": [
+                ["G1_tag + gC_tag", "-G1_tag - gC_tag", "0"],
+                ["-G1_tag - gC_tag", "G1_tag + G2_tag + gC_tag", "-G2_tag"],
+                ["0", "-G2_tag", "G2_tag"],
+            ],
+            "Ihis_full_tagged": ["0", "0", "0"],
+            "symbol_dependency_table_tagged": {
+                "G1_tag": "RAM_CONSTANT",
+                "G2_tag": "RAM_CONSTANT",
+                "gC_tag": "RAM_CONSTANT",
+            },
+            "reduced_dependency_analysis": {
+                "external_nodes": ["P", "N"],
+                "G_red": [["0", "0"], ["0", "0"]],
+                "Ihis_red": ["0", "0"],
+                "G_red_tagged": [["0", "0"], ["0", "0"]],
+                "Ihis_red_tagged": ["0", "0"],
+            },
+            "direct_retained_stamps": [
+                {
+                    "id": "unsafe",
+                    "support_nodes": ["P", "X"],
+                    "G": [
+                        {"row": "P", "col": "P", "expr": "gC", "tagged": "gC_tag"},
+                        {"row": "P", "col": "X", "expr": "-gC", "tagged": "-gC_tag"},
+                        {"row": "X", "col": "P", "expr": "-gC", "tagged": "-gC_tag"},
+                        {"row": "X", "col": "X", "expr": "gC", "tagged": "gC_tag"},
+                    ],
+                }
+            ],
+        }
+
+        completed = subprocess.run(
+            [sys.executable, "optimized_elimination_api.py"],
+            input=json.dumps(payload),
+            cwd=".",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        response = json.loads(completed.stdout)
+
+        self.assertTrue(response["ok"], response)
+        blocks = response["structured"]["blocks"]
+        self.assertIn("gC", blocks["G_ri"][0][0])
+        self.assertIn("gC", blocks["G_ii"][0][0])
+        self.assertEqual(response["structured"]["direct_retained"]["Gred_direct"], [["0", "0"], ["0", "0"]])
+
+    def test_direct_ram_constant_stamps_in_ram_even_when_schur_entry_is_dynamic(self):
+        payload = {
+            "all_nodes": ["N1", "N2", "N4", "N6"],
+            "external_nodes": ["N1", "N4", "N6"],
+            "internal_nodes": ["N2"],
+            "ground_nodes": [],
+            "G_full": [
+                ["2*A", "-A", "0", "-A"],
+                ["-A", "A + G", "-G", "0"],
+                ["0", "-G", "A + G", "-A"],
+                ["-A", "0", "-A", "2*A"],
+            ],
+            "Ihis_full": ["0", "0", "0", "0"],
+            "G_full_tagged": [
+                ["2*A_tag", "-A_tag", "0", "-A_tag"],
+                ["-A_tag", "A_tag + G_tag", "-G_tag", "0"],
+                ["0", "-G_tag", "A_tag + G_tag", "-A_tag"],
+                ["-A_tag", "0", "-A_tag", "2*A_tag"],
+            ],
+            "Ihis_full_tagged": ["0", "0", "0", "0"],
+            "symbol_dependency_table": {
+                "A": "RAM_CONSTANT",
+                "G": "CODE_VARIABLE",
+            },
+            "symbol_dependency_table_tagged": {
+                "A": "RAM_CONSTANT",
+                "G": "CODE_VARIABLE",
+                "A_tag": "RAM_CONSTANT",
+                "G_tag": "CODE_VARIABLE",
+            },
+            "reduced_dependency_analysis": {
+                "external_nodes": ["N1", "N4", "N6"],
+                "G_red": [
+                    ["2*A - A*A/(A + G)", "-A*G/(A + G)", "-A"],
+                    ["-A*G/(A + G)", "A + G - G*G/(A + G)", "-A"],
+                    ["-A", "-A", "2*A"],
+                ],
+                "Ihis_red": ["0", "0", "0"],
+                "G_red_tagged": [
+                    ["2*A_tag - A_tag*A_tag/(A_tag + G_tag)", "-A_tag*G_tag/(A_tag + G_tag)", "-A_tag"],
+                    ["-A_tag*G_tag/(A_tag + G_tag)", "A_tag + G_tag - G_tag*G_tag/(A_tag + G_tag)", "-A_tag"],
+                    ["-A_tag", "-A_tag", "2*A_tag"],
+                ],
+                "Ihis_red_tagged": ["0", "0", "0"],
+            },
+            "direct_retained_stamps": [
+                {
+                    "id": "R_N1_N6",
+                    "support_nodes": ["N1", "N6"],
+                    "G": [
+                        {"row": "N1", "col": "N1", "expr": "A", "tagged": "A_tag"},
+                        {"row": "N1", "col": "N6", "expr": "-A", "tagged": "-A_tag"},
+                        {"row": "N6", "col": "N1", "expr": "-A", "tagged": "-A_tag"},
+                        {"row": "N6", "col": "N6", "expr": "A", "tagged": "A_tag"},
+                    ],
+                    "Ihis": [],
+                },
+                {
+                    "id": "R_N4_N6",
+                    "support_nodes": ["N4", "N6"],
+                    "G": [
+                        {"row": "N4", "col": "N4", "expr": "A", "tagged": "A_tag"},
+                        {"row": "N4", "col": "N6", "expr": "-A", "tagged": "-A_tag"},
+                        {"row": "N6", "col": "N4", "expr": "-A", "tagged": "-A_tag"},
+                        {"row": "N6", "col": "N6", "expr": "A", "tagged": "A_tag"},
+                    ],
+                    "Ihis": [],
+                },
+            ],
+        }
+
+        completed = subprocess.run(
+            [sys.executable, "optimized_elimination_api.py"],
+            input=json.dumps(payload),
+            cwd=".",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        response = json.loads(completed.stdout)
+
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(
+            response["structured"]["direct_retained"]["Gred_direct"],
+            [["A", "0", "-A"], ["0", "A", "-A"], ["-A", "-A", "2*A"]],
+        )
+        blocks = response["structured"]["blocks"]
+        self.assertEqual(blocks["G_rr"], [["A", "0", "0"], ["0", "G", "0"], ["0", "0", "0"]])
+        self.assertEqual(blocks["G_ir"], [["-A", "-G", "0"]])
+        self.assertEqual(blocks["Ihis_i"], ["0"])
+        draft = response["structured"]["c_draft"]
+        self.assertIn("g_mat_over", draft)
+        self.assertIn("g_mat_over[2][2] = 2.0*A;", draft)
+        self.assertIn("g_mat_over[0][2] = -A;", draft)
+        self.assertIn("g_mat_over[1][2] = -A;", draft)
+        self.assertNotIn("createGValue(\"varG_N1_N6\"", draft)
+        self.assertNotIn("createGValue(\"varG_N4_N6\"", draft)
+        self.assertNotIn("createGValue(\"varG_N6_N6\"", draft)
+        self.assertIn("createGValue(\"varG_N1_N1\"", draft)
+        self.assertIn("createGValue(\"varG_N1_N4\"", draft)
+        self.assertIn("createGValue(\"varG_N4_N4\"", draft)
+        self.assertIn("set_CODE(&Vr_code, 2, 0, N6);", draft)
+        self.assertNotIn("set_CODE(&Gkr_code, 0, 2", draft)
 
 
 

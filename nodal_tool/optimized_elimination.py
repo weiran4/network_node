@@ -638,6 +638,12 @@ def build_dependency_stage_plan(
         "Gkk": sp.Matrix(blocks.get("G_ii", [])),
         "Ihisr": sp.Matrix(blocks.get("Ihis_r", [])),
         "Ihisk": sp.Matrix(blocks.get("Ihis_i", [])),
+        "Gred_direct": sp.Matrix(structured.get("Gred_direct", sp.zeros(nr, nr))),
+        "Ihisred_direct": _as_column_vector(
+            sp.Matrix(structured.get("Ihisred_direct", sp.zeros(nr, 1))),
+            nr,
+            "Ihisred_direct",
+        ),
         "block_type": structured.get("block_type"),
         "details": structured.get("details", {}),
         "W_runtime_inverse": w_runtime_inverse,
@@ -855,6 +861,19 @@ def _split_matrix_ram_and_code_terms(matrix: sp.Matrix, symbol_table: dict[str, 
     for row in range(matrix.rows):
         for col in range(matrix.cols):
             ram_matrix[row, col], code_matrix[row, col] = _split_expr_ram_and_code(matrix[row, col], symbol_table)
+    return ram_matrix, code_matrix
+
+
+def _split_matrix_by_entry_stage(matrix: sp.Matrix, symbol_table: dict[str, str]) -> tuple[sp.Matrix, sp.Matrix]:
+    matrix = sp.Matrix(matrix)
+    ram_matrix = sp.zeros(matrix.rows, matrix.cols)
+    code_matrix = sp.zeros(matrix.rows, matrix.cols)
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            if classify_expr_stage(matrix[row, col], symbol_table) == "RAM_INIT":
+                ram_matrix[row, col] = matrix[row, col]
+            else:
+                code_matrix[row, col] = matrix[row, col]
     return ram_matrix, code_matrix
 
 
@@ -1386,6 +1405,40 @@ def _c_matrix_set_nonzero_lines(matrix: sp.Matrix, name: str, setter: str = "set
     return lines
 
 
+def _c_matrix_add_nonzero_lines(matrix: sp.Matrix, name: str, setter: str = "set_CODE", getter: str = "get_CODE") -> list[str]:
+    matrix = sp.Matrix(matrix)
+    lines: list[str] = []
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            value = sp.simplify(matrix[row, col])
+            if value != 0:
+                lines.append(
+                    f"    {setter}(&{name}, {row}, {col}, {getter}(&{name}, {row}, {col}) + {_ccode(value)});"
+                )
+    return lines
+
+
+def _c_add_expr(base: str, addition: sp.Expr) -> str:
+    addition = sp.simplify(addition)
+    if addition == 0:
+        return base
+    if base == "0.0":
+        return _ccode(addition)
+    return f"({base}) + ({_ccode(addition)})"
+
+
+def _c_vector_add_nonzero_lines(vector: sp.Matrix, name: str, setter: str = "set_CODE", getter: str = "get_CODE") -> list[str]:
+    vector = _as_column_vector(sp.Matrix(vector), sp.Matrix(vector).rows, name)
+    lines: list[str] = []
+    for row in range(vector.rows):
+        value = sp.simplify(vector[row, 0])
+        if value != 0:
+            lines.append(
+                f"    {setter}(&{name}, {row}, 0, {getter}(&{name}, {row}, 0) + {_ccode(value)});"
+            )
+    return lines
+
+
 def _c_emit_rtds_stage_sections(
     plan: dict | None,
     node_display_names: dict[str, str] | None = None,
@@ -1402,22 +1455,57 @@ def _c_emit_rtds_stage_sections(
     Ihisr = sp.Matrix(plan.get("Ihisr", []))
     Ihisk = sp.Matrix(plan.get("Ihisk", []))
     Gred = sp.Matrix(plan.get("Gred", []))
+    Gred_direct = sp.Matrix(plan.get("Gred_direct", sp.zeros(len(external_nodes), len(external_nodes))))
     W = sp.Matrix(plan.get("W", []))
     w_runtime_inverse = bool(plan.get("W_runtime_inverse"))
     block_type = str(plan.get("block_type") or "")
     details = plan.get("details") or {}
     Gred_stage = analysis.get("Gred_stage") or []
-    ram_Gred = _stage_entries(Gred, Gred_stage, "RAM_INIT")
-    dynamic_gred = any(stage != "RAM_INIT" for row in Gred_stage for stage in row)
-    gred_stage_values = [str(stage) for row in Gred_stage for stage in row]
-    full_gred_code_path = bool(dynamic_gred and gred_stage_values and all(stage != "RAM_INIT" for stage in gred_stage_values))
+    symbol_table = analysis.get("symbol_table") or {}
+    Gred_schur = sp.simplify(Gred - Gred_direct) if Gred.shape == Gred_direct.shape else Gred
+    ram_Gred_schur = _stage_entries(Gred_schur, Gred_stage, "RAM_INIT")
+    code_Gred_schur = sp.simplify(Gred_schur - ram_Gred_schur)
+    ram_Gred_direct, code_Gred_direct = _split_matrix_ram_and_code_terms(Gred_direct, symbol_table)
+    ram_Gred = sp.simplify(ram_Gred_schur + ram_Gred_direct)
+    code_Gred = sp.simplify(code_Gred_schur + code_Gred_direct)
+    dynamic_gred = _matrix_has_nonzero(code_Gred)
+    code_gred_entries = [
+        (row, col)
+        for row in range(code_Gred.rows)
+        for col in range(code_Gred.cols)
+        if sp.simplify(code_Gred[row, col]) != 0
+    ]
+    full_gred_code_path = bool(dynamic_gred and code_gred_entries and len(code_gred_entries) == code_Gred.rows * code_Gred.cols)
     partial_gred_code_path = bool(dynamic_gred and not full_gred_code_path)
-    dynamic_subblock = plan.get("dynamic_subblock") or {}
+    dynamic_subblock = {
+        **detect_rectangular_dynamic_blocks(code_gred_entries),
+        "owner_matrix": Gred_stage,
+        "ram_entries": [
+            (row, col)
+            for row in range(ram_Gred.rows)
+            for col in range(ram_Gred.cols)
+            if sp.simplify(ram_Gred[row, col]) != 0
+        ],
+        "code_entries": code_gred_entries,
+        "unknown_entries": [
+            (row, col)
+            for row in range(code_Gred.rows)
+            for col in range(code_Gred.cols)
+            if row < len(Gred_stage)
+            and col < len(Gred_stage[row])
+            and str(Gred_stage[row][col]) == "UNKNOWN"
+        ],
+    }
     gred_dyn_rows = [int(row) for row in dynamic_subblock.get("rows", [])]
     gred_dyn_cols = [int(col) for col in dynamic_subblock.get("cols", [])]
     rectangular_gred_dyn_path = bool(partial_gred_code_path and dynamic_subblock.get("is_rectangular") and gred_dyn_rows and gred_dyn_cols)
     need_gred_code = bool(dynamic_gred and (full_gred_code_path or not rectangular_gred_dyn_path))
     Ihisred = _as_column_vector(sp.Matrix(plan.get("Ihisred", [])), len(external_nodes), "Ihisred")
+    Ihisred_direct = _as_column_vector(
+        sp.Matrix(plan.get("Ihisred_direct", sp.zeros(len(external_nodes), 1))),
+        len(external_nodes),
+        "Ihisred_direct",
+    )
     Ihisred_stage = [str(stage) for stage in (analysis.get("Ihisred_stage") or [])]
     runtime_w_matrix_path = bool(w_runtime_inverse or (block_type == "diagonal_plus_coupled" and sp.Matrix(details.get("W", [])).rows))
     Ihisred_correction = sp.Matrix(Grk) * W * sp.Matrix(Ihisk) if Grk.rows and W.rows and Ihisk.rows and not runtime_w_matrix_path else sp.zeros(len(external_nodes), 1)
@@ -1463,11 +1551,7 @@ def _c_emit_rtds_stage_sections(
     need_tmp_w_gkr_vr_code = bool(need_vk_vr_path)
     need_tmp_w_ihisk_code = bool(need_vk_ihis_path)
     need_tmp_vk_sum_code = bool(need_vk_vr_path and need_vk_ihis_path)
-    var_g_pairs = (
-        _upper_triangular_stage_node_pairs(external_nodes, Gred_stage, {"CODE_UPDATE", "UNKNOWN", "CODE_PER_STEP"})
-        if dynamic_gred
-        else []
-    )
+    var_g_pairs = _upper_triangular_nonzero_node_pairs(external_nodes, code_Gred) if dynamic_gred else []
     code_g_matrices = []
     if need_Grr_code:
         code_g_matrices.append(Grr)
@@ -1477,6 +1561,8 @@ def _c_emit_rtds_stage_sections(
         code_g_matrices.append(Gkr)
     if need_W_code:
         code_g_matrices.append(W)
+    if dynamic_gred:
+        code_g_matrices.append(code_Gred_direct)
     code_g_symbol_names = _matrix_symbol_names(*code_g_matrices)
     code_ihis_matrices = [Ihisred]
     if need_Ihisr_code or partial_ihisred_code_path:
@@ -1532,7 +1618,7 @@ def _c_emit_rtds_stage_sections(
             *_c_declaration_group("RAM G stamp scalar aliases", ram_g_temp_names_no_elim),
             "",
             "RAM_PASS1:",
-            "    err = 0;",
+            "    int err = 0;",
             *_c_section_warning(
                 "RAM-SIDE G MATRIX VALUE SETUP",
                 [
@@ -1678,14 +1764,17 @@ def _c_emit_rtds_stage_sections(
                     f"Gkr[k,{_c_display_node(col_node, node_display_names)}]. */"
                 ),
                 _scalar_g_name("codeG", row_node, col_node, node_display_names),
-                _gred_alias_formula(
-                    row,
-                    col,
-                    Grr_alias_entries,
-                    Grk_alias_entries,
-                    W_formula_alias_entries,
-                    Gkr_alias_entries,
-                    W.rows or Gkk.rows,
+                _c_add_expr(
+                    _gred_alias_formula(
+                        row,
+                        col,
+                        Grr_alias_entries,
+                        Grk_alias_entries,
+                        W_formula_alias_entries,
+                        Gkr_alias_entries,
+                        W.rows or Gkk.rows,
+                    ),
+                    code_Gred_direct[row, col] if row < code_Gred_direct.rows and col < code_Gred_direct.cols else sp.Integer(0),
                 ),
                 f"Gred[{_c_display_node(row_node, node_display_names)},{_c_display_node(col_node, node_display_names)}]",
             )
@@ -1809,7 +1898,7 @@ def _c_emit_rtds_stage_sections(
         *_c_declaration_group("RAM G stamp scalar aliases", ram_g_temp_names),
         "",
         "RAM_PASS1:",
-        "    err = 0;",
+        "    int err = 0;",
         *_c_section_warning(
             "RAM-SIDE G MATRIX VALUE SETUP",
             [
@@ -1966,6 +2055,7 @@ def _c_emit_rtds_stage_sections(
             "    /* Full Gred CODE path: all reduced entries are CODE-owned, so a full Schur update is allowed. */",
             "    matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);",
             "    matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);",
+            *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code") if _matrix_has_nonzero(code_Gred_direct) else []),
             "    /* Stamp dynamic Gred entries in row-major upper-triangular order. */",
             *[
                 f"    {_var_g_name(row_node, col_node, node_display_names)} = get_CODE(&Gred_code, {row}, {col});"
@@ -1995,6 +2085,10 @@ def _c_emit_rtds_stage_sections(
                     "    matrix_mult_CODE(&tmp_Grk_W_dyn_code, &Grk_dyn_code, &W_code);",
                     "    matrix_mult_CODE(&tmp_Grk_W_Gkr_dyn_code, &tmp_Grk_W_dyn_code, &Gkr_dyn_code);",
                     "    matrix_subtract_CODE(&Gred_dyn_code, &Grr_dyn_code, &tmp_Grk_W_Gkr_dyn_code);",
+                    *_c_matrix_add_nonzero_lines(
+                        _slice_matrix(code_Gred_direct, gred_dyn_rows, gred_dyn_cols),
+                        "Gred_dyn_code",
+                    ),
                 ]
                 if rectangular_gred_dyn_path
                 else []
@@ -2026,6 +2120,7 @@ def _c_emit_rtds_stage_sections(
             "    matrix_mult_CODE(&tmp_Grk_W_ihis_dyn_code, &Grk_ihis_dyn_code, &W_code);",
             "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_dyn_code, &tmp_Grk_W_ihis_dyn_code, &Ihisk_code);",
             "    matrix_subtract_CODE(&Ihisred_dyn_code, &Ihisr_ihis_dyn_code, &tmp_Grk_W_Ihisk_dyn_code);",
+            *_c_vector_add_nonzero_lines(_slice_matrix(Ihisred_direct, ihisred_dyn_rows, [0]), "Ihisred_dyn_code"),
             *[
                 (
                     f"    /* Ihisred[{_c_display_node(external_nodes[index], node_display_names)}] = "
@@ -2041,6 +2136,7 @@ def _c_emit_rtds_stage_sections(
             "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
             "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
             "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+            *_c_vector_add_nonzero_lines(Ihisred_direct, "Ihisred_code"),
         ])
     lines.extend([
         "    /* Node injection currents follow the retained-node order of the reduced system. */",
