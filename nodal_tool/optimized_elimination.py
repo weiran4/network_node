@@ -1913,8 +1913,7 @@ def _c_emit_rtds_stage_sections(
             "RAM-SIDE G MATRIX VALUE SETUP",
             [
                 "Assign or compute every G-related value before any RAM-side use.",
-                "This includes fixed g_mat_over stamping and MATRIX_ set(...) initialization.",
-                "Keep RAM set(...) calls and CODE set_CODE(...) calls in the same row/column order.",
+                "This section stamps only fixed g_mat_over entries; CODE-owned matrices are refreshed in CODE.",
             ],
         ),
     ]
@@ -1972,21 +1971,6 @@ def _c_emit_rtds_stage_sections(
         '                       "RTDS matrix allocation failed for component %s.", Name);',
         "    }",
         *_c_register_lines(code_matrix_names),
-        "",
-        "    /* Same MATRIX_ objects are used from RAM and CODE when needed.",
-        "       RAM uses set/get and matrix_mult; CODE uses set_CODE/get_CODE and matrix_*_CODE. */",
-        *_block_alias_compute_lines(block_alias_entries),
-        *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set") if need_Grr_code else []),
-        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set") if need_Grk_code else []),
-        *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set") if need_Gkr_code else []),
-        *(_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_code", "set") if need_Gkk_code else []),
-        *(["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code else []),
-        *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set") if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
-        *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
-        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
-        *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
-        *(_c_matrix_set_lines(_slice_matrix(Ihisr, ihisred_dyn_rows, [0]), "Ihisr_ihis_dyn_code", "set") if partial_ihisred_code_path else []),
-        *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_ihis_dyn_code", "set", row_map=ihisred_dyn_rows, col_map=list(range(Grk.cols))) if partial_ihisred_code_path else []),
         "",
     ])
     if dynamic_gred:
@@ -2256,6 +2240,13 @@ def _c_emit_rtds_reduction_tail(
     ]
 
 
+def _join_c_draft_lines(lines: Sequence[str]) -> str:
+    draft = "\n".join(lines)
+    if "MATRIX_" in draft and "#include <matrixLIB.h>" not in draft:
+        return "#include <matrixLIB.h>\n" + draft
+    return draft
+
+
 def c_draft_for_structured_formula(
     structured: dict,
     node_display_names: dict[str, str] | None = None,
@@ -2303,7 +2294,7 @@ def c_draft_for_structured_formula(
         *_c_emit_rtds_stage_sections(rtds_stage_plan, node_display_names),
     ]
     if rtds_stage_plan:
-        return "\n".join(lines)
+        return _join_c_draft_lines(lines)
 
     lines.extend([
         "/* Input blocks: I = G * V + Ihis, partitioned as r = retained, k = eliminated. */",
@@ -2328,7 +2319,7 @@ def c_draft_for_structured_formula(
             lines.append(f"inv_D[{index}][{index}] = 1.0 / D[{index}][{index}];")
         lines.append("matrix_Copy(NK, NK, W, inv_D);")
         lines.extend(reduction_tail)
-        return "\n".join(lines)
+        return _join_c_draft_lines(lines)
 
     if block_type == "diagonal_plus_coupled":
         details = structured.get("details", {})
@@ -2391,7 +2382,7 @@ def c_draft_for_structured_formula(
             *_c_copy_subblock("W", "W_SS", kd, kd, ks, ks),
         ])
         lines.extend(reduction_tail)
-        return "\n".join(lines)
+        return _join_c_draft_lines(lines)
 
     lines = [
         *lines,
@@ -2405,4 +2396,4 @@ def c_draft_for_structured_formula(
         f"MATH_matx_invert(NK, &(Gkk[0][0]), NK, &(W[0][0]), NK);",
         *reduction_tail,
     ]
-    return "\n".join(lines)
+    return _join_c_draft_lines(lines)

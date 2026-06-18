@@ -101,6 +101,33 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("RAM_PASS1:\n    int err = 0;", draft)
         self.assertNotIn("STATIC:\n    int err", draft)
 
+    def test_structured_c_draft_includes_matrixlib_when_using_matrix_objects(self):
+        G1, G2 = sp.symbols("G1 G2")
+        nodes = ["A", "X", "B"]
+        G = sp.Matrix([[G1, -G1, 0], [-G1, G1 + G2, -G2], [0, -G2, G2]])
+        structured = build_structured_formula(G, sp.zeros(3, 1), nodes, ["A", "B"], ["X"])
+        plan = build_dependency_stage_plan(structured, {"G1": "CODE_VARIABLE", "G2": "CODE_VARIABLE"})
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertIn("MATRIX_", draft)
+        self.assertIn("#include <matrixLIB.h>", draft)
+
+    def test_code_stage_g_matrices_are_not_prefilled_with_ram_set_calls(self):
+        G1, G2 = sp.symbols("G1 G2")
+        nodes = ["A", "X", "B"]
+        G = sp.Matrix([[G1, -G1, 0], [-G1, G1 + G2, -G2], [0, -G2, G2]])
+        structured = build_structured_formula(G, sp.zeros(3, 1), nodes, ["A", "B"], ["X"])
+        plan = build_dependency_stage_plan(structured, {"G1": "CODE_VARIABLE", "G2": "CODE_VARIABLE"})
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertNotIn("Same MATRIX_ objects are used from RAM and CODE when needed.", draft)
+        self.assertNotIn("set(&Gkr_code", draft)
+        self.assertNotIn("set(&W_code", draft)
+        self.assertIn("set_CODE(&Gkr_code", draft)
+        self.assertIn("set_CODE(&W_code", draft)
+
     def test_no_elimination_c_draft_declares_matrix_error_counter(self):
         G1, G2 = sp.symbols("G1 G2")
         G = sp.Matrix([[G1, -G1], [-G1, G1 + G2]])
