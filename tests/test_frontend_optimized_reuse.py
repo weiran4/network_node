@@ -125,6 +125,31 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("ensureMultiCaseProfilesText(branches);", payload_source)
         self.assertIn("const profiles = parseMultiCaseProfiles();", payload_source)
 
+    def test_multicase_cache_key_ignores_language_for_backend_result_reuse(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("function multiCaseExportCacheKey")
+        end = source.index("async function renderMultiCaseCExportAsync")
+        cache_key_source = source[start:end]
+        self.assertNotIn("language: state.language", cache_key_source)
+        self.assertIn("case_id_symbol: payload.case_id_symbol", cache_key_source)
+        self.assertIn("case_profiles", cache_key_source)
+
+    def test_export_state_persists_optimized_and_multicase_caches(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        export_start = source.index("function circuitStateJson")
+        export_end = source.index("function applyProjectUiState")
+        export_source = source[export_start:export_end]
+        self.assertIn('optimizedEliminationCache: currentCacheSnapshot(optimizedEliminationCache, ["result"])', export_source)
+        self.assertIn('multiCaseExportCache: currentCacheSnapshot(multiCaseExportCache, ["result"])', export_source)
+
+        load_start = source.index("function loadCircuitState")
+        load_end = source.index("function appendCircuitState")
+        load_source = source[load_start:load_end]
+        self.assertIn('restoreCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"])', load_source)
+        self.assertIn('restoreCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"])', load_source)
+
     def test_switch_cases_store_constant_g_metadata_per_case(self):
         source = Path("index.html").read_text(encoding="utf-8")
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import sympy as sp
 
 from elimination import eliminate_internal_nodes
-from optimized_elimination_api import build_multi_case_response
+from optimized_elimination_api import build_multi_case_response, _alias_assignment_lines
 
 
 def _series_payload(g1: str, g2: str = "G2", *, internal: bool = True) -> dict:
@@ -174,6 +174,31 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("R2_case_id = 1;", draft)
         self.assertLessEqual(draft.count("Shared Schur flow"), 1)
         self.assertLess(draft.count("Gred"), 8)
+
+    def test_same_branch_code_aliases_share_one_local_case_switch(self):
+        aliases = {
+            "cr_C1_G_eff": {
+                "branch_id": "C1",
+                "owner": "CODE",
+                "case_values": {"0": "AA + G22 + G_rc + w2", "1": "Dabc + G22 + G_rc + w2"},
+            },
+            "cr_C1_G_eff_2": {
+                "branch_id": "C1",
+                "owner": "CODE",
+                "case_values": {"0": "BB + G22 + G_rc + w2", "1": "Dabc + G22 + G_rc + w2"},
+            },
+            "cr_C1_G_eff_3": {
+                "branch_id": "C1",
+                "owner": "CODE",
+                "case_values": {"0": "CC + G22 + G_rc + w2", "1": "Dabc + G22 + G_rc + w2"},
+            },
+        }
+
+        lines = "\n".join(_alias_assignment_lines(aliases, "CODE"))
+
+        self.assertEqual(lines.count("switch (C1_case_id)"), 1)
+        self.assertIn("case 0:\n        cr_C1_G_eff = AA + G22 + G_rc + w2;\n        cr_C1_G_eff_2 = BB + G22 + G_rc + w2;\n        cr_C1_G_eff_3 = CC + G22 + G_rc + w2;", lines)
+        self.assertIn("case 1:\n        cr_C1_G_eff = Dabc + G22 + G_rc + w2;\n        cr_C1_G_eff_2 = Dabc + G22 + G_rc + w2;\n        cr_C1_G_eff_3 = Dabc + G22 + G_rc + w2;", lines)
 
     def test_mult_case_test_fixture_uses_alias_template_not_single_profile_fallback(self):
         data = json.loads(Path("exports/mult_case_test.json").read_text(encoding="utf-8"))

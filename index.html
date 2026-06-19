@@ -5926,6 +5926,8 @@
         reducedEquationCache: currentReducedCacheSnapshot(),
         branchCurrentCache: currentCacheSnapshot(branchCurrentCache, ["html"]),
         pythonDraftCache: currentCacheSnapshot(pythonDraftCache, ["result"]),
+        optimizedEliminationCache: currentCacheSnapshot(optimizedEliminationCache, ["result"]),
+        multiCaseExportCache: currentCacheSnapshot(multiCaseExportCache, ["result"]),
         nextBranch: state.nextBranch,
         nextTransformer: state.nextTransformer,
         nextCustom: state.nextCustom,
@@ -5971,6 +5973,11 @@
         const active = currentCanvas() || state.canvases[0];
         state.activeCanvasId = active.id;
         applyCanvasData(active.data || blankCanvasData(active.name));
+        restoreReducedCacheSnapshot(data.reducedEquationCache || []);
+        restoreCacheSnapshot(branchCurrentCache, data.branchCurrentCache || [], ["html"]);
+        restoreCacheSnapshot(pythonDraftCache, data.pythonDraftCache || [], ["result"]);
+        restoreCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"]);
+        restoreCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"]);
         render();
         return;
       }
@@ -6002,6 +6009,8 @@
       restoreReducedCacheSnapshot(data.reducedEquationCache || []);
       restoreCacheSnapshot(branchCurrentCache, data.branchCurrentCache || [], ["html"]);
       restoreCacheSnapshot(pythonDraftCache, data.pythonDraftCache || [], ["result"]);
+      restoreCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"]);
+      restoreCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"]);
       render();
     }
 
@@ -9116,7 +9125,6 @@
 
     function multiCaseExportCacheKey(payload) {
       return JSON.stringify({
-        language: state.language,
         case_id_symbol: payload.case_id_symbol,
         eligible_branches: payload.eligible_branches,
         case_profiles: payload.case_profiles?.map(profile => ({

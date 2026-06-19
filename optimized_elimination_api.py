@@ -1205,26 +1205,34 @@ def _multicase_local_case_lines(case_id_symbol: str, profiles: list[dict], branc
 
 
 def _alias_assignment_lines(aliases: dict[str, dict], wanted_owner: str) -> list[str]:
-    selected = {
-        alias: info
+    selected = [
+        (alias, info)
         for alias, info in aliases.items()
         if info.get("owner") == wanted_owner
-    }
+    ]
     if not selected:
         return []
     lines = [f"    /* Resolve {wanted_owner} multi-case effective aliases as full values, never deltas. */"]
-    for alias, info in selected.items():
+    grouped: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
+    for alias, info in selected:
         branch_id = info["branch_id"]
         local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
         case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
+        grouped.setdefault(local_name, []).append((alias, info, case_values))
+
+    for local_name, entries in grouped.items():
+        case_indices = sorted({case_index for _alias, _info, case_values in entries for case_index in case_values})
         lines.append(f"    switch ({local_name}) {{")
-        for case_index in sorted(case_values):
+        for case_index in case_indices:
             lines.append(f"    case {case_index}:")
-            lines.append(f"        {alias} = {_ccode(case_values[case_index])};")
+            for alias, _info, case_values in entries:
+                default_expr = case_values[min(case_values)] if case_values else sp.Integer(0)
+                lines.append(f"        {alias} = {_ccode(case_values.get(case_index, default_expr))};")
             lines.append("        break;")
-        default_expr = case_values[min(case_values)] if case_values else sp.Integer(0)
         lines.append("    default:")
-        lines.append(f"        {alias} = {_ccode(default_expr)};")
+        for alias, _info, case_values in entries:
+            default_expr = case_values[min(case_values)] if case_values else sp.Integer(0)
+            lines.append(f"        {alias} = {_ccode(default_expr)};")
         lines.append("        break;")
         lines.append("    }")
     return lines
