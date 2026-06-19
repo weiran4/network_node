@@ -1,11 +1,16 @@
 import unittest
 import json
+import time
 from pathlib import Path
 
 import sympy as sp
 
 from elimination import eliminate_internal_nodes
-from optimized_elimination_api import build_multi_case_response, _alias_assignment_lines
+from optimized_elimination_api import (
+    build_multi_case_response,
+    _alias_assignment_lines,
+    _build_multicase_alias_template_payload,
+)
 
 
 def _series_payload(g1: str, g2: str = "G2", *, internal: bool = True) -> dict:
@@ -174,6 +179,128 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("R2_case_id = 1;", draft)
         self.assertLessEqual(draft.count("Shared Schur flow"), 1)
         self.assertLess(draft.count("Gred"), 8)
+
+    def test_composite_entries_use_existing_aliases_without_exponential_search(self):
+        nodes = [f"N{i}" for i in range(6)]
+
+        def payload(r1_value: str, r2_value: str) -> dict:
+            matrix = [["0" for _ in nodes] for _ in nodes]
+            matrix[0][0] = r1_value
+            matrix[0][1] = r2_value
+            for index in range(1, 5):
+                matrix[index][0] = f"{index + 1}*({r1_value})"
+                matrix[index][1] = f"{index + 1}*({r2_value})"
+                matrix[index][2] = f"{index + 2}*({r1_value})"
+            matrix[5][5] = f"({r1_value}) + ({r2_value})"
+            return {
+                "all_nodes": nodes,
+                "external_nodes": nodes,
+                "internal_nodes": [],
+                "ground_nodes": [],
+                "node_display_names": {node: node for node in nodes},
+                "G_full": matrix,
+                "G_full_tagged": matrix,
+                "Ihis_full": ["0" for _ in nodes],
+                "Ihis_full_tagged": ["0" for _ in nodes],
+                "direct_retained_stamps": [],
+                "symbol_dependency_table": _deps("A0", "A1", "B0", "B1"),
+                "symbol_dependency_table_tagged": _deps("A0", "A1", "B0", "B1"),
+            }
+
+        profiles = [
+            {"name": "case 0", "case_map": {"R1": 0, "R2": 0}, "payload": payload("A0", "B0")},
+            {"name": "case 1", "case_map": {"R1": 0, "R2": 1}, "payload": payload("A0", "B1")},
+            {"name": "case 2", "case_map": {"R1": 1, "R2": 0}, "payload": payload("A1", "B0")},
+            {"name": "case 3", "case_map": {"R1": 1, "R2": 1}, "payload": payload("A1", "B1")},
+        ]
+
+        start = time.perf_counter()
+        alias_model = _build_multicase_alias_template_payload({"case_profiles": profiles})
+        elapsed = time.perf_counter() - start
+
+        self.assertLess(elapsed, 1.0)
+        composite = alias_model["template_payload"]["G_full"][5][5]
+        self.assertIn("cr_R1_G_eff", composite)
+        self.assertIn("cr_R2_G_eff", composite)
+
+    def test_overlapping_case_sources_fall_back_to_profile_resolved_input_alias(self):
+        nodes = ["N1", "N2"]
+
+        def payload(value: str) -> dict:
+            return {
+                "all_nodes": nodes,
+                "external_nodes": nodes,
+                "internal_nodes": [],
+                "ground_nodes": [],
+                "node_display_names": {node: node for node in nodes},
+                "G_full": [[value, "0"], ["0", "0"]],
+                "G_full_tagged": [[value, "0"], ["0", "0"]],
+                "Ihis_full": ["0", "0"],
+                "Ihis_full_tagged": ["0", "0"],
+                "direct_retained_stamps": [],
+                "symbol_dependency_table": _deps("AA", "Dabc", "G22", "Grc", "w2"),
+                "symbol_dependency_table_tagged": _deps("AA", "Dabc", "G22", "Grc", "w2"),
+            }
+
+        profiles = [
+            {"name": "case 0", "case_map": {"C1": 0, "C2": 0}, "payload": payload("AA + 2*G22 + Grc + 2*w2")},
+            {"name": "case 1", "case_map": {"C1": 0, "C2": 1}, "payload": payload("Dabc + 2*G22 + Grc + 2*w2")},
+            {"name": "case 2", "case_map": {"C1": 1, "C2": 0}, "payload": payload("AA + G22 + Grc + w2")},
+            {"name": "case 3", "case_map": {"C1": 1, "C2": 1}, "payload": payload("Dabc + G22 + Grc + w2")},
+        ]
+
+        alias_model = _build_multicase_alias_template_payload({"case_profiles": profiles})
+
+        self.assertEqual(alias_model["template_payload"]["G_full"][0][0], "cr_G_0_0_eff")
+        alias = alias_model["aliases"]["cr_G_0_0_eff"]
+        self.assertEqual(alias["selector"], "global")
+        self.assertEqual(alias["case_values"]["3"], "Dabc + G22 + Grc + w2")
+
+    def test_general_symmetric_3x3_gkk_uses_fast_inverse(self):
+        def payload(diagonal: str, offdiag: str) -> dict:
+            deps = _deps("P", "Q", "D0", "D1", "C0", "C1", code=("P", "Q", "D0", "D1", "C0", "C1"))
+            return {
+                "all_nodes": ["A", "B", "K1", "K2", "K3"],
+                "external_nodes": ["A", "B"],
+                "internal_nodes": ["K1", "K2", "K3"],
+                "ground_nodes": [],
+                "node_display_names": {"A": "A", "B": "B", "K1": "K1", "K2": "K2", "K3": "K3"},
+                "G_full": [
+                    ["P", "0", "-P", "0", "0"],
+                    ["0", "Q", "0", "-Q", "0"],
+                    ["-P", "0", diagonal, offdiag, offdiag],
+                    ["0", "-Q", offdiag, diagonal, offdiag],
+                    ["0", "0", offdiag, offdiag, diagonal],
+                ],
+                "G_full_tagged": [
+                    ["P", "0", "-P", "0", "0"],
+                    ["0", "Q", "0", "-Q", "0"],
+                    ["-P", "0", diagonal, offdiag, offdiag],
+                    ["0", "-Q", offdiag, diagonal, offdiag],
+                    ["0", "0", offdiag, offdiag, diagonal],
+                ],
+                "Ihis_full": ["0", "0", "0", "0", "0"],
+                "Ihis_full_tagged": ["0", "0", "0", "0", "0"],
+                "direct_retained_stamps": [],
+                "symbol_dependency_table": deps,
+                "symbol_dependency_table_tagged": deps,
+            }
+
+        response = build_multi_case_response(
+            {
+                "mode": "multi_case_c_export",
+                "case_id_symbol": "case_id",
+                "case_profiles": [
+                    {"name": "case 0", "case_map": {"R1": 0}, "payload": payload("D0", "C0")},
+                    {"name": "case 1", "case_map": {"R1": 1}, "payload": payload("D1", "C1")},
+                ],
+            }
+        )
+
+        draft = response["multi_case"]["c_draft"]
+        self.assertEqual(response["multi_case"]["block_type"], "general")
+        self.assertIn("mat_3x3_sym_inv_code", draft)
+        self.assertNotIn("MATH_matx_invert(NK", draft)
 
     def test_same_branch_code_aliases_share_one_local_case_switch(self):
         aliases = {

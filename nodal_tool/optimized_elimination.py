@@ -891,6 +891,17 @@ def _matrix_has_nonzero(matrix: sp.Matrix) -> bool:
     return any(sp.simplify(value) != 0 for value in matrix)
 
 
+def _matrix_is_symmetric_light(matrix: sp.Matrix) -> bool:
+    matrix = sp.Matrix(matrix)
+    if matrix.rows != matrix.cols:
+        return False
+    for row in range(matrix.rows):
+        for col in range(row + 1, matrix.cols):
+            if sp.simplify(matrix[row, col] - matrix[col, row]) != 0:
+                return False
+    return True
+
+
 def _ram_overlay_node_subset(matrix: sp.Matrix, nodes: Sequence[str]) -> tuple[list[str], dict[int, int]]:
     matrix = sp.Matrix(matrix)
     touched: set[int] = set()
@@ -1601,6 +1612,11 @@ def _c_emit_rtds_stage_sections(
     need_tmp_w_gkr_vr_code = bool(need_vk_vr_path)
     need_tmp_w_ihisk_code = bool(need_vk_ihis_path)
     need_tmp_vk_sum_code = bool(need_vk_vr_path and need_vk_ihis_path)
+    use_fast_symmetric_gkk_inverse = bool(
+        need_Gkk_code
+        and Gkk.rows in (1, 2, 3)
+        and _matrix_is_symmetric_light(Gkk)
+    )
     var_g_pairs = (
         _upper_triangular_stage_node_pairs(external_nodes, Gred_stage, {"CODE_UPDATE", "UNKNOWN", "CODE_PER_STEP"})
         if dynamic_gred
@@ -2079,7 +2095,11 @@ def _c_emit_rtds_stage_sections(
                 *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE") if need_Grk_code else []),
                 *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE") if need_Gkr_code else []),
                 *(_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_code", "set_CODE") if need_Gkk_code else []),
-                *(["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code else []),
+                *(
+                    _matrix_code_sym_inverse_lines("Gkk_code", "W_code", Gkk.rows)
+                    if use_fast_symmetric_gkk_inverse
+                    else (["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code else [])
+                ),
                 *(_diagonal_plus_coupled_w_code_lines(details) if structured_w_builder else []),
                 *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE") if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
                 *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),

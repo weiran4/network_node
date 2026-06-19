@@ -9148,10 +9148,13 @@
         const caseValues = Object.entries(info.case_values || {})
           .map(([caseIndex, expr]) => `case ${caseIndex}: ${expr}`)
           .join("; ");
+        const sourceLabel = info.selector === "global"
+          ? optText("重叠输入项", "Overlapping input entry")
+          : branchLabel(branchById.get(info.branch_id) || findBranch(info.branch_id) || { id: info.branch_id });
         return `
           <tr>
             <td>${escapeHtml(alias)}</td>
-            <td>${escapeHtml(branchLabel(branchById.get(info.branch_id) || findBranch(info.branch_id) || { id: info.branch_id }))}</td>
+            <td>${escapeHtml(sourceLabel)}</td>
             <td>${escapeHtml(info.kind || "-")}</td>
             <td>${escapeHtml(info.owner || "-")}</td>
             <td>${escapeHtml(caseValues || "-")}</td>
@@ -9223,6 +9226,7 @@
 
     function multiCaseExportCacheKey(payload) {
       return JSON.stringify({
+        version: "multi-case-fast-symmetric-inverse-v2",
         case_id_symbol: payload.case_id_symbol,
         eligible_branches: payload.eligible_branches,
         case_profiles: payload.case_profiles?.map(profile => ({

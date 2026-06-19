@@ -246,7 +246,7 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertEqual(plan["dependency_analysis"]["Gred_stage"], [["RAM_INIT", "RAM_INIT"], ["RAM_INIT", "CODE_UPDATE"]])
         self.assertEqual(plan["Gred"], borrowed_model["Gred"])
 
-    def test_general_stage_draft_inverts_gkk_at_runtime_when_w_is_not_symbolic(self):
+    def test_general_stage_draft_uses_fast_symmetric_gkk_inverse_when_available(self):
         G1, G2, G3, G4, G5, G6 = sp.symbols("G1 G2 G3 G4 G5 G6")
         nodes = ["A", "X", "Y", "B"]
         G = sp.Matrix(
@@ -274,7 +274,8 @@ class OptimizedEliminationTests(unittest.TestCase):
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
         self.assertIn("MATRIX_ Gkk_code", draft)
-        self.assertIn("MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);", draft)
+        self.assertIn("mat_2x2_sym_inv_code", draft)
+        self.assertNotIn("MATH_matx_invert(NK", draft)
         self.assertNotIn("1.0/(G1*G3", draft)
 
     def test_diagonal_plus_coupled_can_skip_symbolic_w_details_for_borrowed_stage(self):
@@ -413,7 +414,8 @@ class OptimizedEliminationTests(unittest.TestCase):
         draft = response["structured"]["c_draft"]
         self.assertIn("RTDS-style C draft for structured node elimination", draft)
         self.assertIn("MATRIX_ Gkk_code", draft)
-        self.assertIn("MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);", draft)
+        self.assertIn("mat_2x2_sym_inv_code", draft)
+        self.assertNotIn("MATH_matx_invert(NK", draft)
         self.assertNotIn("Sequential runtime C draft", draft)
 
     def test_optimized_api_uses_supplied_reduced_dependency_without_re_eliminating(self):

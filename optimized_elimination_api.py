@@ -766,28 +766,127 @@ def _alias_name(branch_id: str, kind: str, index: int) -> str:
     return base if index == 1 else f"{base}_{index}"
 
 
+def _matrix_entry_alias_name(key: str, row: int, col: int) -> str:
+    kind = "G" if key == "G_full" else "Ihis"
+    return f"cr_{kind}_{row}_{col}_eff"
+
+
+def _profile_delta(values: Sequence[sp.Expr]) -> tuple[sp.Expr, ...]:
+    if not values:
+        return ()
+    base = sp.sympify(values[0])
+    return tuple(sp.expand(sp.sympify(value) - base) for value in values[1:])
+
+
+def _delta_terms(values: Sequence[sp.Expr]) -> dict[tuple[int, sp.Expr], sp.Expr]:
+    terms: dict[tuple[int, sp.Expr], sp.Expr] = {}
+    for index, expr in enumerate(values):
+        expr = sp.expand(sp.sympify(expr))
+        if expr == 0:
+            continue
+        for term in sp.Add.make_args(expr):
+            coeff, base = sp.sympify(term).as_coeff_Mul()
+            key = (index, base)
+            terms[key] = terms.get(key, sp.Integer(0)) + coeff
+    return {key: coeff for key, coeff in terms.items() if coeff != 0}
+
+
 def _represent_with_existing_aliases(values: Sequence[sp.Expr], grouped: dict) -> sp.Expr | None:
     groups = list(grouped.values())
     if not groups:
         return None
-    choices = [-1, 0, 1]
-    for coeffs in itertools.product(choices, repeat=len(groups)):
-        if not any(coeffs):
-            continue
-        residuals: list[sp.Expr] = []
-        for profile_index, value in enumerate(values):
-            residual = sp.sympify(value)
-            for coeff, group in zip(coeffs, groups):
-                if coeff:
-                    residual -= coeff * group["profile_values"][profile_index]
-            residuals.append(sp.expand(residual))
-        if all(_expr_equal_light(residuals[0], residual) for residual in residuals[1:]):
-            expr = residuals[0]
-            for coeff, group in zip(coeffs, groups):
-                if coeff:
-                    expr += coeff * sp.Symbol(group["alias"])
-            return sp.expand(expr)
-    return None
+    target_delta = _profile_delta(values)
+    target_terms = _delta_terms(target_delta)
+    if not target_terms:
+        return sp.sympify(values[0])
+
+    target_keys = set(target_terms)
+    candidates: list[dict] = []
+    for group in groups:
+        group_delta = _profile_delta(group["profile_values"])
+        group_terms = _delta_terms(group_delta)
+        if group_terms and (target_keys & set(group_terms)):
+            candidates.append({**group, "delta": group_delta, "terms": group_terms})
+
+    for coeff in (-1, 1):
+        for group in candidates:
+            if all(_expr_equal_light(target, coeff * delta) for target, delta in zip(target_delta, group["delta"])):
+                expr = sp.sympify(values[0]) - coeff * group["profile_values"][0]
+                expr += coeff * sp.Symbol(group["alias"])
+                return sp.expand(expr)
+
+    if not candidates:
+        return None
+
+    keys = sorted(
+        set(target_terms).union(*(set(candidate["terms"]) for candidate in candidates)),
+        key=lambda item: (item[0], str(item[1])),
+    )
+    matrix = sp.Matrix(
+        [
+            [candidate["terms"].get(key, sp.Integer(0)) for candidate in candidates]
+            for key in keys
+        ]
+    )
+    target = sp.Matrix([target_terms.get(key, sp.Integer(0)) for key in keys])
+    try:
+        solutions = sp.linsolve((matrix, target))
+    except Exception:
+        return None
+    if not solutions:
+        return None
+    solution = next(iter(solutions), None)
+    if solution is None:
+        return None
+    free_symbols = sorted(
+        set().union(*(item.free_symbols for item in solution)),
+        key=lambda symbol: symbol.name,
+    )
+    coeffs = [sp.simplify(item.subs({symbol: sp.Integer(0) for symbol in free_symbols})) for item in solution]
+    if not all(coeff in (sp.Integer(-1), sp.Integer(0), sp.Integer(1)) for coeff in coeffs):
+        return None
+
+    expr = sp.sympify(values[0])
+    for coeff, group in zip(coeffs, candidates):
+        if coeff:
+            expr -= coeff * group["profile_values"][0]
+            expr += coeff * sp.Symbol(group["alias"])
+    expr = sp.expand(expr)
+    for profile_index, value in enumerate(values):
+        resolved = expr
+        for coeff, group in zip(coeffs, candidates):
+            if coeff:
+                resolved = resolved.subs(sp.Symbol(group["alias"]), group["profile_values"][profile_index])
+        if not _expr_equal_light(resolved, value):
+            return None
+    return expr
+
+
+def _add_global_profile_alias(
+    *,
+    aliases: dict[str, dict],
+    replacements: dict[tuple[str, int, int], sp.Expr],
+    symbol_table: dict,
+    key: str,
+    row: int,
+    col: int,
+    values: Sequence[sp.Expr],
+) -> None:
+    alias = _matrix_entry_alias_name(key, row, col)
+    case_values = {index: sp.sympify(value) for index, value in enumerate(values)}
+    case_owners = {index: _expr_stage(expr, symbol_table) for index, expr in case_values.items()}
+    aliases[alias] = {
+        "branch_id": "__global__",
+        "selector": "global",
+        "kind": "G" if key == "G_full" else "Ihis",
+        "owner": _promote_owner(case_owners.values()),
+        "case_values": {
+            str(index): _expr_to_payload_text(expr)
+            for index, expr in case_values.items()
+        },
+        "case_owners": case_owners,
+    }
+    replacements[(key, row, col)] = sp.Symbol(alias)
 
 
 def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
@@ -899,10 +998,15 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
             made_progress = True
         unresolved_composite_entries = next_unresolved
 
-    if unresolved_composite_entries:
-        key, row, col, _values = unresolved_composite_entries[0]
-        raise ValueError(
-            f"multi-case alias template cannot represent {key}[{row},{col}] with local branch aliases"
+    for key, row, col, values in unresolved_composite_entries:
+        _add_global_profile_alias(
+            aliases=aliases,
+            replacements=replacements,
+            symbol_table=symbol_table,
+            key=key,
+            row=row,
+            col=col,
+            values=values,
         )
 
     template_payload = json.loads(json.dumps(base_payload))
@@ -1204,7 +1308,7 @@ def _multicase_local_case_lines(case_id_symbol: str, profiles: list[dict], branc
     return lines
 
 
-def _alias_assignment_lines(aliases: dict[str, dict], wanted_owner: str) -> list[str]:
+def _alias_assignment_lines(aliases: dict[str, dict], wanted_owner: str, case_id_symbol: str = "case_id") -> list[str]:
     selected = [
         (alias, info)
         for alias, info in aliases.items()
@@ -1216,7 +1320,7 @@ def _alias_assignment_lines(aliases: dict[str, dict], wanted_owner: str) -> list
     grouped: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
     for alias, info in selected:
         branch_id = info["branch_id"]
-        local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
+        local_name = case_id_symbol if info.get("selector") == "global" else f"{_c_identifier_name(branch_id, 'branch')}_case_id"
         case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
         grouped.setdefault(local_name, []).append((alias, info, case_values))
 
@@ -1266,11 +1370,11 @@ def _insert_multicase_alias_layer(
 
     ram_lines = (
         _multicase_local_case_lines(case_id_symbol, profiles, branch_ids)
-        + _alias_assignment_lines(aliases, "RAM")
+        + _alias_assignment_lines(aliases, "RAM", case_id_symbol)
     )
     draft = _insert_after_label(draft, "RAM_PASS1:", ram_lines)
 
-    code_lines = _alias_assignment_lines(aliases, "CODE") + _alias_assignment_lines(aliases, "CODE_PER_STEP")
+    code_lines = _alias_assignment_lines(aliases, "CODE", case_id_symbol) + _alias_assignment_lines(aliases, "CODE_PER_STEP", case_id_symbol)
     marker = "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */"
     if code_lines and marker in draft:
         draft = draft.replace(marker, "\n".join(code_lines) + "\n" + marker, 1)
@@ -1285,20 +1389,23 @@ def _insert_multicase_alias_layer(
     return _prepend_c_header_after_includes(draft, header)
 
 
-def _profile_alias_substitutions(profile: dict, aliases: dict[str, dict]) -> dict[sp.Symbol, sp.Expr]:
+def _profile_alias_substitutions(profile: dict, aliases: dict[str, dict], profile_index: int | None = None) -> dict[sp.Symbol, sp.Expr]:
     substitutions: dict[sp.Symbol, sp.Expr] = {}
     for alias, info in aliases.items():
-        branch_id = info.get("branch_id") or ""
-        local_case = _profile_case_index(profile, branch_id, 0)
         case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
+        if info.get("selector") == "global":
+            local_case = int(profile_index or 0)
+        else:
+            branch_id = info.get("branch_id") or ""
+            local_case = _profile_case_index(profile, branch_id, 0)
         if local_case not in case_values and case_values:
             local_case = min(case_values)
         substitutions[sp.Symbol(alias)] = case_values.get(local_case, sp.Integer(0))
     return substitutions
 
 
-def _profile_final_expr(expr: sp.Expr, profile: dict, aliases: dict[str, dict]) -> sp.Expr:
-    return sp.sympify(expr).xreplace(_profile_alias_substitutions(profile, aliases))
+def _profile_final_expr(expr: sp.Expr, profile: dict, aliases: dict[str, dict], profile_index: int | None = None) -> sp.Expr:
+    return sp.sympify(expr).xreplace(_profile_alias_substitutions(profile, aliases, profile_index))
 
 
 def _profile_symbol_table(profile: dict) -> dict:
@@ -1330,7 +1437,7 @@ def _conditional_final_g_plans(
         for col in range(row, nr):
             per_case = []
             for index, profile in enumerate(profiles):
-                expr = _profile_final_expr(template_gred[row, col], profile, aliases)
+                expr = _profile_final_expr(template_gred[row, col], profile, aliases, index)
                 stage = _expr_stage(expr, _profile_symbol_table(profile))
                 per_case.append({"index": index, "expr": expr, "stage": stage})
             if all(_expr_equal_light(item["expr"], 0) for item in per_case):
@@ -1356,8 +1463,8 @@ def _has_mixed_final_g_stages(
     for row in range(template_gred.rows):
         for col in range(row, template_gred.cols):
             stages = {
-                _expr_stage(_profile_final_expr(template_gred[row, col], profile, aliases), _profile_symbol_table(profile))
-                for profile in profiles
+                _expr_stage(_profile_final_expr(template_gred[row, col], profile, aliases, index), _profile_symbol_table(profile))
+                for index, profile in enumerate(profiles)
             }
             if len(stages) > 1:
                 return True
@@ -1713,9 +1820,9 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         owners = set((info.get("case_owners") or {}).values())
         if len(owners) > 1:
             warnings.append(
-                f"Warning: {alias} has mixed RAM/CODE ownership across cases. "
-                "This export assumes case_id is fixed before simulation and must not change at runtime. "
-                "If case_id changes during runtime, RAM-stamped values will not be withdrawn and results may be incorrect."
+                f"Warning: {alias} has mixed case owners {sorted(owners)}; "
+                f"promoted to {info.get('owner')} for safety. "
+                "case_id is fixed before simulation and must not change at runtime."
             )
     gvalue_conditions: list[dict] = []
     has_internal_recovery = bool(result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [])
@@ -1742,8 +1849,8 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         )
         warnings.append(
             "Warning: final G entries have mixed RAM/CODE ownership across cases. "
-            "This export assumes case_id is fixed before simulation and must not change at runtime. "
-            "If case_id changes during runtime, RAM-stamped values will not be withdrawn and results may be incorrect."
+            "CODE-owned entries are enabled with case conditions. "
+            "case_id is fixed before simulation and must not change at runtime."
         )
         warnings.append(
             "case_id must be fixed before simulation and must not change at runtime; "
@@ -1770,8 +1877,8 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             )
             warnings.append(
                 "Warning: final G entries have mixed RAM/CODE ownership across cases. "
-                "This export assumes case_id is fixed before simulation and must not change at runtime. "
-                "If case_id changes during runtime, RAM-stamped values will not be withdrawn and results may be incorrect."
+                "CODE-owned entries are enabled with case conditions. "
+                "case_id is fixed before simulation and must not change at runtime."
             )
     return {
         "ok": True,
