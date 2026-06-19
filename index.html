@@ -2606,7 +2606,7 @@
         </button>
       </div>
       <div class="modal-body">
-        <p class="modal-help">文件会保存到 E:\network_node\exports。输入新文件名，或选择已有文件名覆盖。</p>
+        <p class="modal-help">可另存到任意文件夹；“保存 JSON”仍会保存到 E:\network_node\exports。输入新文件名，或选择已有文件名覆盖。</p>
         <div class="field">
           <label for="exportFileName">文件名</label>
           <input id="exportFileName" value="branch-builder-circuit.json">
@@ -2621,6 +2621,7 @@
       </div>
       <div class="modal-footer">
         <button class="text-button" id="copyExportText">复制 JSON</button>
+        <button class="text-button" id="saveExportAsFile">另存为...</button>
         <button class="text-button primary" id="downloadExportText">保存 JSON</button>
       </div>
     </div>
@@ -3125,6 +3126,7 @@
       "顺时针旋转 90°": "Rotate 90°",
       "删除选中项": "Delete",
       "拖动调整输出窗口高度": "Drag to resize output",
+      "拖动调整右侧栏宽度": "Drag to resize side panel",
       "支路电流": "Branch Currents",
       "节点方程": "Node Equations",
       "消去版本": "Reduced",
@@ -3179,18 +3181,25 @@
       "选中支路": "Selected Branch",
       "网络节点": "Network Nodes",
       "导出电路组合": "Export Circuit",
+      "可另存到任意文件夹；“保存 JSON”仍会保存到 E:\\network_node\\exports。输入新文件名，或选择已有文件名覆盖。": "Use Save As to choose any folder; Save JSON still writes to E:\\network_node\\exports. Enter a new file name or select an existing file to overwrite.",
       "文件名": "File Name",
       "已有 JSON": "Existing JSON",
       "不覆盖已有文件": "Do Not Overwrite",
       "复制 JSON": "Copy JSON",
+      "另存为...": "Save As...",
       "保存 JSON": "Save JSON",
       "输出窗口": "Output",
+      "关闭": "Close",
+      "全屏": "Fullscreen",
+      "退出全屏": "Exit Fullscreen",
       "重命名节点": "Rename Node",
       "重命名画布": "Rename Canvas",
       "节点名": "Node Name",
       "画布名": "Canvas Name",
       "选择节点颜色": "Choose Node Color",
       "节点颜色": "Node Color",
+      "拖动排序": "Drag to reorder",
+      "切换外部/内部节点": "Toggle external/internal node",
       "恢复默认": "Reset",
       "保存": "Save",
       "编辑": "Edit",
@@ -6468,7 +6477,7 @@
         copiedAt: Date.now()
       };
       state.pasteCount = 0;
-      statusEl.textContent = `已复制 ${branches.length} 个元件`;
+      statusEl.textContent = optText(`已复制 ${branches.length} 个元件`, `Copied ${branches.length} elements`);
       document.getElementById("pasteTool").disabled = false;
     }
 
@@ -6622,7 +6631,7 @@
       const totalBranches = totalCircuitBranches();
 
       if (!totalBranches) {
-        statusEl.textContent = "所有画布都没有可导出的元件";
+        statusEl.textContent = optText("所有画布都没有可导出的元件", "No elements to export on any canvas");
         return;
       }
 
@@ -6632,7 +6641,9 @@
       exportDialog.classList.add("open");
       exportFileName.focus();
       exportFileName.select();
-      statusEl.textContent = `准备保存 ${state.canvases.length} 个画布、全部 ${totalBranches} 个元件 (${bytes} bytes)`;
+      statusEl.textContent = optText("准备保存" + ` ${state.canvases.length} 个画布、全部 ${totalBranches} 个元件 (${bytes} bytes)`,
+        `Ready to save ${state.canvases.length} canvases with ${totalBranches} total elements (${bytes} bytes)`
+      );
     }
 
     async function saveViaLocalServer(data, filename, bytes) {
@@ -6646,7 +6657,10 @@
           if (!response.ok) continue;
           const result = await response.json();
           if (!result.ok || !result.bytes) continue;
-          statusEl.textContent = `已保存 ${totalCircuitBranches()} 个元件 (${result.bytes} bytes) 到 ${result.path}`;
+          statusEl.textContent = optText(
+            `已保存 ${totalCircuitBranches()} 个元件 (${result.bytes} bytes) 到 ${result.path}`,
+            `Saved ${totalCircuitBranches()} elements (${result.bytes} bytes) to ${result.path}`
+          );
           return true;
         } catch (error) {}
       }
@@ -6654,7 +6668,7 @@
     }
 
     async function refreshExistingExportFiles() {
-      existingExportFiles.innerHTML = `<option value="">不覆盖已有文件</option>`;
+      existingExportFiles.innerHTML = `<option value="">${escapeHtml(tr("不覆盖已有文件"))}</option>`;
       for (const url of localApiUrls("/list-circuits")) {
         try {
           const response = await fetch(url);
@@ -6680,7 +6694,7 @@
         if (saved) {
           closeExportDialog();
         } else {
-          statusEl.textContent = "保存失败：本地保存服务不可用";
+          statusEl.textContent = optText("保存失败：本地保存服务不可用", "Save failed: local save service is unavailable");
         }
       });
     }
@@ -6695,6 +6709,42 @@
       link.remove();
     }
 
+    async function saveExportTextAsFile() {
+      const data = exportText.value || JSON.stringify(circuitStateJson(), null, 2);
+      let filename = exportFileName.value.trim() || "branch-builder-circuit.json";
+      if (!filename.toLowerCase().endsWith(".json")) filename += ".json";
+      const bytes = new Blob([data], { type: "application/json" }).size;
+      if (!window.showSaveFilePicker) {
+        downloadJson(data, filename);
+        statusEl.textContent = optText("当前浏览器不支持选择保存路径，已改用浏览器下载。", "This browser cannot choose a save path, so the JSON was downloaded instead.");
+        closeExportDialog();
+        return;
+      }
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [
+            {
+              description: "JSON",
+              accept: { "application/json": [".json"] }
+            }
+          ]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(data);
+        await writable.close();
+        statusEl.textContent = optText(`已另存 JSON (${bytes} bytes)`, `JSON saved (${bytes} bytes)`);
+        closeExportDialog();
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          statusEl.textContent = optText("已取消另存为", "Save As canceled");
+          return;
+        }
+        const separator = state.language === "zh" ? "：" : ": ";
+        statusEl.textContent = `${optText("另存为失败", "Save As failed")}${separator}${error.message || String(error)}`;
+      }
+    }
+
     function localApiUrls(path) {
       const cleanPath = path.startsWith("/") ? path : `/${path}`;
       const urls = [];
@@ -6707,12 +6757,12 @@
       const text = exportText.value;
       try {
         await navigator.clipboard.writeText(text);
-        statusEl.textContent = "已复制 JSON";
+        statusEl.textContent = optText("已复制 JSON", "JSON copied");
       } catch (error) {
         exportText.focus();
         exportText.select();
         document.execCommand("copy");
-        statusEl.textContent = "已选中 JSON";
+        statusEl.textContent = optText("已选中 JSON", "JSON selected");
       }
     }
 
@@ -6848,7 +6898,7 @@
     function updateOutputFullscreenButton() {
       const button = document.getElementById("toggleOutputFullscreen");
       const active = outputDialogModal.classList.contains("fullscreen");
-      button.title = active ? "退出全屏" : "全屏";
+      button.title = tr(active ? "退出全屏" : "全屏");
       button.setAttribute("aria-label", button.title);
     }
 
@@ -7000,10 +7050,10 @@
         commitHistory();
         const result = appendCircuitState(data);
         statusEl.textContent = result.branches > 0
-          ? `已导入 ${file.name}：新增 ${result.branches} 个元件`
-          : `${file.name} 中没有可导入元件`;
+          ? optText(`已导入 ${file.name}：新增 ${result.branches} 个元件`, `Imported ${file.name}: added ${result.branches} elements`)
+          : optText(`${file.name} 中没有可导入元件`, `No importable elements found in ${file.name}`);
       } catch (error) {
-        statusEl.textContent = error.message || "导入失败";
+        statusEl.textContent = error.message || optText("导入失败", "Import failed");
       } finally {
         importFile.value = "";
       }
@@ -11171,7 +11221,10 @@
         await recomputePackagedBox(branch);
         render();
       } catch (error) {
-        statusEl.textContent = `打包黑盒重算失败：${error.message || String(error)}`;
+        statusEl.textContent = optText(
+          `打包黑盒重算失败：${error.message || String(error)}`,
+          `Packed box recompute failed: ${error.message || String(error)}`
+        );
         render();
       }
     }
@@ -12189,13 +12242,13 @@
                 <button class="node-color-button" ${group.virtualInternal ? "disabled" : `data-node-color-menu="${group.id}"`} type="button" draggable="false" style="background:${rowColor(group)}" title="选择节点颜色" aria-label="选择节点颜色"></button>
                 <span class="node-order-name">${escapeHtml(rowName(group))}</span>
                 <span class="node-order-id">${escapeHtml(group.virtualInternal ? group.branchName : group.id)}</span>
-                <button class="node-internal-button ${rowInternal(group) ? "active" : ""} ${rowGround(group) ? "active" : ""}" ${rowGround(group) ? "disabled" : (group.virtualInternal ? (group.customHidden ? `data-custom-node-external="${group.branchId}:${group.port}"` : `data-packaged-node-external="${group.branchId}:${group.packageKind || "internal"}:${group.internalIndex}"`) : `data-internal-node="${group.id}"`)} type="button" draggable="false" title="${rowGround(group) ? escapeHtml(tr("Ground / V=0")) : (group.virtualInternal ? escapeHtml(tr("隐藏节点会强制作为内部节点参与消元。")) : "切换外部/内部节点")}">
+                <button class="node-internal-button ${rowInternal(group) ? "active" : ""} ${rowGround(group) ? "active" : ""}" ${rowGround(group) ? "disabled" : (group.virtualInternal ? (group.customHidden ? `data-custom-node-external="${group.branchId}:${group.port}"` : `data-packaged-node-external="${group.branchId}:${group.packageKind || "internal"}:${group.internalIndex}"`) : `data-internal-node="${group.id}"`)} type="button" draggable="false" title="${rowGround(group) ? escapeHtml(tr("Ground / V=0")) : (group.virtualInternal ? escapeHtml(tr("隐藏节点会强制作为内部节点参与消元。")) : escapeHtml(tr("切换外部/内部节点")))}">
                   ${tr(rowGround(group) ? "Ground / V=0" : (rowInternal(group) ? "内部" : "外部"))}
                 </button>
                 ${rowExposure(group) ? (rowExposure(group).custom
                   ? `<button class="node-internal-button" data-custom-node-expose="${rowExposure(group).branchId}:${rowExposure(group).port}:${rowExposure(group).exposed ? "hide" : "show"}" type="button" draggable="false">${escapeHtml(tr(rowExposure(group).exposed ? "隐藏" : "暴露"))}</button>`
                   : `<button class="node-internal-button" data-packaged-node-expose="${rowExposure(group).branchId}:${rowExposure(group).kind}:${rowExposure(group).index}:${rowExposure(group).exposed ? "hide" : "show"}" type="button" draggable="false">${escapeHtml(tr(rowExposure(group).exposed ? "隐藏" : "暴露"))}</button>`) : ""}
-                <button class="node-edit-button" ${group.virtualInternal ? "disabled" : `data-rename-node="${group.id}"`} type="button" draggable="false" title="重命名 ${escapeHtml(rowName(group))}" aria-label="重命名 ${escapeHtml(rowName(group))}">
+                <button class="node-edit-button" ${group.virtualInternal ? "disabled" : `data-rename-node="${group.id}"`} type="button" draggable="false" title="${escapeHtml(optText(`重命名 ${rowName(group)}`, `Rename ${rowName(group)}`))}" aria-label="${escapeHtml(optText(`重命名 ${rowName(group)}`, `Rename ${rowName(group)}`))}">
                   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 ${!group.virtualInternal && state.colorPickerNodeId === group.id ? `
@@ -13510,7 +13563,7 @@ function startResizeDrag(branch, handle, event) {
         const wasDragging = drag.dragging;
         state.canvasTabDrag = null;
         if (wasDragging) {
-          statusEl.textContent = "已调整画布顺序";
+          statusEl.textContent = optText("已调整画布顺序", "Canvas order updated");
           renderCanvasTabs();
         } else {
           switchCanvas(drag.id);
@@ -13924,6 +13977,7 @@ function startResizeDrag(branch, handle, event) {
     document.getElementById("exportTool").addEventListener("click", exportCircuit);
     document.getElementById("closeExportDialog").addEventListener("click", closeExportDialog);
     document.getElementById("downloadExportText").addEventListener("click", downloadExportText);
+    document.getElementById("saveExportAsFile").addEventListener("click", saveExportTextAsFile);
     document.getElementById("copyExportText").addEventListener("click", copyExportText);
     existingExportFiles.addEventListener("change", () => {
       if (existingExportFiles.value) exportFileName.value = existingExportFiles.value;

@@ -150,6 +150,41 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn('restoreCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"])', load_source)
         self.assertIn('restoreCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"])', load_source)
 
+    def test_export_dialog_supports_native_save_as_picker(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="saveExportAsFile"', source)
+        self.assertIn("async function saveExportTextAsFile", source)
+        self.assertIn("window.showSaveFilePicker", source)
+        self.assertIn("createWritable()", source)
+        self.assertIn('document.getElementById("saveExportAsFile").addEventListener("click", saveExportTextAsFile)', source)
+        self.assertIn('"另存为..."', source)
+        self.assertIn('"Save As..."', source)
+
+    def test_export_dialog_text_uses_language_aware_strings(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('"可另存到任意文件夹；“保存 JSON”仍会保存到 E:\\\\network_node\\\\exports。输入新文件名，或选择已有文件名覆盖。"', source)
+        self.assertIn('"Use Save As to choose any folder; Save JSON still writes to E:\\\\network_node\\\\exports. Enter a new file name or select an existing file to overwrite."', source)
+        self.assertIn('existingExportFiles.innerHTML = `<option value="">${escapeHtml(tr("不覆盖已有文件"))}</option>`;', source)
+        self.assertIn('optText("所有画布都没有可导出的元件"', source)
+        self.assertIn('optText("准备保存"', source)
+        self.assertIn('optText("保存失败：本地保存服务不可用"', source)
+        self.assertIn('optText("已复制 JSON"', source)
+        self.assertIn('optText("已选中 JSON"', source)
+        self.assertIn('optText(`已复制 ${branches.length} 个元件`', source)
+        self.assertIn('optText(`已导入 ${file.name}：新增 ${result.branches} 个元件`', source)
+        self.assertIn('optText("导入失败"', source)
+        self.assertIn('optText("已调整画布顺序"', source)
+        self.assertIn('"关闭": "Close"', source)
+        self.assertIn('"全屏": "Fullscreen"', source)
+        self.assertIn('"退出全屏": "Exit Fullscreen"', source)
+        self.assertIn('"拖动排序": "Drag to reorder"', source)
+        self.assertIn('"切换外部/内部节点": "Toggle external/internal node"', source)
+        self.assertIn('button.title = tr(active ? "退出全屏" : "全屏");', source)
+        self.assertIn('escapeHtml(tr("切换外部/内部节点"))', source)
+        self.assertIn('optText(`重命名 ${rowName(group)}`', source)
+
     def test_switch_cases_store_constant_g_metadata_per_case(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
