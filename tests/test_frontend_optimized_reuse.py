@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -152,14 +153,23 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
 
     def test_export_dialog_supports_native_save_as_picker(self):
         source = Path("index.html").read_text(encoding="utf-8")
+        server_source = Path("local_server.py").read_text(encoding="utf-8")
+        helper_source = Path("save_as_dialog.py").read_text(encoding="utf-8")
 
         self.assertIn('id="saveExportAsFile"', source)
         self.assertIn("async function saveExportTextAsFile", source)
+        self.assertIn("async function saveViaNativeDialog", source)
         self.assertIn("window.showSaveFilePicker", source)
         self.assertIn("createWritable()", source)
+        self.assertIn('localApiUrls("/save-circuit-as")', source)
+        self.assertIn("当前浏览器和本地保存服务都无法打开保存路径选择器", source)
         self.assertIn('document.getElementById("saveExportAsFile").addEventListener("click", saveExportTextAsFile)', source)
         self.assertIn('"另存为..."', source)
         self.assertIn('"Save As..."', source)
+        self.assertIn('if parsed.path == "/save-circuit-as"', server_source)
+        self.assertIn('run_save_as_dialog(self.read_json())', server_source)
+        self.assertIn("filedialog.asksaveasfilename", helper_source)
+        self.assertIn('file_path.write_text(data, encoding="utf-8")', helper_source)
 
     def test_export_dialog_text_uses_language_aware_strings(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -184,6 +194,40 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn('button.title = tr(active ? "退出全屏" : "全屏");', source)
         self.assertIn('escapeHtml(tr("切换外部/内部节点"))', source)
         self.assertIn('optText(`重命名 ${rowName(group)}`', source)
+
+    def test_editor_group_titles_and_pack_alerts_are_language_aware(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+        zh_to_en = source[source.index("const zhToEn = {"):source.index("function tr")]
+        keys = set(re.findall(r'^\s*"([^"]+)":', zh_to_en, flags=re.MULTILINE))
+        editor_titles = set(re.findall(r'editorGroup\("[^"]+",\s*"([^"]+)"', source))
+
+        self.assertFalse(editor_titles - keys)
+        self.assertIn('"G 常数属性": "G Constant Properties"', source)
+        self.assertIn('alert(tr("选中的部分没有外部边界节点，不能打包成可连接的 Y 节点黑盒。"));', source)
+        self.assertIn('alert(subsystem.warnings.map(item => tr(item)).join("\\n"));', source)
+        self.assertIn('alert(optText(', source)
+        self.assertIn('`Pack failed: ${error.message || String(error)}`', source)
+        self.assertIn('`Local G matrix must be ${ports.length} x ${ports.length} and match port order ${ports.join(", ")}.`', source)
+        self.assertIn('`Observed branch ${index + 1}: V_${ref} in the formula has no matching packaged node.`', source)
+        self.assertIn('"连接节点：依次点击两个端子": "Wire nodes: click two terminals in sequence"', source)
+        self.assertIn('"点击画布添加二端口支路": "Click canvas to add a 2-port branch"', source)
+        self.assertIn('"点击画布添加电压源串联 G": "Click canvas to add a voltage source with series G"', source)
+        self.assertIn('"工具": "Tools"', source)
+        self.assertIn('"电路画布": "Circuit Canvas"', source)
+        self.assertIn('"无": "None"', source)
+        self.assertIn('statusEl.textContent = tr(tool === "wire"', source)
+
+    def test_canvas_hitboxes_stay_compact_for_dense_wiring(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("const BRANCH_HIT_PAD_X = 10;", source)
+        self.assertIn("const BRANCH_HIT_PAD_Y = 8;", source)
+        self.assertIn("const PORT_DRAG_HIT_RADIUS = 14;", source)
+        self.assertIn('r="${PORT_DRAG_HIT_RADIUS}"', source)
+        self.assertIn('bodyX - BRANCH_HIT_PAD_X', source)
+        self.assertNotIn('r="24" data-port-side', source)
+        self.assertNotIn('bodyX - 48', source)
+        self.assertNotIn('bodyWidth + 96', source)
 
     def test_switch_cases_store_constant_g_metadata_per_case(self):
         source = Path("index.html").read_text(encoding="utf-8")

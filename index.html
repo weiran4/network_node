@@ -3037,6 +3037,9 @@
 
     const BASE_VIEW = { width: 1600, height: 1000 };
     const WORLD = { width: 1600, height: 1000 };
+    const BRANCH_HIT_PAD_X = 10;
+    const BRANCH_HIT_PAD_Y = 8;
+    const PORT_DRAG_HIT_RADIUS = 14;
 
     const canvas = document.getElementById("canvas");
     const branchLayer = document.getElementById("branchLayer");
@@ -3084,6 +3087,9 @@
     let pendingCustomPlacement = null;
 
     const zhToEn = {
+      "工具": "Tools",
+      "电路画布": "Circuit Canvas",
+      "无": "None",
       "语言": "Lang",
       "历史": "History",
       "选择": "Select",
@@ -3111,6 +3117,7 @@
       "显示局部端口标签": "Show Local Port Labels",
       "选择 / 拖动": "Select / Drag",
       "添加二端口支路": "Add 2-Port",
+      "点击画布添加二端口支路": "Click canvas to add a 2-port branch",
       "添加电流源": "Add Current Source",
       "点击画布添加电流源": "Click canvas to add a current source",
       "添加 Ground": "Add Ground",
@@ -3120,8 +3127,13 @@
       "Ground node is a fixed-voltage node and cannot be external.": "Ground node is a fixed-voltage node and cannot be external.",
       "Ground node is a fixed-voltage node and cannot be internal.": "Ground node is a fixed-voltage node and cannot be internal.",
       "添加单相变压器": "Add Transformer",
+      "点击画布添加单相变压器": "Click canvas to add a single-phase transformer",
       "添加自定义 N 节点支路": "Add Custom N-Port",
+      "点击画布添加自定义 N 节点支路": "Click canvas to add a custom N-port branch",
+      "添加电压源串联 G": "Add Voltage Source + Series G",
+      "点击画布添加电压源串联 G": "Click canvas to add a voltage source with series G",
       "连接节点": "Wire Nodes",
+      "连接节点：依次点击两个端子": "Wire nodes: click two terminals in sequence",
       "反转电流方向": "Flip Current",
       "顺时针旋转 90°": "Rotate 90°",
       "删除选中项": "Delete",
@@ -3147,6 +3159,7 @@
       "G 是否为常数？": "Treat G as constant?",
       "常数 G 符号": "Constant G Symbols",
       "内部 G 常数属性": "Internal G Constant Properties",
+      "G 常数属性": "G Constant Properties",
       "全部设为常数": "Set All Constant",
       "全部设为非常数": "Set All Non-Constant",
       "常数": "Constant",
@@ -3282,6 +3295,7 @@
       "全局节点方程": "Global Node Equation",
       "Y 节点黑盒说明": "Y Box Notes",
       "这个打包黑盒没有内部消去节点。": "This packaged box has no eliminated internal nodes.",
+      "选中的部分没有外部边界节点，不能打包成可连接的 Y 节点黑盒。": "The selected part has no external boundary nodes, so it cannot be packed into a connectable Y-node black box.",
       "选择一个元件后可编辑节点名、导纳、历史电流和观测方向。": "Select an element to edit node names, conductance, history current, and observer direction.",
       "数学端口顺序": "Math Port Order",
       "显示方向": "Display Direction",
@@ -3825,7 +3839,7 @@
       Object.entries(toolButtons).forEach(([key, button]) => {
         button.classList.toggle("active", key === tool);
       });
-      statusEl.textContent = tool === "wire"
+      statusEl.textContent = tr(tool === "wire"
         ? "连接节点：依次点击两个端子"
         : tool === "branch"
           ? "点击画布添加二端口支路"
@@ -3841,7 +3855,7 @@
                     ? "点击画布添加自定义 N 节点支路"
                     : tool === "pan"
                       ? "拖动画布平移"
-                      : "选择 / 拖动";
+                      : "选择 / 拖动");
       render();
     }
 
@@ -6709,14 +6723,42 @@
       link.remove();
     }
 
+    async function saveViaNativeDialog(data, filename) {
+      for (const url of localApiUrls("/save-circuit-as")) {
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename, data })
+          });
+          if (!response.ok) continue;
+          const result = await response.json();
+          if (result.canceled) {
+            statusEl.textContent = optText("已取消另存为", "Save As canceled");
+            return { handled: true, saved: false };
+          }
+          if (!result.ok || !result.bytes) continue;
+          statusEl.textContent = optText(
+            `已另存 JSON (${result.bytes} bytes) 到 ${result.path}`,
+            `JSON saved (${result.bytes} bytes) to ${result.path}`
+          );
+          return { handled: true, saved: true };
+        } catch (error) {}
+      }
+      return { handled: false, saved: false };
+    }
+
     async function saveExportTextAsFile() {
       const data = exportText.value || JSON.stringify(circuitStateJson(), null, 2);
       let filename = exportFileName.value.trim() || "branch-builder-circuit.json";
       if (!filename.toLowerCase().endsWith(".json")) filename += ".json";
       const bytes = new Blob([data], { type: "application/json" }).size;
       if (!window.showSaveFilePicker) {
+        const localSaved = await saveViaNativeDialog(data, filename);
+        if (localSaved.saved) closeExportDialog();
+        if (localSaved.handled) return;
         downloadJson(data, filename);
-        statusEl.textContent = optText("当前浏览器不支持选择保存路径，已改用浏览器下载。", "This browser cannot choose a save path, so the JSON was downloaded instead.");
+        statusEl.textContent = optText("当前浏览器和本地保存服务都无法打开保存路径选择器，已改用浏览器下载。", "Neither this browser nor the local save service can open a save-path picker, so the JSON was downloaded instead.");
         closeExportDialog();
         return;
       }
@@ -6740,8 +6782,14 @@
           statusEl.textContent = optText("已取消另存为", "Save As canceled");
           return;
         }
-        const separator = state.language === "zh" ? "：" : ": ";
-        statusEl.textContent = `${optText("另存为失败", "Save As failed")}${separator}${error.message || String(error)}`;
+        const localSaved = await saveViaNativeDialog(data, filename);
+        if (localSaved.saved) closeExportDialog();
+        if (localSaved.handled) return;
+        downloadJson(data, filename);
+        statusEl.textContent = optText(
+          "保存路径选择器不可用，已改用浏览器下载。",
+          "The save-path picker is unavailable, so the JSON was downloaded instead."
+        );
       }
     }
 
@@ -9676,11 +9724,11 @@
       const beforeNodeState = captureNodeDisplayState();
       const subsystem = buildSelectedSubsystem(branches);
       if (!subsystem.externalGroups.length) {
-        alert("选中的部分没有外部边界节点，不能打包成可连接的 Y 节点黑盒。");
+        alert(tr("选中的部分没有外部边界节点，不能打包成可连接的 Y 节点黑盒。"));
         return;
       }
       if (subsystem.warnings?.length) {
-        alert(subsystem.warnings.join("\n"));
+        alert(subsystem.warnings.map(item => tr(item)).join("\n"));
         return;
       }
 
@@ -11986,10 +12034,16 @@
       const gRows = parseMatrixRows(branchValue(branch, "gMatrix"));
       const ihisRows = parseMatrixRows(branchValue(branch, "ihisVector"));
       if (gRows.length !== ports.length || gRows.some(row => row.length !== ports.length)) {
-        warnings.push(`局部 G 矩阵尺寸应为 ${ports.length} x ${ports.length}，并与端口顺序 ${ports.join(", ")} 对应。`);
+        warnings.push(optText(
+          `局部 G 矩阵尺寸应为 ${ports.length} x ${ports.length}，并与端口顺序 ${ports.join(", ")} 对应。`,
+          `Local G matrix must be ${ports.length} x ${ports.length} and match port order ${ports.join(", ")}.`
+        ));
       }
       if (ihisRows.length !== ports.length || ihisRows.some(row => row.length !== 1)) {
-        warnings.push(`局部 Ihis 向量尺寸应为 ${ports.length} x 1。`);
+        warnings.push(optText(
+          `局部 Ihis 向量尺寸应为 ${ports.length} x 1。`,
+          `Local Ihis vector must be ${ports.length} x 1.`
+        ));
       }
       return warnings;
     }
@@ -11999,12 +12053,21 @@
       const ports = new Set(terminalSides(branch));
       const knownLabels = new Set(terminalSides(branch).map(side => branch.nodes?.[side]).filter(Boolean));
       const known = value => ports.has(value) || knownLabels.has(value);
-      if (!branch.packageOriginal && !known(current.from)) warnings.push(`观测支路 ${index + 1}: from 必须是端口名或节点名之一。`);
-      if (!branch.packageOriginal && !known(current.to)) warnings.push(`观测支路 ${index + 1}: to 必须是端口名或节点名之一。`);
+      if (!branch.packageOriginal && !known(current.from)) warnings.push(optText(
+        `观测支路 ${index + 1}: from 必须是端口名或节点名之一。`,
+        `Observed branch ${index + 1}: from must be a port name or node name.`
+      ));
+      if (!branch.packageOriginal && !known(current.to)) warnings.push(optText(
+        `观测支路 ${index + 1}: to 必须是端口名或节点名之一。`,
+        `Observed branch ${index + 1}: to must be a port name or node name.`
+      ));
       if (branch.packageOriginal) {
         const packagedPorts = new Set(packagedPortDisplayMap(branch).keys());
         extractVoltageRefs(current.expression).forEach(ref => {
-          if (!packagedPorts.has(ref)) warnings.push(`观测支路 ${index + 1}: 公式中 V_${ref} 没有对应打包节点。`);
+          if (!packagedPorts.has(ref)) warnings.push(optText(
+            `观测支路 ${index + 1}: 公式中 V_${ref} 没有对应打包节点。`,
+            `Observed branch ${index + 1}: V_${ref} in the formula has no matching packaged node.`
+          ));
         });
       }
       return warnings;
@@ -12650,7 +12713,7 @@
         group.dataset.branchId = branch.id;
 
         group.innerHTML = `
-          <rect class="hitbox" x="${bodyX - 48}" y="${bodyY - 24}" width="${bodyWidth + 96}" height="${bodyHeight + 48}" rx="8"></rect>
+          <rect class="hitbox" x="${bodyX - BRANCH_HIT_PAD_X}" y="${bodyY - BRANCH_HIT_PAD_Y}" width="${bodyWidth + BRANCH_HIT_PAD_X * 2}" height="${bodyHeight + BRANCH_HIT_PAD_Y * 2}" rx="8"></rect>
           <line class="lead" x1="${posA.x}" y1="${posA.y}" x2="${bodyX}" y2="${branch.y}"></line>
           <line class="lead" x1="${bodyX + bodyWidth}" y1="${branch.y}" x2="${posB.x}" y2="${posB.y}"></line>
           <rect class="branch-body" x="${bodyX}" y="${bodyY}" width="${bodyWidth}" height="${bodyHeight}" rx="4"></rect>
@@ -12659,8 +12722,8 @@
           <text class="component-subtext" x="${branch.x}" y="${branch.y + 15}">${escapeSvg(gText)}</text>
           ${switchCaseLabelSvg(branch, 20)}
           ${resizeHandlesSvg(branch, selected)}
-          <circle class="port-drag-hit" cx="${posA.x}" cy="${posA.y}" r="24" data-port-side="A"></circle>
-          <circle class="port-drag-hit" cx="${posB.x}" cy="${posB.y}" r="24" data-port-side="B"></circle>
+          <circle class="port-drag-hit" cx="${posA.x}" cy="${posA.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="A"></circle>
+          <circle class="port-drag-hit" cx="${posB.x}" cy="${posB.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="B"></circle>
           <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "A") ? "hot" : ""}${netHoverClass(netAId)}" cx="${posA.x}" cy="${posA.y}" r="8" data-terminal="${terminalKey(branch.id, "A")}" data-port-side="A"></circle>
           <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "B") ? "hot" : ""}${netHoverClass(netBId)}" cx="${posB.x}" cy="${posB.y}" r="8" data-terminal="${terminalKey(branch.id, "B")}" data-port-side="B"></circle>
           <rect class="net-badge-bg${netHoverClass(netAId)}" data-net-id="${netAId}" data-port-side="A" x="${posA.x - 17}" y="${posA.y - 42}" width="34" height="18" rx="5" fill="${colorA}"></rect>
@@ -12772,7 +12835,7 @@
         : `M ${branch.x + 15} ${branch.y} L ${branch.x - 15} ${branch.y}`;
 
       group.innerHTML = `
-        <rect class="hitbox" x="${branch.x - hitWidth / 2 - 24}" y="${branch.y - hitHeight / 2 - 18}" width="${hitWidth + 48}" height="${hitHeight + 36}" rx="8"></rect>
+        <rect class="hitbox" x="${branch.x - hitWidth / 2 - BRANCH_HIT_PAD_X}" y="${branch.y - hitHeight / 2 - BRANCH_HIT_PAD_Y}" width="${hitWidth + BRANCH_HIT_PAD_X * 2}" height="${hitHeight + BRANCH_HIT_PAD_Y * 2}" rx="8"></rect>
         <line class="lead" x1="${posA.x}" y1="${posA.y}" x2="${bodyLeft}" y2="${branch.y}"></line>
         <line class="lead" x1="${bodyRight}" y1="${branch.y}" x2="${posB.x}" y2="${posB.y}"></line>
         <circle class="branch-body" cx="${branch.x}" cy="${branch.y}" r="${bodyRadius}"></circle>
@@ -12780,8 +12843,8 @@
         <text class="branch-label" x="${branch.x}" y="${branch.y - bodyRadius - 10}">${escapeSvg(branch.name)}</text>
         <text class="component-subtext" x="${branch.x}" y="${branch.y + bodyRadius + 17}">${escapeSvg(currentSourceModeLabel(branch))}</text>
         ${resizeHandlesSvg(branch, selected)}
-        <circle class="port-drag-hit" cx="${posA.x}" cy="${posA.y}" r="24" data-port-side="A"></circle>
-        <circle class="port-drag-hit" cx="${posB.x}" cy="${posB.y}" r="24" data-port-side="B"></circle>
+        <circle class="port-drag-hit" cx="${posA.x}" cy="${posA.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="A"></circle>
+        <circle class="port-drag-hit" cx="${posB.x}" cy="${posB.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="B"></circle>
         <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "A") ? "hot" : ""}${netHoverClass(netAId)}" cx="${posA.x}" cy="${posA.y}" r="8" data-terminal="${terminalKey(branch.id, "A")}" data-port-side="A"></circle>
         <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "B") ? "hot" : ""}${netHoverClass(netBId)}" cx="${posB.x}" cy="${posB.y}" r="8" data-terminal="${terminalKey(branch.id, "B")}" data-port-side="B"></circle>
         <rect class="net-badge-bg${netHoverClass(netAId)}" data-net-id="${netAId}" data-port-side="A" x="${posA.x - 17}" y="${posA.y - 42}" width="34" height="18" rx="5" fill="${colorA}"></rect>
@@ -12832,7 +12895,7 @@
       const arrowPath = `M ${arrowStartX} ${arrowY} L ${arrowEndX} ${arrowY}`;
 
       group.innerHTML = `
-        <rect class="hitbox" x="${Math.min(posP.x, bodyX) - 24}" y="${bodyY - 26}" width="${Math.max(posN.x, bodyX + bodyWidth) - Math.min(posP.x, bodyX) + 48}" height="${bodyHeight + 52}" rx="8"></rect>
+        <rect class="hitbox" x="${Math.min(posP.x, bodyX) - BRANCH_HIT_PAD_X}" y="${bodyY - BRANCH_HIT_PAD_Y}" width="${Math.max(posN.x, bodyX + bodyWidth) - Math.min(posP.x, bodyX) + BRANCH_HIT_PAD_X * 2}" height="${bodyHeight + BRANCH_HIT_PAD_Y * 2}" rx="8"></rect>
         <line class="lead" x1="${posP.x}" y1="${posP.y}" x2="${bodyX}" y2="${branch.y}"></line>
         <line class="lead" x1="${bodyX + bodyWidth}" y1="${branch.y}" x2="${posN.x}" y2="${posN.y}"></line>
         <rect class="branch-body" x="${bodyX}" y="${bodyY}" width="${bodyWidth}" height="${bodyHeight}" rx="4"></rect>
@@ -12846,8 +12909,8 @@
         <text class="branch-label" x="${branch.x}" y="${bodyY - 10}">${escapeSvg(branch.name)}</text>
         <text class="component-subtext" x="${branch.x}" y="${bodyY + bodyHeight + 17}">${escapeSvg(`${branch.voltage || "Vs"}, ${voltageSourceSeriesConductance(branch)}`)}</text>
         ${resizeHandlesSvg(branch, selected)}
-        <circle class="port-drag-hit" cx="${posP.x}" cy="${posP.y}" r="24" data-port-side="P"></circle>
-        <circle class="port-drag-hit" cx="${posN.x}" cy="${posN.y}" r="24" data-port-side="N"></circle>
+        <circle class="port-drag-hit" cx="${posP.x}" cy="${posP.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="P"></circle>
+        <circle class="port-drag-hit" cx="${posN.x}" cy="${posN.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="N"></circle>
         <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "P") ? "hot" : ""}${netHoverClass(netPId)}" cx="${posP.x}" cy="${posP.y}" r="8" data-terminal="${terminalKey(branch.id, "P")}" data-port-side="P"></circle>
         <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "N") ? "hot" : ""}${netHoverClass(netNId)}" cx="${posN.x}" cy="${posN.y}" r="8" data-terminal="${terminalKey(branch.id, "N")}" data-port-side="N"></circle>
         <rect class="net-badge-bg${netHoverClass(netPId)}" data-net-id="${netPId}" data-port-side="P" x="${posP.x - 17}" y="${posP.y - 42}" width="34" height="18" rx="5" fill="${colorP}"></rect>
@@ -12889,13 +12952,13 @@
       const stemTop = posG.y + 8;
       const stemBottom = boxY + 3;
       group.innerHTML = `
-        <rect class="hitbox" x="${Math.min(posG.x, boxX) - 14}" y="${Math.min(posG.y, boxY) - 24}" width="${Math.max(posG.x, boxX + boxWidth) - Math.min(posG.x, boxX) + 28}" height="${Math.max(posG.y, boxY + boxHeight) - Math.min(posG.y, boxY) + 36}" rx="8"></rect>
+        <rect class="hitbox" x="${Math.min(posG.x, boxX) - BRANCH_HIT_PAD_X}" y="${Math.min(posG.y, boxY) - BRANCH_HIT_PAD_Y}" width="${Math.max(posG.x, boxX + boxWidth) - Math.min(posG.x, boxX) + BRANCH_HIT_PAD_X * 2}" height="${Math.max(posG.y, boxY + boxHeight) - Math.min(posG.y, boxY) + BRANCH_HIT_PAD_Y * 2}" rx="8"></rect>
         <line class="lead" x1="${posG.x}" y1="${stemTop}" x2="${branch.x}" y2="${stemBottom}"></line>
         <rect class="branch-body" x="${boxX}" y="${boxY}" width="${boxWidth}" height="${boxHeight}" rx="7"></rect>
         <path class="ground-symbol" d="M ${branch.x} ${symbolTop} V ${symbolStem} M ${branch.x - 18 * scaleX} ${symbolY1} H ${branch.x + 18 * scaleX} M ${branch.x - 12 * scaleX} ${symbolY2} H ${branch.x + 12 * scaleX} M ${branch.x - 7 * scaleX} ${symbolY3} H ${branch.x + 7 * scaleX}"></path>
         <text class="branch-label" x="${branch.x}" y="${boxY + boxHeight + 16}">${escapeSvg(branch.name)}</text>
         ${resizeHandlesSvg(branch, selected)}
-        <circle class="port-drag-hit" cx="${posG.x}" cy="${posG.y}" r="24" data-port-side="G"></circle>
+        <circle class="port-drag-hit" cx="${posG.x}" cy="${posG.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="G"></circle>
         <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "G") ? "hot" : ""}${netHoverClass(netId)}" cx="${posG.x}" cy="${posG.y}" r="8" data-terminal="${terminalKey(branch.id, "G")}" data-port-side="G"></circle>
         <rect class="net-badge-bg${netHoverClass(netId)}" data-net-id="${netId}" data-port-side="G" x="${posG.x - 17}" y="${posG.y - 42}" width="34" height="18" rx="5" fill="${color}"></rect>
         <text class="net-badge" data-net-id="${netId}" data-port-side="G" x="${posG.x}" y="${posG.y - 33}">${escapeSvg(net)}</text>
@@ -12972,7 +13035,7 @@
       const firstArcDotY = coilTop + firstArcStep * 0.5;
       const firstArcDotOffset = coilBulge * 0.35;
       group.innerHTML = `
-        <rect class="hitbox" x="${symbolLeft - 18}" y="${symbolTop - 12}" width="${symbolRight - symbolLeft + 36}" height="${symbolBottom - symbolTop + 24}" rx="8"></rect>
+        <rect class="hitbox" x="${symbolLeft - BRANCH_HIT_PAD_X}" y="${symbolTop - BRANCH_HIT_PAD_Y}" width="${symbolRight - symbolLeft + BRANCH_HIT_PAD_X * 2}" height="${symbolBottom - symbolTop + BRANCH_HIT_PAD_Y * 2}" rx="8"></rect>
         <rect class="branch-body" x="${boxLeft}" y="${boxTop}" width="${width}" height="${height}" rx="4"></rect>
         ${transformerHoverArea(branch, currentHighlight, symbolLeft, symbolTop, symbolRight - symbolLeft, symbolBottom - symbolTop)}
         <line class="lead" x1="${pPos.x}" y1="${pPos.y}" x2="${leftTopLead.x}" y2="${leftTopLead.y}"></line>
@@ -12999,7 +13062,7 @@
           const net = nodeDisplayName(netId);
           const color = netColor(netId);
           return `
-            <circle class="port-drag-hit" cx="${x}" cy="${y}" r="24" data-port-side="${side}"></circle>
+            <circle class="port-drag-hit" cx="${x}" cy="${y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="${side}"></circle>
             <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, side) ? "hot" : ""}${netHoverClass(netId)}" cx="${x}" cy="${y}" r="8" data-terminal="${terminalKey(branch.id, side)}" data-port-side="${side}"></circle>
             <rect class="net-badge-bg${netHoverClass(netId)}" data-net-id="${netId}" data-port-side="${side}" x="${x - 17}" y="${y - 34}" width="34" height="18" rx="5" fill="${color}"></rect>
             <text class="net-badge" data-net-id="${netId}" data-port-side="${side}" x="${x}" y="${y - 25}">${escapeSvg(net)}</text>
@@ -13033,7 +13096,7 @@
       group.setAttribute("class", `branch${selected ? " selected" : ""}${currentHighlight ? " current-hover" : ""}${canvasHighlight.className}`);
 
       group.innerHTML = `
-        <rect class="hitbox" x="${left - 18}" y="${top - 18}" width="${branch.width + 36}" height="${branch.height + 36}" rx="8"></rect>
+        <rect class="hitbox" x="${left - BRANCH_HIT_PAD_X}" y="${top - BRANCH_HIT_PAD_Y}" width="${branch.width + BRANCH_HIT_PAD_X * 2}" height="${branch.height + BRANCH_HIT_PAD_Y * 2}" rx="8"></rect>
         <rect class="branch-body" x="${left}" y="${top}" width="${branch.width}" height="${branch.height}" rx="4"></rect>
         ${customCurrentHoverOverlay(branch, currentHighlight)}
         ${packagedInternalHoverOverlay(branch)}
@@ -13048,7 +13111,7 @@
           const labelY = edge === "top" ? y - 13 : (edge === "bottom" ? y + 28 : y + 24);
           const badgeY = edge === "bottom" ? y + 10 : y - 34;
           return `
-            <circle class="port-drag-hit" cx="${x}" cy="${y}" r="24" data-port-side="${side}"></circle>
+            <circle class="port-drag-hit" cx="${x}" cy="${y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="${side}"></circle>
             <line class="lead" x1="${x}" y1="${y}" x2="${inner.x}" y2="${inner.y}"></line>
             <circle class="port-pin lead-anchor" cx="${inner.x}" cy="${inner.y}" r="5" data-lead-anchor-side="${side}"></circle>
             <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, side) ? "hot" : ""}${netHoverClass(netId)}" cx="${x}" cy="${y}" r="8" data-terminal="${terminalKey(branch.id, side)}" data-port-side="${side}"></circle>
@@ -13970,7 +14033,10 @@ function startResizeDrag(branch, handle, event) {
     document.getElementById("ungroupTool").addEventListener("click", ungroupSelectedBranches);
     document.getElementById("packYTool").addEventListener("click", () => {
       packSelectedAsYBox().catch(error => {
-        alert(`打包失败：${error.message || String(error)}`);
+        alert(optText(
+          `打包失败：${error.message || String(error)}`,
+          `Pack failed: ${error.message || String(error)}`
+        ));
       });
     });
     document.getElementById("unpackYTool").addEventListener("click", unpackSelectedYBox);

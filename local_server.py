@@ -76,6 +76,25 @@ def run_python_json(script_name: str, payload: dict) -> dict:
     return data
 
 
+def run_save_as_dialog(payload: dict) -> dict:
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "save_as_dialog.py")],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        cwd=str(ROOT),
+        timeout=300,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(proc.stderr or str(exc)) from exc
+    if proc.returncode != 0:
+        raise RuntimeError(data.get("error") or proc.stderr or "Save As dialog failed")
+    return data
+
+
 class BranchBuilderHandler(SimpleHTTPRequestHandler):
     server_version = "BranchBuilderPython/1.0"
 
@@ -140,6 +159,9 @@ class BranchBuilderHandler(SimpleHTTPRequestHandler):
                 data = str(payload.get("data") or "")
                 file_path.write_text(data, encoding="utf-8")
                 self.write_json(200, {"ok": True, "path": str(file_path), "bytes": len(data.encode("utf-8"))})
+                return
+            if parsed.path == "/save-circuit-as":
+                self.write_json(200, run_save_as_dialog(self.read_json()))
                 return
             self.write_json(404, {"ok": False, "error": "Not found"})
         except Exception as exc:
