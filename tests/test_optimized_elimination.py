@@ -26,6 +26,82 @@ def assert_matrix_equal(testcase, actual, expected):
 
 
 class OptimizedEliminationTests(unittest.TestCase):
+    def _basic_multicase_payload(self, *, g1: str, g2: str, h: str = "0") -> dict:
+        return {
+            "all_nodes": ["A", "B", "X"],
+            "external_nodes": ["A", "B"],
+            "internal_nodes": ["X"],
+            "ground_nodes": [],
+            "G_full": [
+                [g1, "0", f"-({g1})"],
+                ["0", g2, f"-({g2})"],
+                [f"-({g1})", f"-({g2})", f"({g1}) + ({g2})"],
+            ],
+            "Ihis_full": ["0", "0", h],
+            "G_full_tagged": [
+                [f"{g1}_tag", "0", f"-({g1}_tag)"],
+                ["0", f"{g2}_tag", f"-({g2}_tag)"],
+                [f"-({g1}_tag)", f"-({g2}_tag)", f"({g1}_tag) + ({g2}_tag)"],
+            ],
+            "Ihis_full_tagged": ["0", "0", f"{h}_tag" if h != "0" else "0"],
+            "node_display_names": {"A": "A", "B": "B", "X": "X"},
+            "symbol_dependency_table": {
+                g1: "RAM_CONSTANT",
+                g2: "RAM_CONSTANT",
+                f"{g1}_tag": "RAM_CONSTANT",
+                f"{g2}_tag": "RAM_CONSTANT",
+            },
+            "symbol_dependency_table_tagged": {
+                g1: "RAM_CONSTANT",
+                g2: "RAM_CONSTANT",
+                f"{g1}_tag": "RAM_CONSTANT",
+                f"{g2}_tag": "RAM_CONSTANT",
+            },
+        }
+
+    def test_multi_case_api_generates_ram_switch_collection_draft(self):
+        payload = {
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "topology_case",
+            "case_profiles": [
+                {
+                    "name": "YY",
+                    "comment": "TX=Y, RC=Y",
+                    "case_map": {"tx": 0},
+                    "payload": self._basic_multicase_payload(g1="G1", g2="G2"),
+                },
+                {
+                    "name": "DD",
+                    "comment": "TX=D, RC=D",
+                    "case_map": {"tx": 1},
+                    "payload": self._basic_multicase_payload(g1="G3", g2="G2"),
+                },
+            ],
+        }
+
+        completed = subprocess.run(
+            [sys.executable, "optimized_elimination_api.py"],
+            input=json.dumps(payload),
+            cwd=".",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        response = json.loads(completed.stdout)
+
+        self.assertTrue(response["ok"], response)
+        draft = response["multi_case"]["c_draft"]
+        self.assertEqual(response["multi_case"]["fast_path"], "case_alias_template")
+        self.assertIn("Multi-case alias-template C draft", draft)
+        self.assertIn("cr_tx_G_eff", draft)
+        self.assertIn("switch (tx_case_id)", draft)
+        self.assertIn("cr_tx_G_eff = G1;", draft)
+        self.assertIn("cr_tx_G_eff = G3;", draft)
+        self.assertNotIn("TODO", draft)
+        self.assertIn("set_CODE(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
+        self.assertIn("Gkr_k1_A = -cr_tx_G_eff;", draft)
+        self.assertIn("matrix_mult_CODE", draft)
+
     def test_two_conductances_in_series(self):
         G1, G2 = sp.symbols("G1 G2")
         nodes = ["A", "X", "B"]
@@ -463,6 +539,7 @@ class OptimizedEliminationTests(unittest.TestCase):
         draft = response["structured"]["c_draft"]
         self.assertIn("Build M = S - U^T * inv_D * U", draft)
         self.assertIn("mat_2x2_sym_inv_code", draft)
+        self.assertIn("#include <builtin_MATH.h>", draft)
         self.assertNotIn("MATH_matx_invert(2, &(M.p[0]), 2, &(M_inv.p[0]), 2);", draft)
         self.assertIn("MATRIX_ W_DD", draft)
         self.assertIn("matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);", draft)

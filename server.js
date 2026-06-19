@@ -6,6 +6,11 @@ const { spawn } = require("child_process");
 const root = __dirname;
 const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4177);
+const noCacheHeaders = {
+  "Cache-Control": "no-store, max-age=0",
+  "Pragma": "no-cache",
+  "Expires": "0"
+};
 
 function safeFileName(name) {
   return String(name || "branch-builder-circuit.json").replace(/[^A-Za-z0-9._-]/g, "_");
@@ -43,6 +48,10 @@ function runReduction(payload) {
 
 function runBlackBoxValidation(payload) {
   return runPythonJson("blackbox_validation_api.py", payload);
+}
+
+function runOptimizedElimination(payload) {
+  return runPythonJson("optimized_elimination_api.py", payload);
 }
 
 function runPythonJson(scriptName, payload) {
@@ -95,14 +104,14 @@ const server = http.createServer(async (req, res) => {
           const data = String(payload.data || "");
           await fs.writeFile(filePath, data, "utf8");
 
-          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
           res.end(JSON.stringify({
             ok: true,
             path: filePath,
             bytes: Buffer.byteLength(data, "utf8")
           }));
         } catch (error) {
-          res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+          res.writeHead(500, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
           res.end(JSON.stringify({ ok: false, error: String(error) }));
         }
       return;
@@ -112,10 +121,10 @@ const server = http.createServer(async (req, res) => {
       try {
         const payload = await readJsonBody(req);
         const data = await runReduction(payload);
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
         res.end(JSON.stringify(data));
       } catch (error) {
-        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
         res.end(JSON.stringify({ ok: false, error: String(error.message || error) }));
       }
       return;
@@ -125,10 +134,24 @@ const server = http.createServer(async (req, res) => {
       try {
         const payload = await readJsonBody(req);
         const data = await runBlackBoxValidation(payload);
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
         res.end(JSON.stringify(data));
       } catch (error) {
-        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
+        res.end(JSON.stringify({ ok: false, error: String(error.message || error) }));
+      }
+      return;
+    }
+
+    if (req.method === "POST" && (url.pathname === "/optimized-elimination" || url.pathname === "/multi-case-c-export")) {
+      try {
+        const payload = await readJsonBody(req);
+        if (url.pathname === "/multi-case-c-export") payload.mode = "multi_case_c_export";
+        const data = await runOptimizedElimination(payload);
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
+        res.end(JSON.stringify(data));
+      } catch (error) {
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
         res.end(JSON.stringify({ ok: false, error: String(error.message || error) }));
       }
       return;
@@ -150,13 +173,13 @@ const server = http.createServer(async (req, res) => {
         });
       }
       files.sort((a, b) => b.modified.localeCompare(a.modified));
-      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", ...noCacheHeaders });
       res.end(JSON.stringify({ files }));
       return;
     }
 
     if (req.method !== "GET") {
-      res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8", ...noCacheHeaders });
       res.end("Method not allowed");
       return;
     }
@@ -166,16 +189,16 @@ const server = http.createServer(async (req, res) => {
 
     const filePath = path.normalize(path.join(root, pathname));
     if (!filePath.startsWith(path.normalize(root))) {
-      res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", ...noCacheHeaders });
       res.end("Forbidden");
       return;
     }
 
     const data = await fs.readFile(filePath);
-    res.writeHead(200, { "Content-Type": contentType(filePath) });
+    res.writeHead(200, { "Content-Type": contentType(filePath), ...noCacheHeaders });
     res.end(data);
   } catch {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...noCacheHeaders });
     res.end("Not found");
   }
 });

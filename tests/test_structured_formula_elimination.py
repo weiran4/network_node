@@ -77,6 +77,7 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         self.assertIn("matrix_Mul", draft)
         self.assertIn("matrix_Sub", draft)
         self.assertIn("mat_2x2_sym_inv_code", draft)
+        self.assertIn("#include <builtin_MATH.h>", draft)
         self.assertIn("Gred", draft)
         self.assertIn("Ihisred", draft)
         self.assertIn("Vk", draft)
@@ -175,6 +176,7 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         draft = c_draft_for_structured_formula(structured)
 
         self.assertIn("mat_3x3_sym_inv_code", draft)
+        self.assertIn("#include <builtin_MATH.h>", draft)
 
     def test_c_draft_warns_for_large_m_inverse(self):
         diagonal = sp.diag(*sp.symbols("D1 D2"))

@@ -1,0 +1,278 @@
+{
+  "fileType": "branch-builder-circuit",
+  "version": 3,
+  "savedAt": "2026-06-19T06:38:17.448Z",
+  "generator": "Branch Builder",
+  "world": {
+    "width": 1600,
+    "height": 1000
+  },
+  "ui": {
+    "language": "zh",
+    "activeOutput": "multiCaseCExport",
+    "showLocalLabels": false,
+    "showReducedBranchCurrents": false,
+    "panelWidth": null,
+    "editorGroups": {
+      "math": true,
+      "basics": true,
+      "cases": true
+    },
+    "multiCaseProfilesText": "[\n  {\n    \"name\": \"Case 1\",\n    \"comment\": \"Current UI active case combination\",\n    \"case_map\": {\n      \"B11\": 1,\n      \"B12\": 1\n    }\n  }\n]",
+    "multiCaseProfilesKey": "[{\"id\":\"B11\",\"name\":\"R1\",\"caseCount\":2,\"caseNames\":[\"Case 1\",\"Case 2\"]},{\"id\":\"B12\",\"name\":\"R2\",\"caseCount\":2,\"caseNames\":[\"Case 1\",\"Case 2\"]}]",
+    "multiCaseIdSymbol": "case_id"
+  },
+  "canvasOrder": [
+    "canvas1"
+  ],
+  "canvases": [
+    {
+      "id": "canvas1",
+      "name": "画布 1",
+      "data": {
+        "name": "画布 1",
+        "branches": [
+          {
+            "id": "B11",
+            "name": "R1",
+            "kind": "two_node_branch",
+            "x": 248.3399658203125,
+            "y": 399.90509033203125,
+            "width": 150,
+            "height": 48,
+            "rotation": 0,
+            "nodeA": "n11a",
+            "nodeB": "n11b",
+            "g": "G1",
+            "gIsConstant": true,
+            "constantGSymbols": "",
+            "ihis": "0",
+            "direction": "AtoB",
+            "activeSwitchCase": 1,
+            "switchCases": [
+              {
+                "name": "Case 1",
+                "g": "G1",
+                "ihis": "0"
+              },
+              {
+                "name": "Case 2",
+                "g": "G2",
+                "ihis": "0"
+              }
+            ]
+          },
+          {
+            "id": "B12",
+            "name": "R2",
+            "kind": "two_node_branch",
+            "x": 463.2662658691406,
+            "y": 399.90509033203125,
+            "width": 150,
+            "height": 48,
+            "rotation": 0,
+            "nodeA": "n12a",
+            "nodeB": "n12b",
+            "g": "G3",
+            "gIsConstant": true,
+            "constantGSymbols": "",
+            "ihis": "0",
+            "direction": "AtoB",
+            "activeSwitchCase": 1,
+            "switchCases": [
+              {
+                "name": "Case 1",
+                "g": "G3",
+                "ihis": "0"
+              },
+              {
+                "name": "Case 2",
+                "g": "G4",
+                "ihis": "0"
+              }
+            ]
+          }
+        ],
+        "wires": [
+          {
+            "id": "W12",
+            "from": "B11.B",
+            "to": "B12.A",
+            "mid": null
+          }
+        ],
+        "groups": [],
+        "nodeOrder": [
+          "N1",
+          "N2",
+          "N3"
+        ],
+        "nodeLabels": {
+          "N3": "N4"
+        },
+        "nodeColors": {},
+        "internalNodes": [],
+        "selectedId": "B11",
+        "selectedIds": [
+          "B11",
+          "B12"
+        ],
+        "selectedNetIds": [],
+        "selectedWireId": null,
+        "nextBranch": 13,
+        "nextTransformer": 1,
+        "nextCustom": 1,
+        "nextWire": 13,
+        "nextGroup": 1,
+        "zoom": 1.4049280000000008,
+        "viewCenter": {
+          "x": 569.4241982507285,
+          "y": 492.14065954703466
+        },
+        "reducedEquationCache": [],
+        "branchCurrentCache": [],
+        "pythonDraftCache": [],
+        "history": [
+          "{\"branches\":[{\"id\":\"B3\",\"name\":\"R3\",\"kind\":\"two_node_branch\",\"x\":139.46432495117188,\"y\":666.0577621459961,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n1a\",\"nodeB\":\"n1b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B4\",\"name\":\"R4\",\"kind\":\"two_node_branch\",\"x\":374.26432495117206,\"y\":666.0577621459961,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n2a\",\"nodeB\":\"n2b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B5\",\"name\":\"R5\",\"kind\":\"two_node_branch\",\"x\":252.66432495117192,\"y\":732.2268905639648,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n3a\",\"nodeB\":\"n3b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"terminalLayout\":{\"A\":{\"x\":-188.2,\"y\":0},\"B\":{\"x\":196.6,\"y\":0}},\"activeSwitchCase\":0},{\"id\":\"B6\",\"name\":\"R6\",\"kind\":\"two_node_branch\",\"x\":139.46432495117188,\"y\":585.1785888671875,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n4a\",\"nodeB\":\"n4b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B7\",\"name\":\"R7\",\"kind\":\"two_node_branch\",\"x\":374.26432495117206,\"y\":585.1785888671875,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n5a\",\"nodeB\":\"n5b\",\"g\":\"1/R\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B8\",\"name\":\"R8\",\"kind\":\"two_node_branch\",\"x\":140.07189178466797,\"y\":507.7388916015625,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n8a\",\"nodeB\":\"n8b\",\"g\":\"G8\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0},{\"id\":\"B9\",\"name\":\"R9\",\"kind\":\"two_node_branch\",\"x\":374.26432495117206,\"y\":507.7388916015625,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n9a\",\"nodeB\":\"n9b\",\"g\":\"G9\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[{\"id\":\"W2\",\"from\":\"B3.B\",\"to\":\"B4.A\",\"mid\":null},{\"id\":\"W3\",\"from\":\"B7.A\",\"to\":\"B6.B\",\"mid\":null},{\"id\":\"W4\",\"from\":\"B6.B\",\"to\":\"B3.B\",\"mid\":null},{\"id\":\"W5\",\"from\":\"B6.A\",\"to\":\"B3.A\",\"mid\":null},{\"id\":\"W6\",\"from\":\"B7.B\",\"to\":\"B4.B\",\"mid\":null},{\"id\":\"W7\",\"from\":\"B5.A\",\"to\":\"B3.A\",\"mid\":null},{\"id\":\"W8\",\"from\":\"B5.B\",\"to\":\"B4.B\",\"mid\":null},{\"id\":\"W9\",\"from\":\"B8.B\",\"to\":\"B9.A\",\"mid\":null},{\"id\":\"W10\",\"from\":\"B7.B\",\"to\":\"B9.B\",\"mid\":null},{\"id\":\"W11\",\"from\":\"B8.A\",\"to\":\"B6.A\",\"mid\":null}],\"selectedId\":\"B3\",\"selectedIds\":[\"B3\",\"B4\",\"B5\",\"B6\",\"B7\",\"B8\",\"B9\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[\"N2\",\"N4\"],\"nextBranch\":10,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[],\"wires\":[],\"selectedId\":null,\"selectedIds\":[],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":10,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B10\",\"name\":\"R10\",\"kind\":\"two_node_branch\",\"x\":885,\"y\":545,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"X+Y+Z\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0,\"formulaHighlightEnabled\":true,\"formulaHighlightColor\":\"#ef4444\"}],\"wires\":[],\"selectedId\":\"B10\",\"selectedIds\":[\"B10\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[\"N1\",\"N2\"],\"nodeLabels\":{\"N1\":\"N2\",\"N2\":\"N4\"},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":11,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B10\",\"name\":\"R10\",\"kind\":\"two_node_branch\",\"x\":303.7417907714844,\"y\":417.9585266113281,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"X+Y+Z\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0,\"formulaHighlightEnabled\":true,\"formulaHighlightColor\":\"#ef4444\"}],\"wires\":[],\"selectedId\":\"B10\",\"selectedIds\":[\"B10\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[\"N1\",\"N2\"],\"nodeLabels\":{\"N1\":\"N2\",\"N2\":\"N4\"},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":11,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B10\",\"name\":\"R10\",\"kind\":\"two_node_branch\",\"x\":303.7417907714844,\"y\":417.08837890625,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"X+Y+Z\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0,\"formulaHighlightEnabled\":true,\"formulaHighlightColor\":\"#ef4444\"}],\"wires\":[],\"selectedId\":\"B10\",\"selectedIds\":[\"B10\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[\"N1\",\"N2\"],\"nodeLabels\":{\"N1\":\"N2\",\"N2\":\"N4\"},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":11,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[],\"wires\":[],\"selectedId\":null,\"selectedIds\":[],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":11,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R11\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"1/R\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[],\"selectedId\":\"B11\",\"selectedIds\":[\"B11\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":12,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R11\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[],\"selectedId\":\"B11\",\"selectedIds\":[\"B11\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":12,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[],\"selectedId\":\"B11\",\"selectedIds\":[\"B11\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":12,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G1\",\"ihis\":\"0\"}]}],\"wires\":[],\"selectedId\":\"B11\",\"selectedIds\":[\"B11\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":12,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G1\",\"ihis\":\"0\"}]}],\"wires\":[],\"selectedId\":\"B11\",\"selectedIds\":[\"B11\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":12,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]}],\"wires\":[],\"selectedId\":null,\"selectedIds\":[],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":12,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R12\",\"kind\":\"two_node_branch\",\"x\":519.8258056640625,\"y\":332.9037780761719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"1/R\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[],\"selectedId\":\"B12\",\"selectedIds\":[\"B12\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":519.8258056640625,\"y\":332.9037780761719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"1/R\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[],\"selectedId\":\"B12\",\"selectedIds\":[\"B12\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":519.8258056640625,\"y\":332.03363037109375,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"1/R\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[],\"selectedId\":\"B12\",\"selectedIds\":[\"B12\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":519.8258056640625,\"y\":332.03363037109375,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"G3\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0}],\"wires\":[],\"selectedId\":\"B12\",\"selectedIds\":[\"B12\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":519.8258056640625,\"y\":332.03363037109375,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"G3\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":0,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G3\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G3\",\"ihis\":\"0\"}]}],\"wires\":[],\"selectedId\":\"B12\",\"selectedIds\":[\"B12\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":519.8258056640625,\"y\":332.03363037109375,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"G3\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G3\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G3\",\"ihis\":\"0\"}]}],\"wires\":[],\"selectedId\":\"B12\",\"selectedIds\":[\"B12\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":519.8258056640625,\"y\":332.03363037109375,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"G3\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G3\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G4\",\"ihis\":\"0\"}]}],\"wires\":[],\"selectedId\":\"B12\",\"selectedIds\":[\"B12\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":463.2662658691406,\"y\":399.90509033203125,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"G3\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G3\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G4\",\"ihis\":\"0\"}]}],\"wires\":[],\"selectedId\":null,\"selectedIds\":[],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[],\"nodeLabels\":{},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":12}",
+          "{\"branches\":[{\"id\":\"B11\",\"name\":\"R1\",\"kind\":\"two_node_branch\",\"x\":255.30111694335938,\"y\":361.6186218261719,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n11a\",\"nodeB\":\"n11b\",\"g\":\"G1\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G1\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G2\",\"ihis\":\"0\"}]},{\"id\":\"B12\",\"name\":\"R2\",\"kind\":\"two_node_branch\",\"x\":463.2662658691406,\"y\":399.90509033203125,\"width\":150,\"height\":48,\"rotation\":0,\"nodeA\":\"n12a\",\"nodeB\":\"n12b\",\"g\":\"G3\",\"gIsConstant\":true,\"constantGSymbols\":\"\",\"ihis\":\"0\",\"direction\":\"AtoB\",\"activeSwitchCase\":1,\"switchCases\":[{\"name\":\"Case 1\",\"g\":\"G3\",\"ihis\":\"0\"},{\"name\":\"Case 2\",\"g\":\"G4\",\"ihis\":\"0\"}]}],\"wires\":[{\"id\":\"W12\",\"from\":\"B11.B\",\"to\":\"B12.A\",\"mid\":null}],\"selectedId\":\"B11\",\"selectedIds\":[\"B11\"],\"selectedNetIds\":[],\"selectedWireId\":null,\"groups\":[],\"portDrag\":null,\"nextGroup\":1,\"nodeOrder\":[\"N1\",\"N2\",\"N3\"],\"nodeLabels\":{\"N3\":\"N4\"},\"nodeColors\":{},\"internalNodes\":[],\"nextBranch\":13,\"nextTransformer\":1,\"nextCustom\":1,\"nextWire\":13}"
+        ],
+        "future": []
+      }
+    }
+  ],
+  "activeCanvasId": "canvas1",
+  "nextCanvas": 2,
+  "branches": [
+    {
+      "id": "B11",
+      "name": "R1",
+      "kind": "two_node_branch",
+      "x": 248.3399658203125,
+      "y": 399.90509033203125,
+      "width": 150,
+      "height": 48,
+      "rotation": 0,
+      "nodeA": "n11a",
+      "nodeB": "n11b",
+      "g": "G1",
+      "gIsConstant": true,
+      "constantGSymbols": "",
+      "ihis": "0",
+      "direction": "AtoB",
+      "activeSwitchCase": 1,
+      "switchCases": [
+        {
+          "name": "Case 1",
+          "g": "G1",
+          "ihis": "0"
+        },
+        {
+          "name": "Case 2",
+          "g": "G2",
+          "ihis": "0"
+        }
+      ]
+    },
+    {
+      "id": "B12",
+      "name": "R2",
+      "kind": "two_node_branch",
+      "x": 463.2662658691406,
+      "y": 399.90509033203125,
+      "width": 150,
+      "height": 48,
+      "rotation": 0,
+      "nodeA": "n12a",
+      "nodeB": "n12b",
+      "g": "G3",
+      "gIsConstant": true,
+      "constantGSymbols": "",
+      "ihis": "0",
+      "direction": "AtoB",
+      "activeSwitchCase": 1,
+      "switchCases": [
+        {
+          "name": "Case 1",
+          "g": "G3",
+          "ihis": "0"
+        },
+        {
+          "name": "Case 2",
+          "g": "G4",
+          "ihis": "0"
+        }
+      ]
+    }
+  ],
+  "wires": [
+    {
+      "id": "W12",
+      "from": "B11.B",
+      "to": "B12.A",
+      "mid": null
+    }
+  ],
+  "groups": [],
+  "nodeOrder": [
+    "N1",
+    "N2",
+    "N3"
+  ],
+  "nodeLabels": {
+    "N3": "N4"
+  },
+  "nodeColors": {},
+  "internalNodes": [],
+  "language": "zh",
+  "activeOutput": "multiCaseCExport",
+  "showLocalLabels": false,
+  "showReducedBranchCurrents": false,
+  "panelWidth": null,
+  "editorGroups": {
+    "math": true,
+    "basics": true,
+    "cases": true
+  },
+  "multiCaseProfilesText": "[\n  {\n    \"name\": \"Case 1\",\n    \"comment\": \"Current UI active case combination\",\n    \"case_map\": {\n      \"B11\": 1,\n      \"B12\": 1\n    }\n  }\n]",
+  "multiCaseProfilesKey": "[{\"id\":\"B11\",\"name\":\"R1\",\"caseCount\":2,\"caseNames\":[\"Case 1\",\"Case 2\"]},{\"id\":\"B12\",\"name\":\"R2\",\"caseCount\":2,\"caseNames\":[\"Case 1\",\"Case 2\"]}]",
+  "multiCaseIdSymbol": "case_id",
+  "selectedId": "B11",
+  "selectedIds": [
+    "B11",
+    "B12"
+  ],
+  "selectedNetIds": [],
+  "selectedWireId": null,
+  "zoom": 1.4049280000000008,
+  "viewCenter": {
+    "x": 569.4241982507285,
+    "y": 492.14065954703466
+  },
+  "reducedEquationCache": [],
+  "branchCurrentCache": [],
+  "pythonDraftCache": [],
+  "nextBranch": 13,
+  "nextTransformer": 1,
+  "nextCustom": 1,
+  "nextWire": 13,
+  "nextGroup": 1
+}

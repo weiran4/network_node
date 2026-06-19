@@ -93,6 +93,9 @@ class BranchBuilderHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         super().end_headers()
 
     def do_OPTIONS(self) -> None:
@@ -120,6 +123,11 @@ class BranchBuilderHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/optimized-elimination":
                 self.write_json(200, run_python_json("optimized_elimination_api.py", self.read_json()))
+                return
+            if parsed.path == "/multi-case-c-export":
+                payload = self.read_json()
+                payload["mode"] = "multi_case_c_export"
+                self.write_json(200, run_python_json("optimized_elimination_api.py", payload))
                 return
             if parsed.path == "/validate-blackbox-observers":
                 self.write_json(200, run_python_json("blackbox_validation_api.py", self.read_json()))

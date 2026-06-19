@@ -925,49 +925,96 @@ def _c_should_cse_scalar(expr: sp.Expr) -> bool:
     return int(sp.count_ops(expr, visual=False)) >= 3
 
 
+def _c_signed_canonical_expr(expr: sp.Expr) -> tuple[sp.Expr, int]:
+    expr = sp.simplify(expr)
+    if expr == 0:
+        return expr, 1
+    if expr.could_extract_minus_sign():
+        return sp.simplify(-expr), -1
+    return expr, 1
+
+
 def _c_scalar_assignment_cse(
     assignments: Sequence[tuple[str, sp.Expr, str | None, str | None, str | None]],
     fallback_prefix: str,
     indent: str = "    ",
 ) -> tuple[list[str], list[str], list[str]]:
     normalized = [(target, sp.simplify(expr), comment) for target, expr, comment, _, _ in assignments]
+    groups: dict[str, dict] = {}
+    occurrences: list[tuple[str | None, int, sp.Expr]] = []
+    for index, item in enumerate(assignments):
+        _, raw_expr, _, _, _ = item
+        expr = sp.simplify(raw_expr)
+        if expr == 0:
+            occurrences.append((None, 1, expr))
+            continue
+        canonical, sign = _c_signed_canonical_expr(expr)
+        if sp.simplify(expr - sign * canonical) != 0:
+            occurrences.append((None, 1, expr))
+            continue
+        key = sp.srepr(canonical)
+        group = groups.setdefault(
+            key,
+            {
+                "canonical": canonical,
+                "count": 0,
+                "first_index": index,
+                "preferred_index": None,
+            },
+        )
+        group["count"] += 1
+        if sign > 0 and group["preferred_index"] is None:
+            group["preferred_index"] = index
+        occurrences.append((key, sign, expr))
+
+    temp_keys: set[str] = set()
+    for key, group in groups.items():
+        canonical = group["canonical"]
+        ops = int(sp.count_ops(canonical, visual=False))
+        if _c_should_cse_scalar(canonical) or (group["count"] > 1 and ops >= 2):
+            temp_keys.add(key)
+
     used_names: set[str] = set()
-    expr_to_temp: dict[str, str] = {}
-    expr_codes: list[str] = []
+    key_to_temp: dict[str, str] = {}
     temp_names: list[str] = []
     compute_lines: list[str] = []
-    for index, item in enumerate(assignments):
-        target, raw_expr, _, suggested_name, formula_label = item
-        expr = sp.simplify(raw_expr)
-        if not _c_should_cse_scalar(expr):
-            expr_codes.append(_ccode(expr))
-            continue
-        key = sp.srepr(expr)
-        neg_key = sp.srepr(sp.simplify(-expr))
-        if key in expr_to_temp:
-            expr_codes.append(expr_to_temp[key])
-            continue
-        if neg_key in expr_to_temp:
-            expr_codes.append(f"-{expr_to_temp[neg_key]}")
-            continue
-        base_name = _c_symbol_name(suggested_name or f"{fallback_prefix}_{index}")
+
+    for key in sorted(temp_keys, key=lambda item: groups[item]["first_index"]):
+        group = groups[key]
+        preferred_index = group["preferred_index"]
+        if preferred_index is None:
+            preferred_index = group["first_index"]
+        _, _, _, suggested_name, formula_label = assignments[preferred_index]
+        canonical = group["canonical"]
+        base_name = _c_symbol_name(suggested_name or f"{fallback_prefix}_{preferred_index}")
         name = base_name
         suffix = 1
         while name in used_names:
             suffix += 1
             name = f"{base_name}_{suffix}"
         used_names.add(name)
-        expr_to_temp[key] = name
+        key_to_temp[key] = name
         temp_names.append(name)
-        label = formula_label or target
-        compute_lines.append(f"{indent}/* {name} represents {label}: {_ccode(expr)}. */")
-        compute_lines.append(f"{indent}{name} = {_ccode(expr)};")
-        expr_codes.append(name)
+        label = formula_label or assignments[preferred_index][0]
+        compute_lines.append(f"{indent}/* {name} represents {label}: {_ccode(canonical)}. */")
+        compute_lines.append(f"{indent}{name} = {_ccode(canonical)};")
+
+    expr_codes: list[str] = []
+    for key, sign, expr in occurrences:
+        if key is None or key not in key_to_temp:
+            expr_codes.append(_ccode(expr))
+            continue
+        temp = key_to_temp[key]
+        expr_codes.append(temp if sign > 0 else f"-{temp}")
+
     assignment_lines: list[str] = []
     for (target, _, comment), expr_code in zip(normalized, expr_codes):
         if comment:
             assignment_lines.append(f"{indent}{comment}")
-        assignment_lines.append(f"{indent}{target} = {expr_code};")
+        if "{expr}" in target:
+            assignment_lines.append(f"{indent}{target.replace('{expr}', expr_code)};")
+        else:
+            assignment_lines.append(f"{indent}{target} = {expr_code};")
     return temp_names, compute_lines, assignment_lines
 
 
@@ -1583,9 +1630,10 @@ def _c_emit_rtds_stage_sections(
     code_symbol_names = code_g_symbol_names | code_ihis_symbol_names
     ram_symbol_names = _matrix_symbol_names(ram_Gred) - code_symbol_names
     if not internal_nodes:
-        Ihisred_no_elim = sp.Matrix(plan.get("Ihisred", []))
+        Gred_no_elim = sp.Matrix(Gred) + sp.Matrix(Gred_direct)
+        Ihisred_no_elim = _as_column_vector(sp.Matrix(Ihisred), len(external_nodes), "Ihisred") + Ihisred_direct
         symbol_table = analysis.get("symbol_table") or {}
-        ram_Gred_no_elim, code_G_no_elim = _split_matrix_ram_and_code_terms(Gred, symbol_table)
+        ram_Gred_no_elim, code_G_no_elim = _split_matrix_ram_and_code_terms(Gred_no_elim, symbol_table)
         ram_overlay_nodes_no_elim, ram_overlay_index_no_elim = _ram_overlay_node_subset(ram_Gred_no_elim, external_nodes)
         dynamic_gred_no_elim = any(sp.simplify(value) != 0 for value in code_G_no_elim)
         var_g_pairs_no_elim = (
@@ -1607,6 +1655,22 @@ def _c_emit_rtds_stage_sections(
             ram_g_assignments_no_elim,
             "ramG",
         )
+        code_g_assignments_no_elim = [
+            (
+                f"set_CODE(&G_code, {row}, {col}, {{expr}})",
+                code_G_no_elim[row, col],
+                None,
+                _scalar_g_name("G", external_nodes[row], external_nodes[col], node_display_names),
+                f"G[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]",
+            )
+            for row in range(code_G_no_elim.rows)
+            for col in range(code_G_no_elim.cols)
+            if sp.simplify(code_G_no_elim[row, col]) != 0
+        ]
+        code_g_temp_names_no_elim, code_g_compute_lines_no_elim, code_g_assignment_lines_no_elim = _c_scalar_assignment_cse(
+            code_g_assignments_no_elim,
+            "G",
+        )
         no_elim_code_names = ["G_code"] if dynamic_gred_no_elim else []
         no_elim_g_symbol_names = _matrix_symbol_names(code_G_no_elim)
         no_elim_ihis_symbol_names = _matrix_symbol_names(Ihisred_no_elim) - no_elim_g_symbol_names
@@ -1622,6 +1686,7 @@ def _c_emit_rtds_stage_sections(
             "    int rtds_matrix_code_ready = 0;",
             *_c_declaration_group("User G/CODE symbols", no_elim_g_symbol_names),
             *_c_declaration_group("User Ihis/history symbols", no_elim_ihis_symbol_names),
+            *_c_declaration_group("CODE G scalar aliases", code_g_temp_names_no_elim),
             "",
             "LOCAL_STATIC:",
             *_c_declaration_group("User RAM-only G symbols", no_elim_ram_symbols),
@@ -1701,7 +1766,8 @@ def _c_emit_rtds_stage_sections(
                     "Then stamp dynamic G values before node-current injection.",
                 ],
             ),
-                *_c_matrix_set_nonzero_lines(code_G_no_elim, "G_code", "set_CODE"),
+                *code_g_compute_lines_no_elim,
+                *code_g_assignment_lines_no_elim,
                 "    /* Stamp dynamic G entries in row-major upper-triangular order. */",
                 *[
                     f"    {_var_g_name(row_node, col_node, node_display_names)} = get_CODE(&G_code, {row}, {col});"
@@ -2242,8 +2308,16 @@ def _c_emit_rtds_reduction_tail(
 
 def _join_c_draft_lines(lines: Sequence[str]) -> str:
     draft = "\n".join(lines)
+    include_lines: list[str] = []
     if "MATRIX_" in draft and "#include <matrixLIB.h>" not in draft:
-        return "#include <matrixLIB.h>\n" + draft
+        include_lines.append("#include <matrixLIB.h>")
+    if (
+        ("mat_2x2_sym_inv_code" in draft or "mat_3x3_sym_inv_code" in draft)
+        and "#include <builtin_MATH.h>" not in draft
+    ):
+        include_lines.append("#include <builtin_MATH.h>")
+    if include_lines:
+        return "\n".join(include_lines) + "\n" + draft
     return draft
 
 

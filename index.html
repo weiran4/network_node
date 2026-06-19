@@ -2567,6 +2567,7 @@
             <button class="tab" data-output="nodeEquations">节点方程</button>
             <button class="tab" data-output="reducedEquations">消去版本</button>
             <button class="tab" data-output="optimizedElimination">优化消元 / C导出</button>
+            <button class="tab" data-output="multiCaseCExport">多Case C导出</button>
             <button class="tab" data-output="model">模型 JSON</button>
             <button class="tab" data-output="python">Python 草稿</button>
             <button class="output-action text-action" id="toggleReducedBranchCurrents" title="显示支路电流消去版本" aria-label="显示支路电流消去版本">展开支路消去</button>
@@ -2757,6 +2758,9 @@
       optimizedEliminationAssumeSpd: true,
       optimizedEliminationUseSuggestedOrder: true,
       optimizedSymbolDependencyOverrides: "",
+      multiCaseProfilesText: "",
+      multiCaseProfilesKey: "",
+      multiCaseIdSymbol: "case_id",
       nextBranch: 1,
       nextTransformer: 1,
       nextCustom: 1,
@@ -2772,6 +2776,7 @@
     let branchCurrentRenderToken = 0;
     let pythonDraftRenderToken = 0;
     let optimizedEliminationRenderToken = 0;
+    let multiCaseExportRenderToken = 0;
     let mathPrecomputeToken = 0;
     let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
@@ -2779,6 +2784,7 @@
     const branchCurrentCache = new Map();
     const pythonDraftCache = new Map();
     const optimizedEliminationCache = new Map();
+    const multiCaseExportCache = new Map();
 
     function cacheGet(cache, key) {
       const value = cache.get(key);
@@ -2806,6 +2812,7 @@
       branchCurrentRenderToken += 1;
       pythonDraftRenderToken += 1;
       optimizedEliminationRenderToken += 1;
+      multiCaseExportRenderToken += 1;
       mathPrecomputeToken += 1;
       scheduleMathPrecompute();
     }
@@ -3122,6 +3129,7 @@
       "节点方程": "Node Equations",
       "消去版本": "Reduced",
       "优化消元 / C导出": "Optimized Elimination / C Export",
+      "多Case C导出": "Multi-Case C Export",
       "展开支路消去": "Expand Currents",
       "隐藏支路消去": "Hide Current Reduction",
       "显示支路电流消去版本": "Show reduced branch currents",
@@ -5867,7 +5875,10 @@
           showLocalLabels: state.showLocalLabels,
           showReducedBranchCurrents: state.showReducedBranchCurrents,
           panelWidth: state.panelWidth,
-          editorGroups: structuredClone(state.editorGroups || {})
+          editorGroups: structuredClone(state.editorGroups || {}),
+          multiCaseProfilesText: state.multiCaseProfilesText || "",
+          multiCaseProfilesKey: state.multiCaseProfilesKey || "",
+          multiCaseIdSymbol: state.multiCaseIdSymbol || "case_id"
         },
         canvasOrder: canvases.map(item => item.id),
         canvases,
@@ -5886,6 +5897,9 @@
         showReducedBranchCurrents: state.showReducedBranchCurrents,
         panelWidth: state.panelWidth,
         editorGroups: structuredClone(state.editorGroups || {}),
+        multiCaseProfilesText: state.multiCaseProfilesText || "",
+        multiCaseProfilesKey: state.multiCaseProfilesKey || "",
+        multiCaseIdSymbol: state.multiCaseIdSymbol || "case_id",
         selectedId: state.selectedId,
         selectedIds: structuredClone(state.selectedIds || []),
         selectedNetIds: structuredClone(state.selectedNetIds || []),
@@ -5911,6 +5925,9 @@
       state.showReducedBranchCurrents = ui.showReducedBranchCurrents ?? data?.showReducedBranchCurrents ?? state.showReducedBranchCurrents;
       state.panelWidth = ui.panelWidth ?? data?.panelWidth ?? state.panelWidth;
       state.editorGroups = structuredClone(ui.editorGroups || data?.editorGroups || state.editorGroups || {});
+      state.multiCaseProfilesText = ui.multiCaseProfilesText ?? data?.multiCaseProfilesText ?? state.multiCaseProfilesText ?? "";
+      state.multiCaseProfilesKey = ui.multiCaseProfilesKey ?? data?.multiCaseProfilesKey ?? state.multiCaseProfilesKey ?? "";
+      state.multiCaseIdSymbol = ui.multiCaseIdSymbol ?? data?.multiCaseIdSymbol ?? state.multiCaseIdSymbol ?? "case_id";
       applyPanelWidth();
     }
 
@@ -6713,7 +6730,7 @@
       updateOutputFullscreenButton();
     }
 
-    const MINIMAP_OUTPUTS = new Set(["nodeEquations", "reducedEquations", "optimizedElimination", "model", "python"]);
+    const MINIMAP_OUTPUTS = new Set(["nodeEquations", "reducedEquations", "optimizedElimination", "multiCaseCExport", "model", "python"]);
     let outputMinimapFrame = 0;
     let outputMinimapDragging = false;
     let outputDialogMinimapDragging = false;
@@ -7109,6 +7126,24 @@
         const payload = optimizedEliminationPayload();
         outputText.innerHTML = `<div class="formula-list"><div class="formula-empty">${optText("正在计算优化消元 / C导出...", "Computing optimized elimination / C export...")}</div></div>`;
         renderOptimizedEliminationAsync(token, payload);
+        return;
+      }
+      if (state.activeOutput === "multiCaseCExport") {
+        outputText.className = "output-body";
+        const branches = multiCaseEligibleBranches();
+        if (!branches.length) {
+          outputText.innerHTML = `<div class="formula-list"><div class="formula-empty">${escapeHtml(optText("当前电路没有可导出的多 case 支路或黑盒。", "The current circuit has no multi-case branches or black boxes to export."))}</div></div>`;
+          return;
+        }
+        try {
+          ensureMultiCaseProfilesText(branches);
+          const payload = multiCaseExportPayload();
+          const token = ++multiCaseExportRenderToken;
+          outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(optText("正在生成多Case集合 C导出...", "Generating multi-case collection C export..."))}</div></div>`;
+          renderMultiCaseCExportAsync(token, payload);
+        } catch (error) {
+          outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(error.message || String(error))}</div></div>`;
+        }
         return;
       }
       outputText.className = "output-body output-body-formulas";
@@ -8256,6 +8291,146 @@
       throw lastError || new Error(optText("优化消元失败", "Optimized elimination failed"));
     }
 
+    function multiCaseEligibleBranches() {
+      return state.branches.filter(branch => {
+        if (branch?.packageOriginal) return false;
+        normalizeSwitchCases(branch);
+        return Array.isArray(branch.switchCases) && branch.switchCases.length > 1;
+      });
+    }
+
+    function defaultMultiCaseProfiles(branches = multiCaseEligibleBranches()) {
+      if (!branches.length) return [];
+      const profiles = [];
+      const caseName = (branch, index) => branch.switchCases?.[index]?.name || `Case ${index + 1}`;
+      const buildProfile = (branchIndex, caseMap, labels) => {
+        if (branchIndex >= branches.length) {
+          profiles.push({
+            name: `case ${profiles.length}`,
+            comment: labels.join("; "),
+            case_map: { ...caseMap }
+          });
+          return;
+        }
+        const branch = branches[branchIndex];
+        const branchName = branch.name || branch.id;
+        (branch.switchCases || []).forEach((_item, index) => {
+          buildProfile(
+            branchIndex + 1,
+            { ...caseMap, [branch.id]: index },
+            [...labels, `${branchName} = ${caseName(branch, index)}`]
+          );
+        });
+      };
+      buildProfile(0, {}, []);
+      return profiles;
+    }
+
+    function multiCaseProfilesKey(branches = multiCaseEligibleBranches()) {
+      return JSON.stringify({
+        version: "alias-template-cartesian-profiles-v1",
+        branches: branches.map(branch => ({
+          id: branch.id,
+          name: branch.name,
+          caseCount: branch.switchCases?.length || 0,
+          caseNames: (branch.switchCases || []).map(item => item.name || "")
+        }))
+      });
+    }
+
+    function ensureMultiCaseProfilesText(branches = multiCaseEligibleBranches()) {
+      const key = multiCaseProfilesKey(branches);
+      const generated = JSON.stringify(defaultMultiCaseProfiles(branches), null, 2);
+      if (state.multiCaseProfilesText !== generated || state.multiCaseProfilesKey !== key) {
+        state.multiCaseProfilesText = generated;
+        state.multiCaseProfilesKey = key;
+      }
+      return state.multiCaseProfilesText;
+    }
+
+    function parseMultiCaseProfiles() {
+      const text = state.multiCaseProfilesText?.trim() || "[]";
+      const profiles = JSON.parse(text);
+      if (!Array.isArray(profiles)) throw new Error(optText("case profiles 必须是数组。", "case profiles must be an array."));
+      return profiles.map((profile, index) => ({
+        name: String(profile?.name || `Case ${index + 1}`),
+        comment: String(profile?.comment || ""),
+        case_map: profile?.case_map && typeof profile.case_map === "object" ? profile.case_map : {}
+      }));
+    }
+
+    function payloadForCaseProfile(profile) {
+      const originals = state.branches.map(branch => [branch, Number(branch.activeSwitchCase) || 0]);
+      try {
+        Object.entries(profile.case_map || {}).forEach(([branchId, caseIndex]) => {
+          const branch = findBranch(branchId);
+          if (!branch) return;
+          normalizeSwitchCases(branch);
+          if (!branch.switchCases?.length) return;
+          branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(caseIndex) || 0));
+        });
+        return optimizedEliminationPayload();
+      } finally {
+        originals.forEach(([branch, activeSwitchCase]) => {
+          branch.activeSwitchCase = activeSwitchCase;
+        });
+      }
+    }
+
+    function multiCaseExportPayload() {
+      const branches = multiCaseEligibleBranches();
+      ensureMultiCaseProfilesText(branches);
+      const profiles = parseMultiCaseProfiles();
+      return {
+        mode: "multi_case_c_export",
+        case_id_symbol: state.multiCaseIdSymbol || "case_id",
+        display_mode: state.optimizedEliminationDisplay || "compact",
+        simplify_level: state.optimizedEliminationSimplify || "light",
+        assume_spd: state.optimizedEliminationAssumeSpd !== false,
+        use_suggested_order: state.optimizedEliminationUseSuggestedOrder !== false,
+        eligible_branches: branches.map(branch => ({
+          id: branch.id,
+          name: branch.name,
+          kind: branch.kind,
+          case_count: branch.switchCases?.length || 0
+        })),
+        case_profiles: profiles.map((profile, index) => ({
+          name: profile.name || `Case ${index + 1}`,
+          comment: profile.comment || "",
+          case_map: profile.case_map || {},
+          payload: payloadForCaseProfile(profile)
+        }))
+      };
+    }
+
+    async function requestMultiCaseCExport(payload) {
+      const urls = [
+        ...localApiUrls("/multi-case-c-export"),
+        ...localApiUrls("/optimized-elimination")
+      ];
+      let lastError = null;
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const result = await response.json();
+          if (!response.ok || result.ok === false) {
+            const message = result.error || optText("多Case C导出失败", "Multi-case C export failed");
+            const isMissingRoute = response.status === 404 || String(message).toLowerCase() === "not found";
+            throw Object.assign(new Error(message), { backendError: !isMissingRoute });
+          }
+          return result;
+        } catch (error) {
+          if (error.backendError) throw error;
+          lastError = error;
+        }
+      }
+      throw lastError || new Error(optText("多Case C导出失败", "Multi-case C export failed"));
+    }
+
     function scheduleMathPrecompute() {
       if (mathPrecomputeTimer) window.clearTimeout(mathPrecomputeTimer);
       const token = mathPrecomputeToken;
@@ -8475,13 +8650,23 @@
 
     function renderStructuredFormulaSummary(result = null) {
       const direct = result?.structured?.direct_retained || {};
-      const hasDirectG = (direct.Gred_direct || []).some(row => (row || []).some(value => String(value || "0") !== "0"));
-      const hasDirectIhis = (direct.Ihisred_direct || []).some(value => String(value || "0") !== "0");
+      const hasMatrixValue = matrix => (matrix || []).some(row => (row || []).some(value => String(value || "0") !== "0"));
+      const hasVectorValue = vector => (vector || []).some(value => String(value || "0") !== "0");
+      const hasDirectG = hasMatrixValue(direct.Gred_direct);
+      const hasDirectGRam = hasMatrixValue(direct.Gred_direct_ram);
+      const hasDirectGCode = hasMatrixValue(direct.Gred_direct_code);
+      const hasDirectIhis = hasVectorValue(direct.Ihisred_direct);
+      const hasDirectIhisRam = hasVectorValue(direct.Ihisred_direct_ram);
+      const hasDirectIhisCode = hasVectorValue(direct.Ihisred_direct_code);
       const directBlock = (hasDirectG || hasDirectIhis) ? `
         <div class="formula-line"><span class="formula-lhs">${formatMath("Gred_final")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Gred_schur + Gred_direct")}</span></div>
         <div class="formula-line"><span class="formula-lhs">${formatMath("Ihisred_final")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihisred_schur + Ihisred_direct")}</span></div>
-        ${hasDirectG ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gred_direct")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct)}</div>` : ""}
-        ${hasDirectIhis ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Ihisred_direct")}</span><span class="formula-eq">=</span>${renderMatrix((direct.Ihisred_direct || []).map(value => [value]))}</div>` : ""}
+        ${hasDirectG ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gred_direct")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct, null, direct.Gred_direct_tagged)}</div>` : ""}
+        ${hasDirectGRam ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gred_direct_RAM")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct_ram, null, direct.Gred_direct_ram_tagged)}</div>` : ""}
+        ${hasDirectGCode ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gred_direct_CODE")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct_code, null, direct.Gred_direct_code_tagged)}</div>` : ""}
+        ${hasDirectIhis ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Ihisred_direct")}</span><span class="formula-eq">=</span>${renderMatrix((direct.Ihisred_direct || []).map(value => [value]), null, (direct.Ihisred_direct_tagged || []).map(value => [value]))}</div>` : ""}
+        ${hasDirectIhisRam ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Ihisred_direct_RAM")}</span><span class="formula-eq">=</span>${renderMatrix((direct.Ihisred_direct_ram || []).map(value => [value]), null, (direct.Ihisred_direct_ram_tagged || []).map(value => [value]))}</div>` : ""}
+        ${hasDirectIhisCode ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Ihisred_direct_CODE")}</span><span class="formula-eq">=</span>${renderMatrix((direct.Ihisred_direct_code || []).map(value => [value]), null, (direct.Ihisred_direct_code_tagged || []).map(value => [value]))}</div>` : ""}
       ` : "";
       if (result?.structured?.block_type === "no_elimination") {
         return `
@@ -8786,6 +8971,154 @@
           ${renderOptimizedFormulaResult(result, payload)}
         </div>
       `;
+    }
+
+    function renderMultiCaseProfileEditor(branches) {
+      ensureMultiCaseProfilesText(branches);
+      let profiles = [];
+      try {
+        profiles = parseMultiCaseProfiles();
+      } catch {
+        profiles = [];
+      }
+      const branchById = new Map(branches.map(branch => [branch.id, branch]));
+      const caseLabel = (branch, caseIndex) => {
+        const index = Math.max(0, Number(caseIndex) || 0);
+        return branch?.switchCases?.[index]?.name || `Case ${index + 1}`;
+      };
+      const branchLabel = branch => branch?.name || branch?.id || "-";
+      const branchList = branches.map(branch => {
+        const cases = (branch.switchCases || [])
+          .map((item, index) => `${index}: ${item.name || `Case ${index + 1}`}`)
+          .join(" / ");
+        return `<div class="formula-line"><span class="formula-rhs">${escapeHtml(branchLabel(branch))}: ${escapeHtml(cases)}</span></div>`;
+      }).join("");
+      const profileRows = profiles.map((profile, index) => {
+        const entries = Object.entries(profile.case_map || {}).map(([branchId, caseIndex]) => {
+          const branch = branchById.get(branchId) || findBranch(branchId);
+          return `${branchLabel(branch || { id: branchId })} = ${caseLabel(branch, caseIndex)}`;
+        }).join("; ") || optText("使用当前工况", "Use current active cases");
+        return `<div class="formula-line"><span class="formula-lhs">case ${index}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(entries)}</span></div>`;
+      }).join("");
+      return `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("多 case 元件摘要", "Multi-case Element Summary"))}</div>
+          ${branchList || `<div class="formula-empty">${escapeHtml(optText("当前电路没有可导出的多 case 支路或黑盒。", "The current circuit has no multi-case branches or black boxes to export."))}</div>`}
+        </div>
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("case_id 映射", "case_id Mapping"))}</div>
+          ${profileRows || `<div class="formula-empty">${escapeHtml(optText("暂无可生成组合。", "No generated combinations."))}</div>`}
+        </div>
+      `;
+    }
+
+    function renderMultiCaseCExportResult(result) {
+      const warnings = result.warnings?.length
+        ? `<div class="formula-card"><div class="formula-name">${escapeHtml(optText("提示", "Warnings"))}</div><div class="formula-empty">${result.warnings.map(escapeHtml).join("<br>")}</div></div>`
+        : "";
+      const multiCase = result.multi_case || {};
+      const branchById = new Map(multiCaseEligibleBranches().map(branch => [branch.id, branch]));
+      const branchLabel = branch => branch?.name || branch?.id || "-";
+      const aliases = multiCase.aliases || {};
+      const aliasRows = Object.entries(aliases).map(([alias, info]) => {
+        const caseValues = Object.entries(info.case_values || {})
+          .map(([caseIndex, expr]) => `case ${caseIndex}: ${expr}`)
+          .join("; ");
+        return `
+          <tr>
+            <td>${escapeHtml(alias)}</td>
+            <td>${escapeHtml(branchLabel(branchById.get(info.branch_id) || findBranch(info.branch_id) || { id: info.branch_id }))}</td>
+            <td>${escapeHtml(info.kind || "-")}</td>
+            <td>${escapeHtml(info.owner || "-")}</td>
+            <td>${escapeHtml(caseValues || "-")}</td>
+          </tr>
+        `;
+      }).join("");
+      const aliasHtml = aliasRows ? `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("effective alias / owner", "Effective Aliases / Owners"))}</div>
+          <table class="analysis-table stage-summary-table">
+            <thead>
+              <tr>
+                <th>alias</th>
+                <th>${escapeHtml(optText("支路", "Branch"))}</th>
+                <th>${escapeHtml(optText("类型", "Type"))}</th>
+                <th>owner</th>
+                <th>${escapeHtml(optText("case full value", "Case Full Values"))}</th>
+              </tr>
+            </thead>
+            <tbody>${aliasRows}</tbody>
+          </table>
+        </div>
+      ` : "";
+      const summary = multiCase.template_summary || {};
+      const summaryRows = [
+        ["codegen mode", multiCase.codegen_mode || multiCase.fast_path || "-"],
+        [optText("拓扑校验", "Topology validation"), optText("通过", "passed")],
+        [optText("Template nodes", "Template nodes"), (summary.nodes || []).join(", ") || "-"],
+        [optText("retained/internal order", "retained/internal order"), `${(summary.retained_order || []).join(", ") || "-"} / ${(summary.internal_order || []).join(", ") || "-"}`],
+        ["Gred shape", (summary.Gred_shape || []).join(" x ") || "-"],
+        ["Ihisred shape", (summary.Ihisred_shape || []).join(" x ") || "-"],
+        [optText("recovery shape", "recovery shape"), (multiCase.template?.recovery_shape || []).join(" x ") || "-"],
+        ["W structure", multiCase.block_type || "-"]
+      ].map(([lhs, rhs]) => `<div class="formula-line"><span class="formula-lhs">${escapeHtml(lhs)}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(rhs)}</span></div>`).join("");
+      const summaryHtml = `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("模板消元摘要", "Template Reduction Summary"))}</div>
+          ${summaryRows}
+        </div>
+      `;
+      return `
+        ${warnings}
+        ${summaryHtml}
+        ${aliasHtml}
+        <div class="formula-card" data-c-draft-card>
+          <div class="formula-header-row">
+            <div class="formula-name">${escapeHtml(optText("多Case 集合 C 草稿", "Multi-case Collection C Draft"))}</div>
+            <button class="copy-draft-button" type="button" data-copy-c-draft>${escapeHtml(optText("复制 C", "Copy C"))}</button>
+          </div>
+          <pre class="code" data-c-draft-code tabindex="0">${escapeHtml(result.multi_case?.c_draft || "")}</pre>
+        </div>
+      `;
+    }
+
+    function multiCaseExportCacheKey(payload) {
+      return JSON.stringify({
+        language: state.language,
+        case_id_symbol: payload.case_id_symbol,
+        eligible_branches: payload.eligible_branches,
+        case_profiles: payload.case_profiles?.map(profile => ({
+          name: profile.name,
+          comment: profile.comment,
+          case_map: profile.case_map,
+          payload: profile.payload
+        }))
+      });
+    }
+
+    async function renderMultiCaseCExportAsync(token, payload) {
+      const key = multiCaseExportCacheKey(payload);
+      const cachedEntry = cacheGet(multiCaseExportCache, key);
+      if (cachedEntry?.result) {
+        if (token === multiCaseExportRenderToken) outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(multiCaseEligibleBranches())}${renderMultiCaseCExportResult(cachedEntry.result)}</div>`;
+        return;
+      }
+      const pending = requestMultiCaseCExport(payload).then(result => {
+        const current = multiCaseExportCache.get(key);
+        if (current?.pending === pending) cacheSet(multiCaseExportCache, key, { result, pending: null });
+        return result;
+      }).catch(error => {
+        const current = multiCaseExportCache.get(key);
+        if (current?.pending === pending) multiCaseExportCache.delete(key);
+        throw error;
+      });
+      cacheSet(multiCaseExportCache, key, { result: null, pending });
+      try {
+        const result = await pending;
+        if (token === multiCaseExportRenderToken) outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(multiCaseEligibleBranches())}${renderMultiCaseCExportResult(result)}</div>`;
+      } catch (error) {
+        if (token === multiCaseExportRenderToken) outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(multiCaseEligibleBranches())}<div class="formula-empty">${escapeHtml(optText("多Case C导出失败", "Multi-case C export failed"))}：${escapeHtml(error.message || String(error))}</div></div>`;
+      }
     }
 
     async function renderOptimizedEliminationAsync(token, payload) {
@@ -10535,7 +10868,12 @@
       return items.map((item, index) => {
         const parts = formatCombinedTermParts(item.term, item.coeff, index);
         const branch = activeSourceHighlightBranch(item.sourceIds);
-        return `${parts.prefix}${wrapMathSourceHighlight(branch, formatMathNoHighlight(parts.body))}`;
+        let bodyHtml = formatMathNoHighlight(parts.body);
+        if (parts.prefix.trim() === "-" && isWrappedExpression(parts.body)) {
+          const inner = parts.body.slice(1, -1).trim();
+          if (hasTopLevelAddSub(inner)) bodyHtml = `(${formatMathNoHighlight(inner)})`;
+        }
+        return `${parts.prefix}${wrapMathSourceHighlight(branch, bodyHtml)}`;
       }).join("");
     }
 
@@ -10584,7 +10922,9 @@
 
     function formatCombinedTermParts(term, coeff, index) {
       const abs = Math.abs(coeff);
-      const body = abs === 1 ? term : `${abs}*${term}`;
+      const normalizedTerm = normalizeLikeTerm(term);
+      const groupedTerm = hasTopLevelAddSub(normalizedTerm) ? `(${normalizedTerm})` : normalizedTerm;
+      const body = abs === 1 ? groupedTerm : `${abs}*${groupedTerm}`;
       if (index === 0) return { prefix: coeff < 0 ? "-" : "", body };
       return { prefix: coeff < 0 ? " - " : " + ", body };
     }
@@ -13606,6 +13946,20 @@ function startResizeDrag(branch, handle, event) {
     outputText.addEventListener("pointerover", handleFormulaHover);
     outputText.addEventListener("pointerout", handleFormulaHoverOut);
     outputText.addEventListener("change", event => {
+      const multiCaseProfiles = event.target.closest?.("[data-multicase-profiles]");
+      if (multiCaseProfiles) {
+        state.multiCaseProfilesText = multiCaseProfiles.value || "";
+        multiCaseExportRenderToken += 1;
+        renderOutput();
+        return;
+      }
+      const multiCaseId = event.target.closest?.("[data-multicase-case-id]");
+      if (multiCaseId) {
+        state.multiCaseIdSymbol = multiCaseId.value || "case_id";
+        multiCaseExportRenderToken += 1;
+        renderOutput();
+        return;
+      }
       const control = event.target.closest?.("[data-optimized-control]");
       if (!control) return;
       const kind = control.dataset.optimizedControl;
@@ -13678,6 +14032,15 @@ function startResizeDrag(branch, handle, event) {
     document.addEventListener("copy", handleCodeDraftCopy, true);
     outputText.addEventListener("click", event => {
       if (handleCopyDraftClick(event)) return;
+      const multiCaseAction = event.target.closest?.("[data-multicase-action]");
+      if (multiCaseAction) {
+        if (multiCaseAction.dataset.multicaseAction === "resetProfiles") {
+          state.multiCaseProfilesText = JSON.stringify(defaultMultiCaseProfiles(multiCaseEligibleBranches()), null, 2);
+        }
+        multiCaseExportRenderToken += 1;
+        renderOutput();
+        return;
+      }
       const action = event.target.closest?.("[data-optimized-action]");
       if (!action) return;
       if (action.dataset.optimizedAction === "useSuggested") {
