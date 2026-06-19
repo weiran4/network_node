@@ -4648,8 +4648,18 @@
       return [branchValue(branch, "g")];
     }
 
+    function branchGIsConstant(branch) {
+      const activeCase = activeSwitchCase(branch);
+      return activeCase?.gIsConstant ?? branch.gIsConstant ?? true;
+    }
+
+    function branchConstantGSymbolsText(branch) {
+      const activeCase = activeSwitchCase(branch);
+      return activeCase?.constantGSymbols ?? branch.constantGSymbols ?? "";
+    }
+
     function branchConstantGSymbols(branch) {
-      const manual = parseSymbolList(branch.constantGSymbols || "");
+      const manual = parseSymbolList(branchConstantGSymbolsText(branch));
       if (branch.packageOriginal) {
         const symbols = new Set(manual);
         packagedGBranches(branch).forEach(({ inner }) => {
@@ -4657,7 +4667,7 @@
         });
         return symbols;
       }
-      if (branch.gIsConstant === false) return manual;
+      if (branchGIsConstant(branch) === false) return manual;
       const symbols = new Set(manual);
       branchGExpressions(branch).forEach(expr => {
         extractExpressionSymbols(expr).forEach(symbol => symbols.add(symbol));
@@ -4666,14 +4676,14 @@
     }
 
     function constantGEditor(branch, compact = false) {
-      const checked = branch.gIsConstant !== false;
+      const checked = branchGIsConstant(branch);
       const inferred = [...branchConstantGSymbols(branch)].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
       const help = compact
         ? "勾选时会把当前 G 表达式中的符号默认视为常数；下方可补充常数符号。"
         : "按变量名判断常数。若 G[0][0] = X + Y + Z 且只填 Z，则只有 Z 可进入 RAM；X/Y 留在 CODE。";
       return `
         ${checkboxField("G 是否为常数？", "gIsConstant", checked, help)}
-        ${editableField("常数 G 符号", "constantGSymbols", branch.constantGSymbols || "", false)}
+        ${editableField("常数 G 符号", "constantGSymbols", branchConstantGSymbolsText(branch), false)}
         <div class="modal-help">${escapeHtml(tr("可选：主要用于 G 表达式里常数和变量混合的情况；普通单支路通常不用填写。"))}</div>
         <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(inferred.join(", ") || tr("无"))}</div>
       `;
@@ -4739,6 +4749,7 @@
 
     function getBranchFieldValue(branch, field) {
       if (field === "switchCaseName") return activeSwitchCase(branch)?.name || "";
+      if (field === "constantGSymbols") return branchConstantGSymbolsText(branch);
       if (field.startsWith("controlRow.")) {
         const [, index, key] = field.split(".");
         return currentSourceControlRows(branch)[Number(index)]?.[key] || "";
@@ -5124,7 +5135,9 @@
 
     function switchCaseFromBranch(branch, index = 0) {
       const item = {
-        name: `Case ${index + 1}`
+        name: `Case ${index + 1}`,
+        gIsConstant: branch.gIsConstant !== false,
+        constantGSymbols: branch.constantGSymbols || ""
       };
       switchedValueFields(branch).forEach(field => {
         item[field] = branch[field] || (field === "g" ? "1/R" : field === "ihis" ? "0" : "[]");
@@ -5158,6 +5171,8 @@
         fields.forEach(field => {
           if (!item[field]) item[field] = branch[field] || switchCaseFromBranch(branch, index)[field];
         });
+        if (item.gIsConstant === undefined) item.gIsConstant = branch.gIsConstant !== false;
+        if (item.constantGSymbols === undefined) item.constantGSymbols = branch.constantGSymbols || "";
         return item;
       });
       branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(branch.activeSwitchCase) || 0));
@@ -5417,6 +5432,8 @@
         const activeCase = activeSwitchCase(branch);
         if (activeCase) {
           switchedValueFields(branch).forEach(field => { branch[field] = activeCase[field] || branch[field]; });
+          branch.gIsConstant = activeCase.gIsConstant !== false;
+          branch.constantGSymbols = activeCase.constantGSymbols || "";
         }
         delete branch.switchCases;
         branch.activeSwitchCase = 0;
@@ -9051,6 +9068,20 @@
           </table>
         </div>
       ` : "";
+      const conditionRows = (multiCase.gvalue_conditions || []).map(item => `
+        <div class="formula-line"><span class="formula-lhs">${escapeHtml(item.var || "-")}</span><span class="formula-eq">${escapeHtml(optText("启用条件", "active when"))}</span><span class="formula-rhs">${escapeHtml(item.condition || "-")}</span></div>
+      `).join("");
+      const conditionalGValueHtml = `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("按 case 条件启用的 GValue", "Case-Conditional GValue"))}</div>
+          <div class="formula-empty">${escapeHtml(optText(
+            "case_id 假定在仿真开始前固定；不支持运行时切换 case_id。",
+            "case_id is assumed fixed before simulation. Runtime case switching is not supported."
+          ))}</div>
+          <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("使用 case 条件 GValue", "Uses case-conditional GValue"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(multiCase.uses_case_conditional_gvalue ? optText("是", "yes") : optText("否", "no"))}</span></div>
+          ${conditionRows || `<div class="formula-empty">${escapeHtml(optText("没有 case 条件 GValue。", "No case-conditional GValue entries."))}</div>`}
+        </div>
+      `;
       const summary = multiCase.template_summary || {};
       const summaryRows = [
         ["codegen mode", multiCase.codegen_mode || multiCase.fast_path || "-"],
@@ -9071,6 +9102,7 @@
       return `
         ${warnings}
         ${summaryHtml}
+        ${conditionalGValueHtml}
         ${aliasHtml}
         <div class="formula-card" data-c-draft-card>
           <div class="formula-header-row">
@@ -10988,12 +11020,16 @@
         return;
       }
       if (field === "gIsConstant") {
-        branch.gIsConstant = Boolean(value);
+        const activeCase = activeSwitchCase(branch);
+        if (activeCase) activeCase.gIsConstant = Boolean(value);
+        else branch.gIsConstant = Boolean(value);
         renderAfterSidePanelEdit();
         return;
       }
       if (field === "constantGSymbols") {
-        branch.constantGSymbols = value.trim();
+        const activeCase = activeSwitchCase(branch);
+        if (activeCase) activeCase.constantGSymbols = value.trim();
+        else branch.constantGSymbols = value.trim();
         renderAfterSidePanelEdit();
         return;
       }

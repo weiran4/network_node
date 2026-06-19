@@ -905,9 +905,6 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
             f"multi-case alias template cannot represent {key}[{row},{col}] with local branch aliases"
         )
 
-    if not aliases:
-        return None
-
     template_payload = json.loads(json.dumps(base_payload))
     for key in ["G_full", "Ihis_full"]:
         base = matrices_by_key[key][0]
@@ -1280,6 +1277,406 @@ def _insert_multicase_alias_layer(
     return _prepend_c_header_after_includes(draft, header)
 
 
+def _profile_alias_substitutions(profile: dict, aliases: dict[str, dict]) -> dict[sp.Symbol, sp.Expr]:
+    substitutions: dict[sp.Symbol, sp.Expr] = {}
+    for alias, info in aliases.items():
+        branch_id = info.get("branch_id") or ""
+        local_case = _profile_case_index(profile, branch_id, 0)
+        case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
+        if local_case not in case_values and case_values:
+            local_case = min(case_values)
+        substitutions[sp.Symbol(alias)] = case_values.get(local_case, sp.Integer(0))
+    return substitutions
+
+
+def _profile_final_expr(expr: sp.Expr, profile: dict, aliases: dict[str, dict]) -> sp.Expr:
+    return sp.sympify(expr).xreplace(_profile_alias_substitutions(profile, aliases))
+
+
+def _profile_symbol_table(profile: dict) -> dict:
+    payload = profile.get("payload") or {}
+    return dict(payload.get("symbol_dependency_table_tagged") or payload.get("symbol_dependency_table") or {})
+
+
+def _case_condition(case_id_symbol: str, case_indices: Sequence[int]) -> str:
+    return " || ".join(f"{case_id_symbol} == {index}" for index in case_indices) if case_indices else "FALSE"
+
+
+def _var_g_name(nodes: Sequence[str], row: int, col: int) -> str:
+    a = _c_identifier_name(nodes[row], f"N{row + 1}")
+    b = _c_identifier_name(nodes[col], f"N{col + 1}")
+    return f"varG_{a}_{b}"
+
+
+def _conditional_final_g_plans(
+    *,
+    case_id_symbol: str,
+    profiles: list[dict],
+    aliases: dict[str, dict],
+    template_gred: sp.Matrix,
+    external_nodes: list[str],
+) -> list[dict]:
+    nr = len(external_nodes)
+    entry_plans: list[dict] = []
+    for row in range(nr):
+        for col in range(row, nr):
+            per_case = []
+            for index, profile in enumerate(profiles):
+                expr = _profile_final_expr(template_gred[row, col], profile, aliases)
+                stage = _expr_stage(expr, _profile_symbol_table(profile))
+                per_case.append({"index": index, "expr": expr, "stage": stage})
+            if all(_expr_equal_light(item["expr"], 0) for item in per_case):
+                continue
+            ram_cases = [item for item in per_case if item["stage"] == "RAM"]
+            code_cases = [item for item in per_case if item["stage"] != "RAM"]
+            entry_plans.append({
+                "row": row,
+                "col": col,
+                "var": _var_g_name(external_nodes, row, col),
+                "ram_cases": ram_cases,
+                "code_cases": code_cases,
+                "condition": _case_condition(case_id_symbol, [item["index"] for item in code_cases]),
+            })
+    return entry_plans
+
+
+def _has_mixed_final_g_stages(
+    template_gred: sp.Matrix,
+    profiles: list[dict],
+    aliases: dict[str, dict],
+) -> bool:
+    for row in range(template_gred.rows):
+        for col in range(row, template_gred.cols):
+            stages = {
+                _expr_stage(_profile_final_expr(template_gred[row, col], profile, aliases), _profile_symbol_table(profile))
+                for profile in profiles
+            }
+            if len(stages) > 1:
+                return True
+    return False
+
+
+def _final_g_stage_analysis_is_within_budget(template_gred: sp.Matrix, max_ops: int = 2000) -> bool:
+    total_ops = 0
+    for expr in template_gred:
+        total_ops += int(sp.count_ops(expr))
+        if total_ops > max_ops:
+            return False
+    return True
+
+
+def _build_conditional_final_gvalue_draft(
+    *,
+    case_id_symbol: str,
+    profiles: list[dict],
+    branch_ids: list[str],
+    aliases: dict[str, dict],
+    template_gred: sp.Matrix,
+    template_ihis: sp.Matrix,
+    external_nodes: list[str],
+    symbol_table: dict,
+) -> tuple[str, list[dict]]:
+    nr = len(external_nodes)
+    declared_symbols: set[str] = set()
+    for info in aliases.values():
+        for expr in (info.get("case_values") or {}).values():
+            declared_symbols.update(symbol.name for symbol in _parse_expr(expr).free_symbols)
+    for row in range(template_gred.rows):
+        for col in range(template_gred.cols):
+            declared_symbols.update(symbol.name for symbol in sp.sympify(template_gred[row, col]).free_symbols)
+    for row in range(template_ihis.rows):
+        declared_symbols.update(symbol.name for symbol in sp.sympify(template_ihis[row, 0]).free_symbols)
+    declared_symbols.difference_update(aliases.keys())
+
+    entry_plans = _conditional_final_g_plans(
+        case_id_symbol=case_id_symbol,
+        profiles=profiles,
+        aliases=aliases,
+        template_gred=template_gred,
+        external_nodes=external_nodes,
+    )
+
+    lines = [
+        "#include <matrixLIB.h>",
+        "/* Multi-case alias-template C draft with case-conditional final GValues.",
+        "   case_id is assumed fixed before simulation; runtime case switching is not supported.",
+        "   Each case uses full values. No base + delta compensation is generated. */",
+        f"enum {{ NR = {nr}, NK = 0 }};",
+        "",
+        "STATIC:",
+    ]
+    for branch_id in branch_ids:
+        lines.append(f"    int {_c_identifier_name(branch_id, 'branch')}_case_id = 0;")
+    for symbol in sorted(declared_symbols):
+        if _c_identifier_name(symbol, symbol) == symbol:
+            lines.append(f"    double {symbol} = 0.0;")
+    for alias in sorted(aliases):
+        lines.append(f"    double {alias} = 0.0;")
+    lines.extend([
+        "",
+        "RAM_PASS1:",
+        "    int err = 0;",
+        "    /* Decode global case_id into local element cases. */",
+        f"    switch ({case_id_symbol}) {{",
+    ])
+    for index, profile in enumerate(profiles):
+        lines.append(f"    case {index}: /* {_profile_case_comment(profile, index)} */")
+        for branch_id in branch_ids:
+            lines.append(f"        {_c_identifier_name(branch_id, 'branch')}_case_id = {_profile_case_index(profile, branch_id, 0)};")
+        lines.append("        break;")
+    lines.append("    default:")
+    for branch_id in branch_ids:
+        lines.append(f"        {_c_identifier_name(branch_id, 'branch')}_case_id = {_profile_case_index(profiles[0], branch_id, 0)};")
+    lines.extend([
+        "        break;",
+        "    }",
+        "",
+        "    g_mat_nods[0] = getNodeNum(comp, \"" + external_nodes[0] + "\");" if nr else "",
+    ])
+    for index, node in enumerate(external_nodes[1:], start=1):
+        lines.append(f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node}\");")
+    if nr:
+        lines.extend([
+            "    for (int row = 0; row < NR; row++) {",
+            "        for (int col = 0; col < NR; col++) {",
+            "            g_mat_over[row][col] = 0.0;",
+            "        }",
+            "    }",
+            f"    switch ({case_id_symbol}) {{",
+        ])
+        for index, profile in enumerate(profiles):
+            lines.append(f"    case {index}:")
+            any_ram = False
+            for plan in entry_plans:
+                ram_case = next((item for item in plan["ram_cases"] if item["index"] == index), None)
+                if ram_case is None:
+                    if any(item["index"] == index for item in plan["code_cases"]):
+                        lines.append(f"        /* CODE-owned case: no RAM stamp for {plan['var']}. */")
+                    continue
+                value = _ccode(ram_case["expr"])
+                row = plan["row"]
+                col = plan["col"]
+                lines.append(f"        g_mat_over[{row}][{col}] = {value};")
+                if row != col:
+                    lines.append(f"        g_mat_over[{col}][{row}] = {value};")
+                any_ram = True
+            if not any_ram:
+                lines.append("        /* No RAM-owned final G entries in this case. */")
+            lines.append("        break;")
+        lines.extend([
+            "    default:",
+            "        break;",
+            "    }",
+            f"    setupGMatrix({nr});",
+        ])
+    lines.extend([
+        "",
+        "GVALUES:",
+    ])
+    gvalue_lines = []
+    gvalue_conditions = []
+    for plan in entry_plans:
+        if not plan["code_cases"]:
+            continue
+        row = plan["row"]
+        col = plan["col"]
+        condition = plan["condition"]
+        gvalue_lines.append(
+            f"    double {plan['var']} = createGValue(\"{plan['var']}\", \"{external_nodes[row]}\", \"{external_nodes[col]}\", 0, \"{condition}\");"
+        )
+        gvalue_conditions.append({
+            "var": plan["var"],
+            "row": row,
+            "col": col,
+            "condition": condition,
+        })
+    lines.extend(gvalue_lines or ["    /* No CODE-owned final G entries in any case. */"])
+    lines.extend([
+        "",
+        "CODE:",
+        "BEGIN_T0:",
+        "    /* Resolve multi-case effective aliases as full values, never deltas. */",
+    ])
+    lines.extend(_alias_assignment_lines(aliases, "CODE") + _alias_assignment_lines(aliases, "CODE_PER_STEP"))
+    if any(info.get("owner") == "RAM" for info in aliases.values()):
+        lines.extend(_alias_assignment_lines(aliases, "RAM"))
+    lines.extend([
+        "",
+        f"    switch ({case_id_symbol}) {{",
+    ])
+    for index, profile in enumerate(profiles):
+        lines.append(f"    case {index}:")
+        any_code = False
+        for plan in entry_plans:
+            code_case = next((item for item in plan["code_cases"] if item["index"] == index), None)
+            if code_case is None:
+                continue
+            lines.append(f"        {plan['var']} = {_ccode(code_case['expr'])};")
+            any_code = True
+        if not any_code:
+            lines.append("        /* RAM-owned case: no active varG assignment. */")
+        lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+        "",
+        "    /* Node injection currents follow retained-node order. */",
+    ])
+    for index, node in enumerate(external_nodes):
+        ihis_expr = sp.sympify(template_ihis[index, 0]) if index < template_ihis.rows else sp.Integer(0)
+        lines.append(f"    Inj{_c_identifier_name(node, f'N{index + 1}')} = {_ccode(ihis_expr)};")
+    lines.extend([
+        "",
+        "T1_T2:",
+        "    /* This conditional GValue export assumes no runtime case switching. */",
+    ])
+    return "\n".join(line for line in lines if line != ""), gvalue_conditions
+
+
+def _conditional_ram_stamp_block(
+    *,
+    case_id_symbol: str,
+    profiles: list[dict],
+    external_nodes: list[str],
+    entry_plans: list[dict],
+) -> list[str]:
+    nr = len(external_nodes)
+    if not nr or not any(plan["ram_cases"] for plan in entry_plans):
+        return ["    /* No RAM-side G entries: no fixed G overlay is registered. */"]
+    lines = [
+        "    /* Case-conditional RAM final-G stamp. CODE-owned cases do not receive a RAM base. */",
+    ]
+    for index, node in enumerate(external_nodes):
+        lines.append(f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node}\");")
+    lines.extend([
+        "    for (int row = 0; row < NR; row++) {",
+        "        for (int col = 0; col < NR; col++) {",
+        "            g_mat_over[row][col] = 0.0;",
+        "        }",
+        "    }",
+        f"    switch ({case_id_symbol}) {{",
+    ])
+    for index, _profile in enumerate(profiles):
+        lines.append(f"    case {index}:")
+        any_ram = False
+        for plan in entry_plans:
+            ram_case = next((item for item in plan["ram_cases"] if item["index"] == index), None)
+            if ram_case is None:
+                if any(item["index"] == index for item in plan["code_cases"]):
+                    lines.append(f"        /* CODE-owned case: no RAM stamp for {plan['var']}. */")
+                continue
+            value = _ccode(ram_case["expr"])
+            row = plan["row"]
+            col = plan["col"]
+            lines.append(f"        g_mat_over[{row}][{col}] = {value};")
+            if row != col:
+                lines.append(f"        g_mat_over[{col}][{row}] = {value};")
+            any_ram = True
+        if not any_ram:
+            lines.append("        /* No RAM-owned final G entries in this case. */")
+        lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
+        f"                       \"Invalid multi-case {case_id_symbol} %d for component %s.\",",
+        f"                       {case_id_symbol}, Name);",
+        "        break;",
+        "    }",
+        f"    setupGMatrix({nr});",
+    ])
+    return lines
+
+
+def _case_switch_assignment_lines(case_id_symbol: str, case_indices: Sequence[int], assignments: Sequence[str]) -> list[str]:
+    if not case_indices or not assignments:
+        return ["    /* No CODE-owned cases for this GValue group. */"]
+    lines = [f"    switch ({case_id_symbol}) {{"]
+    for index in case_indices:
+        lines.append(f"    case {index}:")
+    for assignment in assignments:
+        lines.append(f"        {assignment}")
+    lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+    ])
+    return lines
+
+
+def _apply_conditional_final_gvalues_to_structured_draft(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: list[dict],
+    aliases: dict[str, dict],
+    template_gred: sp.Matrix,
+    external_nodes: list[str],
+) -> tuple[str, list[dict]]:
+    entry_plans = _conditional_final_g_plans(
+        case_id_symbol=case_id_symbol,
+        profiles=profiles,
+        aliases=aliases,
+        template_gred=template_gred,
+        external_nodes=external_nodes,
+    )
+    gvalue_conditions: list[dict] = []
+    for plan in entry_plans:
+        if not plan["code_cases"]:
+            continue
+        row = plan["row"]
+        col = plan["col"]
+        condition = plan["condition"]
+        gvalue_conditions.append({
+            "var": plan["var"],
+            "row": row,
+            "col": col,
+            "condition": condition,
+        })
+        pattern = (
+            f'double {plan["var"]} = createGValue("{plan["var"]}", '
+            f'"{external_nodes[row]}", "{external_nodes[col]}", 0, "TRUE");'
+        )
+        replacement = (
+            f'double {plan["var"]} = createGValue("{plan["var"]}", '
+            f'"{external_nodes[row]}", "{external_nodes[col]}", 0, "{condition}");'
+        )
+        draft = draft.replace(pattern, replacement)
+
+    ram_block = "\n".join(_conditional_ram_stamp_block(
+        case_id_symbol=case_id_symbol,
+        profiles=profiles,
+        external_nodes=external_nodes,
+        entry_plans=entry_plans,
+    ))
+    draft = draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
+
+    grouped_assignments: dict[tuple[int, ...], list[str]] = {}
+    for plan in entry_plans:
+        if not plan["code_cases"]:
+            continue
+        row = plan["row"]
+        col = plan["col"]
+        for matrix_name in ["Gred_code", "G_code"]:
+            assignment = f"{plan['var']} = get_CODE(&{matrix_name}, {row}, {col});"
+            if f"    {assignment}" in draft:
+                case_indices = tuple(item["index"] for item in plan["code_cases"])
+                grouped_assignments.setdefault(case_indices, []).append(assignment)
+                break
+
+    for case_indices, assignments in grouped_assignments.items():
+        first_assignment = assignments[0]
+        for assignment in assignments[1:]:
+            draft = draft.replace(f"    {assignment}", "", 1)
+        draft = draft.replace(
+            f"    {first_assignment}",
+            "\n".join(_case_switch_assignment_lines(case_id_symbol, case_indices, assignments)),
+            1,
+        )
+    return draft, gvalue_conditions
+
+
 def _try_build_alias_template_response(payload: dict) -> dict | None:
     alias_model = _build_multicase_alias_template_payload(payload)
     if alias_model is None:
@@ -1298,18 +1695,76 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
     template_reduced = eliminate_internal_nodes(template_G, template_Ihis, template_nodes, template_external)
     case_id_symbol = str(payload.get("case_id_symbol") or "global_case_id")
     aliases = alias_model["aliases"]
+    display_names = template_payload.get("node_display_names") or {}
+    c_external_nodes = [str(display_names.get(node, node)) for node in template_external]
+    symbol_table = {}
+    for profile in alias_model["profiles"]:
+        symbol_table.update((profile.get("payload") or {}).get("symbol_dependency_table") or {})
     warnings = list(result.get("warnings") or [])
     for alias, info in aliases.items():
         owners = set((info.get("case_owners") or {}).values())
         if len(owners) > 1:
-            warnings.append(f"Mixed case owners detected for {alias}; promoted to {info['owner']} for safety.")
-    draft = _insert_multicase_alias_layer(
-        result["structured"]["c_draft"],
-        case_id_symbol=case_id_symbol,
-        profiles=alias_model["profiles"],
-        branch_ids=alias_model["branch_ids"],
-        aliases=aliases,
+            warnings.append(
+                f"Warning: {alias} has mixed RAM/CODE ownership across cases. "
+                "This export assumes case_id is fixed before simulation and must not change at runtime. "
+                "If case_id changes during runtime, RAM-stamped values will not be withdrawn and results may be incorrect."
+            )
+    gvalue_conditions: list[dict] = []
+    has_internal_recovery = bool(result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [])
+    has_mixed_final_g = (
+        _final_g_stage_analysis_is_within_budget(template_reduced.G_red)
+        and _has_mixed_final_g_stages(template_reduced.G_red, alias_model["profiles"], aliases)
     )
+    if (
+        not aliases
+        and
+        not has_internal_recovery
+        and
+        has_mixed_final_g
+    ):
+        draft, gvalue_conditions = _build_conditional_final_gvalue_draft(
+            case_id_symbol=case_id_symbol,
+            profiles=alias_model["profiles"],
+            branch_ids=alias_model["branch_ids"],
+            aliases=aliases,
+            template_gred=template_reduced.G_red,
+            template_ihis=template_reduced.Ihis_red,
+            external_nodes=c_external_nodes,
+            symbol_table=symbol_table,
+        )
+        warnings.append(
+            "Warning: final G entries have mixed RAM/CODE ownership across cases. "
+            "This export assumes case_id is fixed before simulation and must not change at runtime. "
+            "If case_id changes during runtime, RAM-stamped values will not be withdrawn and results may be incorrect."
+        )
+        warnings.append(
+            "case_id must be fixed before simulation and must not change at runtime; "
+            "case-conditional GValue entries are only valid for initialization-time case selection."
+        )
+    else:
+        if not aliases:
+            return None
+        draft = _insert_multicase_alias_layer(
+            result["structured"]["c_draft"],
+            case_id_symbol=case_id_symbol,
+            profiles=alias_model["profiles"],
+            branch_ids=alias_model["branch_ids"],
+            aliases=aliases,
+        )
+        if has_mixed_final_g:
+            draft, gvalue_conditions = _apply_conditional_final_gvalues_to_structured_draft(
+                draft,
+                case_id_symbol=case_id_symbol,
+                profiles=alias_model["profiles"],
+                aliases=aliases,
+                template_gred=template_reduced.G_red,
+                external_nodes=c_external_nodes,
+            )
+            warnings.append(
+                "Warning: final G entries have mixed RAM/CODE ownership across cases. "
+                "This export assumes case_id is fixed before simulation and must not change at runtime. "
+                "If case_id changes during runtime, RAM-stamped values will not be withdrawn and results may be incorrect."
+            )
     return {
         "ok": True,
         "mode": "multi_case_c_export",
@@ -1330,6 +1785,8 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             "block_type": (result.get("structured") or {}).get("block_type"),
             "profile_count": len(alias_model["profiles"]),
             "aliases": aliases,
+            "gvalue_conditions": gvalue_conditions,
+            "uses_case_conditional_gvalue": bool(gvalue_conditions),
             "template": {
                 "Gred": _clean_matrix(template_reduced.G_red),
                 "Ihisred": _clean_vector(template_reduced.Ihis_red),

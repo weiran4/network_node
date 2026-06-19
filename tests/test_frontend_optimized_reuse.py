@@ -68,6 +68,11 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("case full value", result_source)
         self.assertIn("codegen_mode", result_source)
         self.assertIn("Topology validation", result_source)
+        self.assertIn("按 case 条件启用的 GValue", result_source)
+        self.assertIn("case_id is assumed fixed before simulation. Runtime case switching is not supported.", result_source)
+        self.assertIn("启用条件", result_source)
+        self.assertIn("gvalue_conditions", result_source)
+        self.assertIn("uses_case_conditional_gvalue", result_source)
 
     def test_optimized_direct_retained_matrices_render_with_tagged_sources(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -119,6 +124,36 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         payload_source = source[start:end]
         self.assertIn("ensureMultiCaseProfilesText(branches);", payload_source)
         self.assertIn("const profiles = parseMultiCaseProfiles();", payload_source)
+
+    def test_switch_cases_store_constant_g_metadata_per_case(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("function switchCaseFromBranch")
+        end = source.index("function activeSwitchCase")
+        switch_source = source[start:end]
+        self.assertIn("item.gIsConstant = branch.gIsConstant !== false;", switch_source)
+        self.assertIn("item.constantGSymbols = branch.constantGSymbols || \"\";", switch_source)
+        self.assertIn("if (item.gIsConstant === undefined)", switch_source)
+        self.assertIn("if (item.constantGSymbols === undefined)", switch_source)
+
+    def test_constant_g_editor_reads_and_writes_active_case_metadata(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function branchGIsConstant", source)
+        self.assertIn("function branchConstantGSymbolsText", source)
+
+        editor_start = source.index("function constantGEditor")
+        editor_end = source.index("function transformerTerminalDisplayName")
+        editor_source = source[editor_start:editor_end]
+        self.assertIn("branchGIsConstant(branch)", editor_source)
+        self.assertIn("branchConstantGSymbolsText(branch)", editor_source)
+
+        update_start = source.index("if (field === \"gIsConstant\")")
+        update_end = source.index("if (field === \"width\" || field === \"height\")")
+        update_source = source[update_start:update_end]
+        self.assertIn("const activeCase = activeSwitchCase(branch);", update_source)
+        self.assertIn("activeCase.gIsConstant", update_source)
+        self.assertIn("activeCase.constantGSymbols", update_source)
 
     def test_right_panel_has_resizable_width_controls(self):
         source = Path("index.html").read_text(encoding="utf-8")

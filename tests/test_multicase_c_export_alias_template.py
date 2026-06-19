@@ -128,7 +128,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
 
         aliases = response["multi_case"]["aliases"]
         self.assertEqual(aliases["cr_R1_G_eff"]["owner"], "CODE")
-        self.assertTrue(any("cr_R1_G_eff" in warning and "promoted to CODE" in warning for warning in response["warnings"]))
+        self.assertTrue(any("cr_R1_G_eff" in warning and "case_id is fixed before simulation" in warning for warning in response["warnings"]))
         draft = response["multi_case"]["c_draft"]
         self.assertIn("BEGIN_T0:", draft)
         self.assertIn("cr_R1_G_eff = G_const;", draft)
@@ -148,7 +148,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
 
         aliases = response["multi_case"]["aliases"]
         self.assertEqual(aliases["cr_R1_G_eff"]["owner"], "CODE_PER_STEP")
-        self.assertTrue(any("cr_R1_G_eff" in warning and "promoted to CODE_PER_STEP" in warning for warning in response["warnings"]))
+        self.assertTrue(any("cr_R1_G_eff" in warning and "case_id is fixed before simulation" in warning for warning in response["warnings"]))
         draft = response["multi_case"]["c_draft"]
         self.assertIn("cr_R1_G_eff = H_const;", draft)
         self.assertIn("cr_R1_G_eff = H_step;", draft)
