@@ -120,6 +120,27 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertNotIn("base + delta", draft)
         self.assertLessEqual(draft.count("Gred ="), 1)
 
+    def test_identical_profiles_collapse_to_single_structured_draft(self):
+        response = build_multi_case_response(
+            _request(
+                [
+                    {"name": "Pack Case 1", "case_map": {"YBox1": 0}, "payload": _series_payload("X")},
+                    {"name": "Pack Case 2", "case_map": {"YBox1": 1}, "payload": _series_payload("X")},
+                ],
+                deps=_deps("X", "G2"),
+                case_id="case_id",
+            )
+        )
+
+        multi = response["multi_case"]
+        draft = multi["c_draft"]
+        self.assertEqual(multi["fast_path"], "identical_profiles")
+        self.assertEqual(multi["codegen_mode"], "single structured draft")
+        self.assertNotIn("RAM-switch multi-case C draft", draft)
+        self.assertNotIn("NCASE = 2", draft)
+        self.assertNotIn("switch (case_id)", draft)
+        self.assertIn("RTDS-style C draft", draft)
+
     def test_ram_code_mixed_owner_promotes_alias_to_code_without_ram_base_delta(self):
         response = build_multi_case_response(
             _request(

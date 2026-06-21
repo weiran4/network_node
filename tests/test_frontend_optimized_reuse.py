@@ -259,6 +259,136 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("activeCase.gIsConstant", update_source)
         self.assertIn("activeCase.constantGSymbols", update_source)
 
+    def test_packaged_network_cases_have_edit_mode_and_boundary_guard(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function normalizePackageNetworkCases", source)
+        self.assertIn("function startPackageCaseEdit", source)
+        self.assertIn("async function finishPackageCaseEdit", source)
+        self.assertIn("state.packageCaseEdit", source)
+        self.assertIn("validatePackageCaseExternalSignature", source)
+        self.assertIn("packageCaseGroupSignature", source)
+        self.assertIn("外部端口不一致，不能完成这个 Pack 工况", source)
+        self.assertIn("内部节点不一致，不能完成这个 Pack 工况", source)
+        self.assertIn("data-package-network-action=\"edit\"", source)
+        self.assertIn("data-package-network-action=\"duplicate\"", source)
+        self.assertIn("id=\"packageCaseEditOverlay\"", source)
+        self.assertIn("function renderPackageCaseEditOverlay", source)
+        self.assertIn("data-package-case-overlay-action=\"finish\"", source)
+        self.assertIn("renderPackageCaseEditOverlay();", source)
+
+    def test_dummy_dimension_branch_is_pack_edit_only_and_fixed(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("dummy_dimension_branch", source)
+        self.assertIn("function createDummyDimensionBranch", source)
+        self.assertIn("if (!state.packageCaseEdit) return;", source)
+        self.assertIn("G_EPSILON", source)
+        self.assertIn("dummyTerminalSide", source)
+        self.assertIn("data-package-case-overlay-action=\"dummy\"", source)
+        self.assertIn("if (isDummyTerminal(branch, portSide))", source)
+        self.assertIn("function validateDummyBranchesForPackCase", source)
+        self.assertIn("function buildDummyAdjustedPackReduction", source)
+        self.assertIn("dummyAdjusted.reductionPayload", source)
+        self.assertIn("dummyAdjusted.finalSubsystem", source)
+        self.assertIn("dummyAdjusted.trimmedResult", source)
+
+    def test_dummy_pack_case_preserves_super_stamp_and_separate_final_result(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("superExternalGroups", source)
+        self.assertIn("superGMatrix", source)
+        self.assertIn("finalExternalGroups", source)
+        self.assertIn("finalGMatrix", source)
+        self.assertIn("dummyAdjusted.superResult", source)
+        self.assertIn("packageOriginal.externalGroups = structuredClone(active.superExternalGroups || active.externalGroups || [])", source)
+        self.assertIn("branch.gMatrix = active.superGMatrix || active.gMatrix || branch.gMatrix || \"[]\"", source)
+
+    def test_dummy_anchor_internal_toggle_is_blocked(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function dummyAnchorNetIds", source)
+        self.assertIn("dummyProtectedNetIds().has(id)", source)
+        self.assertIn("Dummy anchor 不能被设为内部节点。", source)
+        self.assertIn("Dummy anchor cannot be marked as an internal node.", source)
+
+    def test_packaged_dummy_external_port_inherits_dummy_interaction_rules(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function packagedDummyPortSides", source)
+        self.assertIn("function packagedDummyAnchorPortSides", source)
+        self.assertIn("function isPackagedDummyTerminal", source)
+        self.assertIn("return Boolean(branch && (isDummyTerminal(branch, parsed.side) || isPackagedDummyTerminal(branch, parsed.side)));", source)
+        self.assertIn("function dummyNetIds", source)
+        self.assertIn("dummyNetIds().has(id)", source)
+        self.assertIn("packagedDummyPortSides(branch).has(side)", source)
+        self.assertIn("packagedDummyAnchorPortSides(branch).has(side)", source)
+        self.assertIn("node-dummy-badge", source)
+        self.assertIn("function sanitizeDummyProtectedInternalNodes", source)
+        self.assertIn("const protectedIds = dummyProtectedNetIds();", source)
+        self.assertGreaterEqual(source.count("sanitizeDummyProtectedInternalNodes();"), 2)
+
+    def test_dummy_connected_anchor_net_cannot_render_as_internal(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function dummyProtectedNetIds", source)
+        self.assertIn("const protectedIds = dummyProtectedNetIds();", source)
+        self.assertIn("const dummyProtectedIds = dummyProtectedNetIds();", source)
+        self.assertIn("!dummyProtectedIds.has(group.id)", source)
+        self.assertIn("dummyProtectedIds.has(group.id) ? \"disabled\" :", source)
+        self.assertIn("dummyProtectedNetIds().has(id)", source)
+
+    def test_pack_case_edit_overlay_shows_required_external_ports(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function packageCasePortRows", source)
+        self.assertIn("function packageCasePortMismatchMessage", source)
+        self.assertIn("Pack 外部端口必须保持", source)
+        self.assertIn("Required Pack external ports", source)
+        self.assertIn("Expected:", source)
+        self.assertIn("Current:", source)
+        self.assertIn("packageCasePortRows(shell.packageOriginal?.externalGroups || [])", source)
+        self.assertIn("packageCasePortRows(subsystem.externalGroups || [])", source)
+        self.assertIn("renderPackageCasePortReminder(shell)", source)
+
+    def test_packaged_network_cases_participate_in_multicase_export(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        normalize_start = source.index("function normalizeSwitchCases")
+        normalize_end = source.index("function activeSwitchCase")
+        normalize_source = source[normalize_start:normalize_end]
+        self.assertIn("normalizePackageNetworkCases(branch);", normalize_source)
+        package_block = normalize_source[
+            normalize_source.index('if (branch?.packageOriginal) {'):
+            normalize_source.index('if (!Array.isArray(branch.switchCases)')
+        ]
+        self.assertNotIn("delete branch.switchCases", package_block)
+
+        eligible_start = source.index("function multiCaseEligibleBranches")
+        eligible_end = source.index("function defaultMultiCaseProfiles")
+        eligible_source = source[eligible_start:eligible_end]
+        self.assertIn("normalizeSwitchCases(branch);", eligible_source)
+        self.assertIn("branch.switchCases.length > 1", eligible_source)
+
+    def test_packaged_dummy_metadata_is_forwarded_to_multicase_export(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function dummyFinalizationForCaseProfile(profile, payload)", source)
+        self.assertIn("payload?.direct_retained_stamps || []", source)
+        self.assertIn("support_nodes || []", source)
+        self.assertIn("const portIndex = (branch.ports || []).indexOf(port);", source)
+        self.assertIn("if (portIndex >= 0 && supportNodes[portIndex]) return supportNodes[portIndex];", source)
+        self.assertIn("active.superExternalGroups || active.externalGroups || []", source)
+        self.assertIn("dummyBranchesForPackCase(sourceBranches).forEach(dummy =>", source)
+        self.assertIn("dummy_node: nodeForPackPort(branch, dummyGroup.port, dummyGroup.display)", source)
+        self.assertIn("anchor_node: nodeForPackPort(branch, anchorGroup.port, anchorGroup.display)", source)
+        self.assertIn("conductance: dummy.g || \"G_EPSILON\"", source)
+        self.assertIn("const dummy_finalization = dummyFinalizationForCaseProfile(profile, payload);", source)
+        self.assertIn("...(dummy_finalization ? { dummy_finalization } : {})", source)
+        self.assertIn("const dummy_finalization = dummyFinalizationForCaseProfile(activeDummyFinalizationProfile(), payload);", source)
+        self.assertIn("function activeDummyFinalizationProfile()", source)
+        self.assertIn("dummy_finalization: payload.dummy_finalization", source)
+
     def test_right_panel_has_resizable_width_controls(self):
         source = Path("index.html").read_text(encoding="utf-8")
 

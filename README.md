@@ -35,7 +35,7 @@ If Windows blocks the script, right-click `start.bat`, choose **Properties**, un
 - Review long formula outputs with compact cards, engineering-style matrix sections, and a minimap navigator for large matrix pages.
 - Display internal-node voltage recovery formulas.
 - Define and validate branch-current observers for black-box components.
-- Define per-component switch cases for `G` and `Ihis`, then double-click a component on the canvas to switch the active case.
+- Define per-component switch cases for `G` and `Ihis`, then choose the active case from the component editor.
 - Highlight a selected branch in formulas, the canvas, or both. Reduced formulas use hidden provenance tags so same-name symbols from different branches do not cross-highlight.
 - Switch internal cases inside packaged Y-box components and recompute the packaged `G`, `Ihis`, and observer formulas.
 - Generate a Python draft with full and reduced matrices, internal-node recovery expressions, and reusable symbolic setup.

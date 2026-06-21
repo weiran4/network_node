@@ -16,6 +16,10 @@ from nodal_tool.optimized_elimination import (
     build_structured_formula,
     c_draft_for_structured_formula,
 )
+from nodal_tool.multicase_finalization_profiles import (
+    build_finalization_profiles,
+    finalize_profile_result,
+)
 
 
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
@@ -293,6 +297,14 @@ def build_optimized_response(payload: dict) -> dict:
     simplify_level = payload.get("simplify_level") or "light"
     display_mode = payload.get("display_mode") or "compact"
     use_suggested_order = bool(payload.get("use_suggested_order", False))
+    dummy_finalization = payload.get("dummy_finalization") or {}
+    if dummy_finalization.get("dummy_leaves"):
+        return _build_single_case_dummy_finalized_response(
+            payload,
+            display_mode=display_mode,
+            simplify_level=simplify_level,
+            use_suggested_order=use_suggested_order,
+        )
 
     G, Ihis, G_tagged, Ihis_tagged, node_order, external_nodes, internal_nodes, partition_warnings = _partition_payload(payload)
     warnings = list(partition_warnings)
@@ -464,6 +476,196 @@ def build_optimized_response(payload: dict) -> dict:
                 node_display_names=payload.get("node_display_names") or {},
                 rtds_stage_plan=rtds_stage_plan,
             ),
+        },
+    }
+
+
+def _build_single_case_dummy_finalized_c_draft(item: dict) -> str:
+    final = item["final"]
+    symbol_table = item.get("symbol_table") or {}
+    nodes = list(final.nodes)
+    dim = len(nodes)
+    K_v = item.get("K_v")
+    K_h = item.get("K_h")
+    symbols = _symbols_in_matrices(
+        final.G,
+        final.Ihis,
+        sp.Matrix(K_v) if K_v is not None else sp.zeros(0, 0),
+        sp.Matrix(K_h) if K_h is not None else sp.zeros(0, 1),
+    )
+    declarations = [f"    double {name} = 0.0;" for name in symbols]
+    ram_entries: list[tuple[int, int, sp.Expr]] = []
+    dynamic_entries: list[tuple[int, int, sp.Expr, str, str, str]] = []
+    for row in range(final.G.rows):
+        for col in range(final.G.cols):
+            expr = sp.sympify(final.G[row, col])
+            if expr == 0:
+                continue
+            if _expr_stage(expr, symbol_table) == "RAM":
+                ram_entries.append((row, col, expr))
+    for row in range(final.G.rows):
+        for col in range(row, final.G.cols):
+            expr = sp.sympify(final.G[row, col])
+            if expr == 0 or _expr_stage(expr, symbol_table) == "RAM":
+                continue
+            left = _c_identifier_name(nodes[row], f"N{row + 1}")
+            right = _c_identifier_name(nodes[col], f"N{col + 1}")
+            dynamic_entries.append((row, col, expr, f"varG_{left}_{right}", nodes[row], nodes[col]))
+
+    lines = [
+        "#include <matrixLIB.h>",
+        "/* RTDS-style C draft for optimized elimination with active DummyBranch finalization.",
+        "   Dummy leaf nodes are removed from the solver stamp after the super-node reduction. */",
+        f"enum {{ NR_SUPER = {len(item.get('super_nodes') or [])}, NR = {dim} }};",
+        "",
+        "LOCAL_STATIC:",
+        *(declarations or ["    /* No user symbols are required by the finalized matrices. */"]),
+        "",
+        "RAM_PASS1:",
+        "    int err = 0;",
+    ]
+    if ram_entries:
+        lines.extend([
+            "    /* Finalized RAM-side G stamp. */",
+            *[f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node}\");" for index, node in enumerate(nodes)],
+            f"    for (int row = 0; row < {dim}; row++) {{",
+            f"        for (int col = 0; col < {dim}; col++) {{",
+            "            g_mat_over[row][col] = 0.0;",
+            "        }",
+            "    }",
+        ])
+        for row, col, expr in ram_entries:
+            lines.append(f"    g_mat_over[{row}][{col}] = {_ccode(expr)};")
+        lines.append(f"    setupGMatrix({dim});")
+    else:
+        lines.append("    /* No RAM-side G entries: no fixed G overlay is registered. */")
+    lines.extend([
+        "    if (err > 0) {",
+        "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
+        "                       \"RTDS dummy-finalized allocation failed for component %s.\", Name);",
+        "    }",
+        "",
+    ])
+    if dynamic_entries:
+        lines.extend([
+            "GVALUES:",
+            "    /* Dynamic final-G stamp handles after DummyBranch finalization. */",
+        ])
+        for _row, _col, _expr, var, left, right in dynamic_entries:
+            lines.append(f"    double {var} = createGValue(\"{var}\", \"{left}\", \"{right}\", 0, \"TRUE\");")
+        lines.append("")
+    lines.extend([
+        "CODE:",
+        "BEGIN_T0:",
+    ])
+    if dynamic_entries:
+        for _row, _col, expr, var, _left, _right in dynamic_entries:
+            lines.append(f"    {var} = {_ccode(expr)};")
+        lines.append("")
+    lines.append("    /* Node injection currents follow the finalized retained-node order. */")
+    for row, node in enumerate(nodes):
+        lines.append(f"    Inj{_c_identifier_name(node, f'N{row + 1}')} = {_ccode(final.Ihis[row, 0])};")
+    lines.extend([
+        "",
+        "T1_T2:",
+    ])
+    recovery_lines = _recovery_assignment_lines(item, indent="    ")
+    if recovery_lines:
+        lines.extend([
+            "    /* Physical internal-node recovery; dummy final nodes are skipped. */",
+            *recovery_lines,
+        ])
+    else:
+        lines.append("    /* Dummy final nodes are removed from the solver dimension and are not recovered. */")
+    return "\n".join(lines)
+
+
+def _build_single_case_dummy_finalized_response(
+    payload: dict,
+    *,
+    display_mode: str,
+    simplify_level: str,
+    use_suggested_order: bool,
+) -> dict:
+    profile = {
+        "name": "Active case",
+        "case_map": {},
+        "payload": payload,
+        "dummy_finalization": payload.get("dummy_finalization") or {},
+    }
+    profile_set = build_finalization_profiles([profile])
+    super_result = _reduced_super_result_from_payload(payload)
+    final_profile = profile_set.case_profiles[0]
+    final = finalize_profile_result(
+        super_result["G"],
+        super_result["Ihis"],
+        super_result["external_nodes"],
+        final_profile,
+    )
+    symbol_table = payload.get("symbol_dependency_table_tagged") or payload.get("symbol_dependency_table") or {}
+    item = {
+        "profile": final_profile,
+        "final": final,
+        "symbol_table": symbol_table,
+        "recovery_nodes": super_result["internal_nodes"],
+        "super_nodes": super_result["external_nodes"],
+        "K_v": super_result["K_v"],
+        "K_h": super_result["K_h"],
+    }
+    final_nodes = list(final.nodes)
+    final_dim = len(final_nodes)
+    recovery_nodes = list(super_result["internal_nodes"])
+    return {
+        "ok": True,
+        "mode": "structured_formula",
+        "display_mode": display_mode,
+        "simplify_level": simplify_level,
+        "use_suggested_order": use_suggested_order,
+        "external_nodes": final_nodes,
+        "internal_nodes": recovery_nodes,
+        "effective_internal_nodes": recovery_nodes,
+        "warnings": [
+            "Info: active DummyBranch case is finalized before optimized C stamping; dummy leaf nodes are not solver nodes."
+        ],
+        "structured": {
+            "fast_path": "single_case_dummy_finalization",
+            "block_type": "dummy_finalized",
+            "analysis": {
+                "kind": "single_case_dummy_finalization",
+                "super_external_nodes": list(super_result["external_nodes"]),
+                "final_external_nodes": final_nodes,
+                "dummy_nodes": list(final_profile.dummy_nodes),
+            },
+            "effective_analysis": {
+                "kind": "single_case_dummy_finalization",
+                "NR_SUPER": len(super_result["external_nodes"]),
+                "NR": final_dim,
+            },
+            "blocks": {
+                "G_rr": _clean_matrix(final.G),
+                "G_ri": _clean_matrix(sp.zeros(final_dim, len(recovery_nodes))),
+                "G_ir": _clean_matrix(sp.zeros(len(recovery_nodes), final_dim)),
+                "G_ii": _clean_matrix(sp.zeros(len(recovery_nodes), len(recovery_nodes))),
+                "Ihis_r": _clean_vector(final.Ihis),
+                "Ihis_i": _clean_vector(sp.zeros(len(recovery_nodes), 1)),
+            },
+            "details": {
+                "super_nodes": list(super_result["external_nodes"]),
+                "final_nodes": final_nodes,
+                "dummy_nodes": list(final_profile.dummy_nodes),
+            },
+            "direct_retained": {
+                "stamps": [],
+                "Gred_direct": _clean_matrix(sp.zeros(final_dim, final_dim)),
+                "Gred_direct_ram": _clean_matrix(sp.zeros(final_dim, final_dim)),
+                "Gred_direct_code": _clean_matrix(sp.zeros(final_dim, final_dim)),
+                "Ihisred_direct": _clean_vector(sp.zeros(final_dim, 1)),
+                "Ihisred_direct_ram": _clean_vector(sp.zeros(final_dim, 1)),
+                "Ihisred_direct_code": _clean_vector(sp.zeros(final_dim, 1)),
+            },
+            "dependency_analysis": {},
+            "dynamic_subblock": {},
+            "c_draft": _build_single_case_dummy_finalized_c_draft(item),
         },
     }
 
@@ -1858,15 +2060,24 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         )
     else:
         if not aliases:
-            return None
-        draft = _insert_multicase_alias_layer(
-            result["structured"]["c_draft"],
-            case_id_symbol=case_id_symbol,
-            profiles=alias_model["profiles"],
-            branch_ids=alias_model["branch_ids"],
-            aliases=aliases,
-        )
-        if has_mixed_final_g:
+            draft = result["structured"]["c_draft"]
+            warnings.append(
+                "Info: all multi-case profiles resolve to identical G/Ihis inputs; "
+                "emitted one structured C draft without a runtime case switch."
+            )
+            codegen_mode = "single structured draft"
+            fast_path = "identical_profiles"
+        else:
+            draft = _insert_multicase_alias_layer(
+                result["structured"]["c_draft"],
+                case_id_symbol=case_id_symbol,
+                profiles=alias_model["profiles"],
+                branch_ids=alias_model["branch_ids"],
+                aliases=aliases,
+            )
+            codegen_mode = "case-agnostic alias template"
+            fast_path = "case_alias_template"
+        if aliases and has_mixed_final_g:
             draft, gvalue_conditions = _apply_conditional_final_gvalues_to_structured_draft(
                 draft,
                 case_id_symbol=case_id_symbol,
@@ -1880,6 +2091,10 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 "CODE-owned entries are enabled with case conditions. "
                 "case_id is fixed before simulation and must not change at runtime."
             )
+    if "codegen_mode" not in locals():
+        codegen_mode = "case-agnostic alias template"
+    if "fast_path" not in locals():
+        fast_path = "case_alias_template"
     return {
         "ok": True,
         "mode": "multi_case_c_export",
@@ -1894,7 +2109,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         ],
         "warnings": list(dict.fromkeys(warnings)),
         "multi_case": {
-            "codegen_mode": "case-agnostic alias template",
+            "codegen_mode": codegen_mode,
             "external_nodes": result.get("external_nodes") or [],
             "effective_internal_nodes": result.get("effective_internal_nodes") or [],
             "block_type": (result.get("structured") or {}).get("block_type"),
@@ -1921,7 +2136,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 "Ihisred_shape": [len(result.get("external_nodes") or []), 1],
             },
             "c_draft": draft,
-            "fast_path": "case_alias_template",
+            "fast_path": fast_path,
         },
     }
 
@@ -2073,10 +2288,403 @@ def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) 
     return "\n".join(lines)
 
 
+def _profiles_have_dummy_finalization(profiles: list[dict]) -> bool:
+    for profile in profiles:
+        dummy = profile.get("dummy_finalization") or {}
+        if dummy.get("dummy_leaves"):
+            return True
+    return False
+
+
+def _reduced_super_result_from_payload(case_payload: dict) -> dict:
+    all_nodes = [str(node) for node in (case_payload.get("all_nodes") or [])]
+    external_nodes = [str(node) for node in (case_payload.get("external_nodes") or [])]
+    internal_nodes = [str(node) for node in (case_payload.get("internal_nodes") or [])]
+    G_full = _expr_matrix_from_payload(case_payload, "G_full")
+    Ihis_full = _expr_matrix_from_payload(case_payload, "Ihis_full")
+
+    if not all_nodes:
+        all_nodes = [*external_nodes, *[node for node in internal_nodes if node not in external_nodes]]
+    if not internal_nodes:
+        if G_full.rows == len(external_nodes) and G_full.cols == len(external_nodes):
+            return {
+                "G": G_full,
+                "Ihis": Ihis_full,
+                "external_nodes": external_nodes,
+                "internal_nodes": [],
+                "K_v": sp.zeros(0, len(external_nodes)),
+                "K_h": sp.zeros(0, 1),
+            }
+        indices = [all_nodes.index(node) for node in external_nodes]
+        return {
+            "G": G_full.extract(indices, indices),
+            "Ihis": Ihis_full.extract(indices, [0]),
+            "external_nodes": external_nodes,
+            "internal_nodes": [],
+            "K_v": sp.zeros(0, len(external_nodes)),
+            "K_h": sp.zeros(0, 1),
+        }
+
+    reduced = eliminate_internal_nodes(G_full, Ihis_full, all_nodes, external_nodes)
+    return {
+        "G": sp.Matrix(reduced.G_red),
+        "Ihis": sp.Matrix(reduced.Ihis_red),
+        "external_nodes": external_nodes,
+        "internal_nodes": [str(node) for node in reduced.internal_nodes],
+        "K_v": sp.Matrix(reduced.K_v),
+        "K_h": sp.Matrix(reduced.K_h),
+    }
+
+
+def _common_reduction_cache_key(case_payload: dict) -> tuple:
+    def freeze_matrix(value) -> tuple:
+        rows = value or []
+        if rows and not isinstance(rows[0], list):
+            return tuple((str(item),) for item in rows)
+        return tuple(tuple(str(item) for item in row) for row in rows)
+
+    return (
+        tuple(str(node) for node in (case_payload.get("all_nodes") or [])),
+        tuple(str(node) for node in (case_payload.get("external_nodes") or [])),
+        tuple(str(node) for node in (case_payload.get("internal_nodes") or [])),
+        freeze_matrix(case_payload.get("G_full")),
+        freeze_matrix(case_payload.get("Ihis_full")),
+    )
+
+
+def _recovery_assignment_lines(item: dict, *, indent: str = "        ") -> list[str]:
+    recovery_nodes = list(item.get("recovery_nodes") or [])
+    if not recovery_nodes:
+        return []
+    external_nodes = list(item.get("super_nodes") or [])
+    K_v = item.get("K_v")
+    K_h = item.get("K_h")
+    K_v = sp.Matrix(K_v) if K_v is not None else sp.zeros(len(recovery_nodes), len(external_nodes))
+    K_h = sp.Matrix(K_h) if K_h is not None else sp.zeros(len(recovery_nodes), 1)
+    lines: list[str] = []
+    for row, node in enumerate(recovery_nodes):
+        terms: list[str] = []
+        for col, external in enumerate(external_nodes):
+            coeff = sp.sympify(K_v[row, col])
+            if sp.simplify(coeff) == 0:
+                continue
+            terms.append(f"({_ccode(coeff)})*{_c_identifier_name(external, f'V{col + 1}')}")
+        history = sp.sympify(K_h[row, 0])
+        if sp.simplify(history) != 0:
+            terms.append(_ccode(history))
+        rhs = " + ".join(terms) if terms else "0.0"
+        lines.append(f"{indent}{_c_identifier_name(node, f'K{row + 1}')} = {rhs};")
+    return lines
+
+
+def _build_dummy_finalized_multi_case_c_draft(
+    case_id_symbol: str,
+    profile_set,
+    final_results: list[dict],
+    *,
+    aliases: dict[str, dict] | None = None,
+    profiles: list[dict] | None = None,
+    branch_ids: list[str] | None = None,
+) -> str:
+    aliases = aliases or {}
+    profiles = profiles or []
+    branch_ids = branch_ids or []
+    max_dim = max((item["final"].G.rows for item in final_results), default=0)
+    super_dim = len(profile_set.super_node_order)
+    symbols = _symbols_in_matrices(
+        *(item["final"].G for item in final_results),
+        *(item["final"].Ihis for item in final_results),
+    )
+    original_symbols: set[str] = set()
+    for info in aliases.values():
+        for expr in (info.get("case_values") or {}).values():
+            original_symbols.update(symbol.name for symbol in _parse_expr(expr).free_symbols)
+    declarations: list[str] = []
+    declared_names: set[str] = set()
+    def add_declaration(line: str, name: str) -> None:
+        if name in declared_names:
+            return
+        declared_names.add(name)
+        declarations.append(line)
+
+    for branch_id in branch_ids:
+        name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
+        add_declaration(f"    int {name} = 0;", name)
+    for name in sorted(original_symbols):
+        if _c_identifier_name(name, name) == name:
+            add_declaration(f"    double {name} = 0.0;", name)
+    for name in symbols:
+        add_declaration(f"    double {name} = 0.0;", name)
+    dynamic_gvalues: dict[tuple[str, str], dict] = {}
+    dynamic_case_assignments: dict[int, list[str]] = {}
+    for case_index, item in enumerate(final_results):
+        final = item["final"]
+        symbol_table = item.get("symbol_table") or {}
+        nodes = list(final.nodes)
+        for row in range(final.G.rows):
+            for col in range(row, final.G.cols):
+                expr = sp.sympify(final.G[row, col])
+                if expr == 0 or _expr_stage(expr, symbol_table) == "RAM":
+                    continue
+                left = str(nodes[row])
+                right = str(nodes[col])
+                left_id = _c_identifier_name(left, f"N{row + 1}")
+                right_id = _c_identifier_name(right, f"N{col + 1}")
+                var = f"varG_{left_id}_{right_id}"
+                entry = dynamic_gvalues.setdefault((left, right), {
+                    "var": var,
+                    "left": left,
+                    "right": right,
+                    "cases": [],
+                })
+                entry["cases"].append(case_index)
+                dynamic_case_assignments.setdefault(case_index, []).append(f"{var} = {_ccode(expr)};")
+
+    lines = [
+        "/* Multi-case C draft with case-specific DummyBranch finalization.",
+        "   Each case is reduced on the shared super-node order first; Dummy final nodes",
+        "   are removed locally before solver stamping. */",
+        f"enum {{ NR_SUPER = {super_dim}, NR_FINAL_MAX = {max_dim}, NCASE = {len(final_results)} }};",
+        "",
+        "LOCAL_STATIC:",
+        *(declarations or ["    /* No user symbols are required by the finalized RAM matrices. */"]),
+        "",
+        "RAM_PASS1:",
+        "    int err = 0;",
+        *(_multicase_local_case_lines(case_id_symbol, profiles, branch_ids) if aliases else []),
+        *(_alias_assignment_lines(aliases, "RAM", case_id_symbol) if aliases else []),
+        "    /* Profile-specific finalized RAM stamp. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+
+    for case_index, item in enumerate(final_results):
+        final = item["final"]
+        profile = item["profile"]
+        nodes = list(final.nodes)
+        dim = len(nodes)
+        comment = f"Case {case_index}"
+        dummy_note = "; dummy-finalized solver dimension" if profile.dummy_nodes else ""
+        lines.extend([
+            f"    case {case_index}: /* {comment}{dummy_note} */",
+            *[
+                f"        g_mat_nods[{node_index}] = getNodeNum(comp, \"{node}\");"
+                for node_index, node in enumerate(nodes)
+            ],
+            f"        for (int row = 0; row < {dim}; row++) {{",
+            f"            for (int col = 0; col < {dim}; col++) {{",
+            "                g_mat_over[row][col] = 0.0;",
+            "            }",
+            "        }",
+        ])
+        for row in range(final.G.rows):
+            for col in range(final.G.cols):
+                expr = sp.sympify(final.G[row, col])
+                if expr == 0 or _expr_stage(expr, item.get("symbol_table") or {}) != "RAM":
+                    continue
+                lines.append(f"        g_mat_over[{row}][{col}] = {_ccode(expr)};")
+        lines.extend([
+            f"        setupGMatrix({dim});",
+            "        break;",
+        ])
+
+    lines.extend([
+        "    default:",
+        "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
+        f"                       \"Unknown dummy multi-case profile %d for component %s.\", {case_id_symbol}, Name);",
+        "        break;",
+        "    }",
+        "    if (err > 0) {",
+        "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
+        "                       \"RTDS dummy multi-case allocation failed for component %s.\", Name);",
+        "    }",
+        "",
+    ])
+    if dynamic_gvalues:
+        lines.extend([
+            "GVALUES:",
+            "    /* Dynamic final-G stamp handles, scoped by dummy finalization profile. */",
+        ])
+        for entry in dynamic_gvalues.values():
+            condition = " || ".join(f"{case_id_symbol} == {case_index}" for case_index in entry["cases"])
+            lines.append(
+                f"    double {entry['var']} = createGValue(\"{entry['var']}\", "
+                f"\"{entry['left']}\", \"{entry['right']}\", 0, \"{condition}\");"
+            )
+        lines.append("")
+    lines.extend([
+        "CODE:",
+        "BEGIN_T0:",
+    ])
+    if aliases:
+        lines.extend(_alias_assignment_lines(aliases, "CODE", case_id_symbol))
+        lines.extend(_alias_assignment_lines(aliases, "CODE_PER_STEP", case_id_symbol))
+    if dynamic_case_assignments:
+        lines.extend([
+            f"    switch ({case_id_symbol}) {{",
+        ])
+        for case_index in sorted(dynamic_case_assignments):
+            lines.append(f"    case {case_index}:")
+            lines.extend(f"        {assignment}" for assignment in dynamic_case_assignments[case_index])
+            lines.append("        break;")
+        lines.extend([
+            "    default:",
+            "        break;",
+            "    }",
+            "",
+        ])
+    lines.extend([
+        f"    switch ({case_id_symbol}) {{",
+    ])
+
+    for case_index, item in enumerate(final_results):
+        final = item["final"]
+        lines.append(f"    case {case_index}:")
+        for row, node in enumerate(final.nodes):
+            lines.append(f"        Inj{_c_identifier_name(node, f'N{row + 1}')} = {_ccode(final.Ihis[row, 0])};")
+        lines.extend([
+            "        break;",
+        ])
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+        "",
+        "T1_T2:",
+    ])
+    if any(item.get("recovery_nodes") for item in final_results):
+        lines.extend([
+            "    /* Physical internal-node recovery; dummy final nodes are skipped. */",
+            f"    switch ({case_id_symbol}) {{",
+        ])
+        for case_index, item in enumerate(final_results):
+            lines.append(f"    case {case_index}:")
+            recovery_lines = _recovery_assignment_lines(item)
+            lines.extend(recovery_lines or ["        break;"])
+            if recovery_lines:
+                lines.append("        break;")
+        lines.extend([
+            "    default:",
+            "        break;",
+            "    }",
+        ])
+    else:
+        lines.append("    /* Dummy final nodes are removed from the solver dimension and are not recovered. */")
+    return "\n".join(lines)
+
+
+def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
+    profiles = payload.get("case_profiles") or []
+    case_id_symbol = str(payload.get("case_id_symbol") or "case_id")
+    profile_set = build_finalization_profiles(profiles)
+    final_results: list[dict] = []
+    common_reduction_cache: dict[tuple, dict] = {}
+    alias_model = _build_multicase_alias_template_payload(payload)
+    template_payload = alias_model["template_payload"] if alias_model is not None else None
+    aliases = alias_model["aliases"] if alias_model is not None else {}
+    branch_ids = alias_model["branch_ids"] if alias_model is not None else []
+    template_super_result = _reduced_super_result_from_payload(template_payload) if template_payload is not None else None
+
+    for case_index, source_profile in enumerate(profiles):
+        case_payload = template_payload or source_profile.get("payload") or {}
+        if template_super_result is not None:
+            substitutions = _profile_alias_substitutions(source_profile, aliases, case_index)
+            super_result = {
+                **template_super_result,
+                "G": sp.Matrix(template_super_result["G"]).xreplace(substitutions),
+                "Ihis": sp.Matrix(template_super_result["Ihis"]).xreplace(substitutions),
+                "K_v": sp.Matrix(template_super_result["K_v"]).xreplace(substitutions),
+                "K_h": sp.Matrix(template_super_result["K_h"]).xreplace(substitutions),
+            }
+        else:
+            cache_key = _common_reduction_cache_key(case_payload)
+            if cache_key not in common_reduction_cache:
+                common_reduction_cache[cache_key] = _reduced_super_result_from_payload(case_payload)
+            super_result = common_reduction_cache[cache_key]
+        profile = profile_set.case_profiles[case_index]
+        final = finalize_profile_result(
+            super_result["G"],
+            super_result["Ihis"],
+            super_result["external_nodes"],
+            profile,
+        )
+        final_results.append({
+            "index": case_index,
+            "name": source_profile.get("name") or f"Case {case_index}",
+            "profile": profile,
+            "final": final,
+            "symbol_table": case_payload.get("symbol_dependency_table_tagged") or case_payload.get("symbol_dependency_table") or {},
+            "recovery_nodes": super_result["internal_nodes"],
+            "super_nodes": super_result["external_nodes"],
+            "K_v": super_result["K_v"],
+            "K_h": super_result["K_h"],
+        })
+
+    return {
+        "ok": True,
+        "mode": "multi_case_c_export",
+        "case_id_symbol": case_id_symbol,
+        "case_profiles": [
+            {
+                "index": index,
+                "name": str(profile.get("name") or f"Case {index}"),
+                "case_map": dict(profile.get("case_map") or {}),
+            }
+            for index, profile in enumerate(profiles)
+        ],
+        "warnings": [
+            "Info: DummyBranch profiles use case-specific final solver dimensions after the shared super reduction."
+        ] + [
+            (
+                f"Warning: {alias} has mixed case owners {sorted(set((info.get('case_owners') or {}).values()))}; "
+                f"promoted to {info.get('owner')} for safety. "
+                "case_id is fixed before simulation and must not change at runtime."
+            )
+            for alias, info in aliases.items()
+            if len(set((info.get("case_owners") or {}).values())) > 1
+        ],
+        "multi_case": {
+            "codegen_mode": "case-agnostic alias template with dummy finalization" if aliases else "case-specific dummy finalization",
+            "fast_path": "dummy_finalization_alias_template" if aliases else "dummy_finalization_profiles",
+            "profile_count": len(profiles),
+            "aliases": aliases,
+            "external_nodes": profile_set.super_node_order,
+            "effective_internal_nodes": [],
+            "finalization_profiles": [
+                {
+                    "profile_id": profile.profile_id,
+                    "case_ids": list(profile.case_ids),
+                    "super_node_order": list(profile.super_node_order),
+                    "final_node_order": list(profile.final_node_order),
+                    "dummy_nodes": list(profile.dummy_nodes),
+                    "final_dimension": profile.final_dimension,
+                    "node_roles": dict(profile.node_roles),
+                }
+                for profile in profile_set.case_profiles
+            ],
+            "template_summary": {
+                "super_nodes": profile_set.super_node_order,
+                "NR_SUPER": len(profile_set.super_node_order),
+                "NR_FINAL_MAX": max((item["final"].G.rows for item in final_results), default=0),
+                "profile_dimensions": [item["final"].G.rows for item in final_results],
+            },
+            "c_draft": _build_dummy_finalized_multi_case_c_draft(
+                case_id_symbol,
+                profile_set,
+                final_results,
+                aliases=aliases,
+                profiles=profiles,
+                branch_ids=branch_ids,
+            ),
+        },
+    }
+
+
 def build_multi_case_response(payload: dict) -> dict:
     profiles = payload.get("case_profiles") or []
     if not profiles:
         raise ValueError("case_profiles is required for multi-case C export")
+    if _profiles_have_dummy_finalization(profiles):
+        return _build_dummy_finalized_multi_case_response(payload)
     alias_response = _try_build_alias_template_response(payload)
     if alias_response is not None:
         return alias_response

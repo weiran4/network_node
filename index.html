@@ -251,6 +251,43 @@
       background-color: #eef8f1;
     }
 
+    .package-case-overlay {
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      z-index: 7;
+      width: min(420px, calc(100% - 28px));
+      display: none;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid #9bb7d6;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+    }
+
+    .package-case-overlay.open {
+      display: grid;
+    }
+
+    .package-case-overlay-title {
+      font-size: 13px;
+      font-weight: 850;
+      color: #102033;
+    }
+
+    .package-case-overlay-text {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+
+    .package-case-overlay-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
     svg {
       display: block;
       width: 100%;
@@ -542,6 +579,13 @@
       stroke-width: 3;
     }
 
+    .terminal.dummy-terminal {
+      fill: #fff1f2;
+      stroke: #db2777;
+      stroke-width: 3;
+      cursor: not-allowed;
+    }
+
     .net-badge {
       font-size: 11px;
       font-weight: 800;
@@ -672,6 +716,20 @@
       background: var(--red);
     }
 
+    .node-dummy-badge {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      padding: 0 7px;
+      border: 1px solid #f9a8d4;
+      border-radius: 999px;
+      background: #fdf2f8;
+      color: #be185d;
+      font-size: 11px;
+      font-weight: 850;
+      flex: 0 0 auto;
+    }
+
     .node-edit-button {
       width: 26px;
       height: 24px;
@@ -791,6 +849,14 @@
       box-shadow: inset 3px 0 0 var(--accent);
     }
 
+    .node-terminal-map {
+      margin-top: 12px;
+    }
+
+    .node-terminal-map .field:last-child {
+      margin-bottom: 0;
+    }
+
     .direction {
       stroke: var(--red);
       stroke-width: 2;
@@ -888,9 +954,11 @@
       user-select: none;
       font-size: 12px;
       font-weight: 800;
-      color: #32424c;
+      color: #243446;
       list-style: none;
-      background: #f8fafc;
+      background: linear-gradient(180deg, #ffffff 0%, #eef3f8 100%);
+      border-bottom: 1px solid #c8d4e0;
+      box-shadow: inset 3px 0 0 #2f6fed;
     }
 
     .editor-group summary::-webkit-details-marker {
@@ -907,6 +975,10 @@
 
     .editor-group[open] summary::after {
       transform: rotate(0deg);
+    }
+
+    .editor-group:not([open]) summary {
+      border-bottom-color: transparent;
     }
 
     .editor-group-body {
@@ -2559,6 +2631,7 @@
             <g id="wireLayer"></g>
             <g id="branchLayer"></g>
           </svg>
+          <div class="package-case-overlay" id="packageCaseEditOverlay"></div>
         </div>
         <div class="resize-bar" id="outputResizeBar" title="拖动调整输出窗口高度"></div>
         <section class="output" id="outputPanel">
@@ -2771,7 +2844,8 @@
       editorGroups: {},
       history: [],
       future: [],
-      restoring: false
+      restoring: false,
+      packageCaseEdit: null
     };
     let reducedRenderToken = 0;
     let branchCurrentRenderToken = 0;
@@ -2842,6 +2916,7 @@
         reducedEquationCache: [],
         branchCurrentCache: [],
         pythonDraftCache: [],
+        packageCaseEdit: null,
         history: [],
         future: []
       };
@@ -2871,6 +2946,7 @@
         reducedEquationCache: currentReducedCacheSnapshot(),
         branchCurrentCache: currentCacheSnapshot(branchCurrentCache, ["html"]),
         pythonDraftCache: currentCacheSnapshot(pythonDraftCache, ["result"]),
+        packageCaseEdit: structuredClone(state.packageCaseEdit),
         history: structuredClone(state.history),
         future: structuredClone(state.future)
       };
@@ -2903,6 +2979,7 @@
       restoreCacheSnapshot(pythonDraftCache, data.pythonDraftCache || [], ["result"]);
       state.history = structuredClone(data.history || []);
       state.future = structuredClone(data.future || []);
+      state.packageCaseEdit = structuredClone(data.packageCaseEdit || null);
       state.pendingTerminal = null;
       state.drag = null;
       state.wireDrag = null;
@@ -3046,6 +3123,7 @@
     const wireLayer = document.getElementById("wireLayer");
     const editor = document.getElementById("editor");
     const netList = document.getElementById("netList");
+    const packageCaseEditOverlay = document.getElementById("packageCaseEditOverlay");
     const outputPanel = document.getElementById("outputPanel");
     const outputText = document.getElementById("outputText");
     const outputMinimap = document.getElementById("outputMinimap");
@@ -3156,6 +3234,36 @@
       "内部工况": "Internal Cases",
       "没有内部支路包含多个工况。": "No internal branch has multiple cases.",
       "切换内部支路工况后，会重新计算这个打包黑盒的 G/Ihis 和观测公式。": "Changing an internal branch case recomputes this packaged box's G/Ihis and observer formulas.",
+      "内部网络工况": "Internal Network Cases",
+      "当前 Pack 工况": "Active Pack Case",
+      "复制当前内部网络为新工况": "Duplicate Current Internal Network as New Case",
+      "编辑当前内部网络工况": "Edit Active Internal Network Case",
+      "Pack 工况编辑": "Pack Case Edit",
+      "新增 Dummy 支路": "Add Dummy Branch",
+      "完成并保存 Pack 工况": "Finish and Save Pack Case",
+      "取消 Pack 工况编辑": "Cancel Pack Case Edit",
+      "正在编辑 Pack 内部工况。完成前请保持外部端口数量、名字和顺序不变。": "Editing a Pack internal case. Keep the external port count, names, and order unchanged before finishing.",
+      "Dummy 支路端点缺失。": "Dummy branch terminal is missing.",
+      "Dummy 节点只能连接自己的 Dummy 支路，不能接线或并入其他节点。": "The dummy node may only connect to its own Dummy branch; do not wire or merge it with another node.",
+      "Dummy anchor 必须连接公共 retained/reference 节点，不能连接内部消去节点。": "The Dummy anchor must connect to a common retained/reference node, not an eliminated internal node.",
+      "Dummy Ihis 必须固定为 0。": "Dummy Ihis must be fixed to 0.",
+      "Dummy G 必须固定为 G_EPSILON。": "Dummy G must be fixed to G_EPSILON.",
+      "Dummy 必须标记为强制最终消去且不恢复电压。": "Dummy must be marked as forced final elimination with voltage recovery disabled.",
+      "Dummy 节点不可连接。": "Dummy node is not connectable.",
+      "Dummy 节点不可连接；只能重命名并在最终维度补齐中使用。": "Dummy node is not connectable; rename it only for final dimension padding.",
+      "Dummy anchor 不能被设为内部节点。": "Dummy anchor cannot be marked as an internal node.",
+      "Dummy 节点不能被设为内部节点。": "Dummy node cannot be marked as an internal node.",
+      "Dummy 节点": "Dummy Node",
+      "Dummy Dimension Branch": "Dummy Dimension Branch",
+      "固定维度补齐元件": "Fixed dimension padding element",
+      "G: G_EPSILON (fixed)": "G: G_EPSILON (fixed)",
+      "Ihis: 0 (fixed)": "Ihis: 0 (fixed)",
+      "强制最终消去；不恢复电压。": "Forced final elimination; voltage recovery disabled.",
+      "Pack 外部端口必须保持": "Required Pack external ports",
+      "完成保存前，外部端口数量、名字、顺序必须与上表一致。": "Before saving, the external port count, names, and order must match this list.",
+      "外部端口不一致，不能完成这个 Pack 工况": "External ports are inconsistent; this Pack case cannot be finished",
+      "内部节点不一致，不能完成这个 Pack 工况": "Internal nodes are inconsistent; this Pack case cannot be finished",
+      "进入内部工况编辑后，画布会暂时显示该 Pack 的内部网络。点击“完成并保存 Pack 工况”重新等效并回到外层。": "When entering internal case editing, the canvas temporarily shows that Pack's internal network. Click Finish and Save Pack Case to reduce it again and return.",
       "G 是否为常数？": "Treat G as constant?",
       "常数 G 符号": "Constant G Symbols",
       "内部 G 常数属性": "Internal G Constant Properties",
@@ -3173,7 +3281,6 @@
       "工况数量": "Case Count",
       "当前工况": "Active Case",
       "工况名称": "Case Name",
-      "在画布中双击元件可切换工况。": "Double-click the component on the canvas to switch cases.",
       "高亮": "Formula Highlighting",
       "公式高亮": "Formula",
       "高亮颜色": "Highlight Color",
@@ -3185,6 +3292,7 @@
       "基本信息": "Name & Geometry",
       "名称配置": "Name Configuration",
       "工况": "Multi-Case Options",
+      "工况 / 数学模型": "Cases / Admittance Model",
       "数学模型": "Admittance Model",
       "占位模型": "Placeholder Model",
       "观测电流": "Current Observers",
@@ -3278,6 +3386,8 @@
       "该电流源按当前电流方向输出。输出电流为控制项中各节点电压线性组合加 Ihis。例如 N1:K, N2:-K 表示 K*(V_N1 - V_N2)。": "The current source outputs in the current direction shown by the component. Its output current is a linear combination of node voltages plus Ihis. For example, N1:K, N2:-K means K*(V_N1 - V_N2).",
       "该电流源按当前电流方向输出。节点电压相关模式表示 gain * (V_控制正节点 - V_控制负节点) + Ihis。": "The current source outputs in the current direction shown by the component. Node-voltage-controlled mode means gain * (V_control+ - V_control-) + Ihis.",
       "节点顺序": "Node Order",
+      "节点端子映射": "Node Terminal Mapping",
+      "主要用于检查后端节点组装；通常不需要展开。": "Mainly used to inspect backend node assembly; usually you do not need to expand it.",
       "暂无节点。": "No nodes.",
       "外部": "External",
       "内部": "Internal",
@@ -3483,6 +3593,40 @@
         g: "1/R",
         gIsConstant: true,
         constantGSymbols: "",
+        ihis: "0",
+        direction: "AtoB"
+      };
+      state.branches.push(branch);
+      clampComponent(branch);
+      selectBranch(branch.id);
+      render();
+    }
+
+    function createDummyDimensionBranch(x = state.viewCenter.x, y = state.viewCenter.y) {
+      if (!state.packageCaseEdit) return;
+      commitHistory();
+      syncNextCounters();
+      const n = state.nextBranch++;
+      const branch = {
+        id: `B${n}`,
+        name: `Dummy${n}`,
+        kind: "dummy_dimension_branch",
+        element_type: "dummy_branch",
+        dummy_role: true,
+        forced_final_elimination: true,
+        recoverable: false,
+        dummyTerminalSide: "B",
+        anchorTerminalSide: "A",
+        x,
+        y,
+        width: 150,
+        height: 48,
+        rotation: 0,
+        nodeA: `n${n}a`,
+        nodeB: `dummy-${n}`,
+        g: "G_EPSILON",
+        gIsConstant: true,
+        constantGSymbols: "G_EPSILON",
         ihis: "0",
         direction: "AtoB"
       };
@@ -3894,7 +4038,7 @@
     }
 
     function componentResizeBox(branch) {
-      if (branch.kind === "two_node_branch" || !branch.kind) {
+      if (branch.kind === "two_node_branch" || branch.kind === "dummy_dimension_branch" || !branch.kind) {
         return {
           width: Math.max(50, (branch.width || 150) - 56),
           height: Math.max(32, branch.height || 48)
@@ -3913,7 +4057,7 @@
     }
 
     function applyResizeBoxSize(branch, width, height) {
-      if (branch.kind === "two_node_branch" || !branch.kind) {
+      if (branch.kind === "two_node_branch" || branch.kind === "dummy_dimension_branch" || !branch.kind) {
         branch.width = Math.round(width + 56);
         branch.height = Math.round(height);
         return;
@@ -3972,7 +4116,12 @@
     function branchNodeForSide(branch, side) {
       if (branch.kind === "ground") return branch.nodeG;
       if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port" || branch.kind === "voltage_source_series_r") return branch.nodes?.[side];
+      if (branch.kind === "dummy_dimension_branch") return side === (branch.dummyTerminalSide || "B") ? branch.nodeB : branch.nodeA;
       return side === "A" ? branch.nodeA : branch.nodeB;
+    }
+
+    function isDummyTerminal(branch, side) {
+      return branch?.kind === "dummy_dimension_branch" && side === (branch.dummyTerminalSide || "B");
     }
 
     function visibleTerminalSides(branch) {
@@ -4142,8 +4291,128 @@
       return parsed.side === "A" ? branch.nodeA : branch.nodeB;
     }
 
+    function terminalIsDummyNode(key) {
+      const parsed = parseTerminal(key);
+      const branch = findBranch(parsed.branchId);
+      return Boolean(branch && (isDummyTerminal(branch, parsed.side) || isPackagedDummyTerminal(branch, parsed.side)));
+    }
+
+    function packagedDummyPortSides(branch) {
+      if (!branch?.packageOriginal) return new Set();
+      const pkg = branch.packageOriginal;
+      const cases = Array.isArray(pkg.networkCases) ? pkg.networkCases : [];
+      const index = Math.max(0, Math.min(cases.length - 1, Number(pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0));
+      const active = cases[index] || {};
+      const sourceBranches = active.branches || pkg.branches || [];
+      const dummyKeys = new Set(dummyBranchesForPackCase(sourceBranches).map(item => terminalKey(item.id, item.dummyTerminalSide || "B")));
+      if (!dummyKeys.size) return new Set();
+      const groups = active.superExternalGroups || active.externalGroups || pkg.superExternalGroups || pkg.externalGroups || [];
+      const sides = new Set();
+      groups.forEach((group, groupIndex) => {
+        if (!(group.members || []).some(member => dummyKeys.has(member))) return;
+        const side = group.port || branch.ports?.[groupIndex];
+        if (side) sides.add(side);
+      });
+      return sides;
+    }
+
+    function packagedDummyAnchorPortSides(branch) {
+      if (!branch?.packageOriginal) return new Set();
+      const pkg = branch.packageOriginal;
+      const cases = Array.isArray(pkg.networkCases) ? pkg.networkCases : [];
+      const index = Math.max(0, Math.min(cases.length - 1, Number(pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0));
+      const active = cases[index] || {};
+      const sourceBranches = active.branches || pkg.branches || [];
+      const anchorKeys = new Set(dummyBranchesForPackCase(sourceBranches).map(item => terminalKey(item.id, item.anchorTerminalSide || "A")));
+      if (!anchorKeys.size) return new Set();
+      const groups = active.superExternalGroups || active.externalGroups || pkg.superExternalGroups || pkg.externalGroups || [];
+      const sides = new Set();
+      groups.forEach((group, groupIndex) => {
+        if (!(group.members || []).some(member => anchorKeys.has(member))) return;
+        const side = group.port || branch.ports?.[groupIndex];
+        if (side) sides.add(side);
+      });
+      return sides;
+    }
+
+    function isPackagedDummyTerminal(branch, side) {
+      return packagedDummyPortSides(branch).has(side);
+    }
+
+    function terminalIsDummyAnchor(key) {
+      const parsed = parseTerminal(key);
+      const branch = findBranch(parsed.branchId);
+      return Boolean(branch?.kind === "dummy_dimension_branch" && parsed.side === (branch.anchorTerminalSide || "A"));
+    }
+
+    function dummyNetIds() {
+      const lookup = netLookup();
+      const ids = new Set();
+      state.branches.forEach(branch => {
+        terminalSides(branch).forEach(side => {
+          if (!isDummyTerminal(branch, side) && !isPackagedDummyTerminal(branch, side)) return;
+          const netId = lookup.get(terminalKey(branch.id, side));
+          if (netId) ids.add(netId);
+        });
+      });
+      return ids;
+    }
+
+    function dummyAnchorNetIds() {
+      const lookup = netLookup();
+      const ids = new Set();
+      dummyBranchesForPackCase().forEach(branch => {
+        const netId = lookup.get(terminalKey(branch.id, branch.anchorTerminalSide || "A"));
+        if (netId) ids.add(netId);
+      });
+      state.branches.forEach(branch => {
+        terminalSides(branch).forEach(side => {
+          if (!packagedDummyAnchorPortSides(branch).has(side)) return;
+          const netId = lookup.get(terminalKey(branch.id, side));
+          if (netId) ids.add(netId);
+        });
+      });
+      return ids;
+    }
+
+    function dummyProtectedNetIds() {
+      return new Set([...dummyNetIds(), ...dummyAnchorNetIds()]);
+    }
+
+    function sanitizeDummyProtectedInternalNodes() {
+      const protectedIds = dummyProtectedNetIds();
+      if (!protectedIds.size) return false;
+      const before = state.internalNodes.length;
+      state.internalNodes = state.internalNodes.filter(id => !protectedIds.has(id));
+      const changed = state.internalNodes.length !== before;
+      if (changed) invalidateMathCaches();
+      return changed;
+    }
+
+    function terminalNetId(key) {
+      return netLookup().get(key);
+    }
+
     function connectTerminals(from, to) {
       if (from === to) return;
+      if (terminalIsDummyNode(from) || terminalIsDummyNode(to)) {
+        statusEl.textContent = optText("Dummy 节点不可连接。", "Dummy node is not connectable.");
+        state.pendingTerminal = null;
+        render();
+        return;
+      }
+      const internalSet = new Set(state.internalNodes || []);
+      const fromNet = terminalNetId(from);
+      const toNet = terminalNetId(to);
+      if (
+        (terminalIsDummyAnchor(from) && (internalSet.has(fromNet) || internalSet.has(toNet))) ||
+        (terminalIsDummyAnchor(to) && (internalSet.has(toNet) || internalSet.has(fromNet)))
+      ) {
+        statusEl.textContent = optText("Dummy anchor 不能被设为内部节点。", "Dummy anchor cannot be marked as an internal node.");
+        state.pendingTerminal = null;
+        render();
+        return;
+      }
       const exists = state.wires.some(wire =>
         (wire.from === from && wire.to === to) || (wire.from === to && wire.to === from)
       );
@@ -4194,7 +4463,7 @@
     }
 
     function autoSnapTerminalToOwnBody(branch, side) {
-      if (branch.kind !== "two_node_branch" && branch.kind !== "single_phase_transformer" && branch.kind !== "current_source" && branch.kind !== "voltage_source_series_r") return;
+      if (branch.kind !== "two_node_branch" && branch.kind !== "dummy_dimension_branch" && branch.kind !== "single_phase_transformer" && branch.kind !== "current_source" && branch.kind !== "voltage_source_series_r") return;
       const point = terminalPosition(branch, side);
       const anchorDraw = componentLeadAnchor(branch, side, terminalDrawPosition(branch, side));
       const anchor = anchorDraw ? rotatedDrawPoint(branch, anchorDraw) : null;
@@ -4204,12 +4473,12 @@
     }
 
     function autoSnapBranchLeadsToOwnBody(branch) {
-      if (branch.kind !== "two_node_branch" && branch.kind !== "single_phase_transformer" && branch.kind !== "current_source" && branch.kind !== "voltage_source_series_r") return;
+      if (branch.kind !== "two_node_branch" && branch.kind !== "dummy_dimension_branch" && branch.kind !== "single_phase_transformer" && branch.kind !== "current_source" && branch.kind !== "voltage_source_series_r") return;
       terminalSides(branch).forEach(side => autoSnapTerminalToOwnBody(branch, side));
     }
 
     function componentLeadAnchor(branch, side, point = terminalDrawPosition(branch, side)) {
-      if (branch.kind === "two_node_branch" || branch.kind === "current_source") {
+      if (branch.kind === "two_node_branch" || branch.kind === "dummy_dimension_branch" || branch.kind === "current_source") {
         const bodyWidth = Math.max(50, Math.min(120, (branch.width || 150) * 0.5));
         const x = side === "A" ? branch.x - bodyWidth / 2 : branch.x + bodyWidth / 2;
         return { x, y: branch.y };
@@ -5168,6 +5437,104 @@
       return item;
     }
 
+    function packageInternalWiresForBranches(branches, wires = []) {
+      const ids = new Set((branches || []).map(item => item.id));
+      return (wires || []).filter(wire => ids.has(parseTerminal(wire.from).branchId) && ids.has(parseTerminal(wire.to).branchId));
+    }
+
+    function packageNetworkCaseFromBranch(branch, index = 0) {
+      const pkg = branch.packageOriginal || {};
+      const gMatrix = branch.gMatrix || "[]";
+      const ihisVector = branch.ihisVector || "[]";
+      return {
+        name: `Case ${index + 1}`,
+        branches: structuredClone(pkg.branches || []),
+        wires: structuredClone(packageInternalWiresForBranches(pkg.branches || [], pkg.wires || [])),
+        nodeState: structuredClone(pkg.nodeState || []),
+        externalGroups: structuredClone(pkg.externalGroups || []),
+        internalGroups: structuredClone(pkg.internalGroups || []),
+        K_v: structuredClone(pkg.K_v || []),
+        K_h: structuredClone(pkg.K_h || []),
+        gMatrix,
+        ihisVector,
+        superExternalGroups: structuredClone(pkg.superExternalGroups || pkg.externalGroups || []),
+        superInternalGroups: structuredClone(pkg.superInternalGroups || pkg.internalGroups || []),
+        superK_v: structuredClone(pkg.superK_v || pkg.K_v || []),
+        superK_h: structuredClone(pkg.superK_h || pkg.K_h || []),
+        superGMatrix: branch.superGMatrix || gMatrix,
+        superIhisVector: branch.superIhisVector || ihisVector,
+        finalExternalGroups: structuredClone(pkg.finalExternalGroups || pkg.externalGroups || []),
+        finalInternalGroups: structuredClone(pkg.finalInternalGroups || pkg.internalGroups || []),
+        finalK_v: structuredClone(pkg.finalK_v || pkg.K_v || []),
+        finalK_h: structuredClone(pkg.finalK_h || pkg.K_h || []),
+        finalGMatrix: branch.finalGMatrix || gMatrix,
+        finalIhisVector: branch.finalIhisVector || ihisVector,
+        currents: structuredClone(branch.currents || []),
+        gIsConstant: branch.gIsConstant !== false,
+        constantGSymbols: branch.constantGSymbols || ""
+      };
+    }
+
+    function applyPackageNetworkCase(branch, caseIndex = null) {
+      const pkg = branch?.packageOriginal;
+      const cases = pkg?.networkCases || [];
+      if (!pkg || !cases.length) return null;
+      const index = Math.max(0, Math.min(cases.length - 1, Number(caseIndex ?? pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0));
+      const active = cases[index];
+      const packageOriginal = pkg;
+      pkg.activeNetworkCase = index;
+      branch.activeSwitchCase = index;
+      pkg.branches = structuredClone(active.branches || []);
+      pkg.wires = structuredClone(active.wires || []);
+      pkg.nodeState = structuredClone(active.nodeState || []);
+      packageOriginal.externalGroups = structuredClone(active.superExternalGroups || active.externalGroups || []);
+      pkg.internalGroups = structuredClone(active.superInternalGroups || active.internalGroups || []);
+      pkg.K_v = structuredClone(active.superK_v || active.K_v || []);
+      pkg.K_h = structuredClone(active.superK_h || active.K_h || []);
+      pkg.superExternalGroups = structuredClone(active.superExternalGroups || active.externalGroups || []);
+      pkg.superInternalGroups = structuredClone(active.superInternalGroups || active.internalGroups || []);
+      pkg.superK_v = structuredClone(active.superK_v || active.K_v || []);
+      pkg.superK_h = structuredClone(active.superK_h || active.K_h || []);
+      pkg.finalExternalGroups = structuredClone(active.finalExternalGroups || active.externalGroups || []);
+      pkg.finalInternalGroups = structuredClone(active.finalInternalGroups || active.internalGroups || []);
+      pkg.finalK_v = structuredClone(active.finalK_v || active.K_v || []);
+      pkg.finalK_h = structuredClone(active.finalK_h || active.K_h || []);
+      branch.gMatrix = active.superGMatrix || active.gMatrix || branch.gMatrix || "[]";
+      branch.ihisVector = active.superIhisVector || active.ihisVector || branch.ihisVector || "[]";
+      branch.superGMatrix = active.superGMatrix || active.gMatrix || branch.gMatrix || "[]";
+      branch.superIhisVector = active.superIhisVector || active.ihisVector || branch.ihisVector || "[]";
+      branch.finalGMatrix = active.finalGMatrix || active.gMatrix || branch.gMatrix || "[]";
+      branch.finalIhisVector = active.finalIhisVector || active.ihisVector || branch.ihisVector || "[]";
+      branch.currents = structuredClone(active.currents || branch.currents || []);
+      branch.gIsConstant = active.gIsConstant !== false;
+      branch.constantGSymbols = active.constantGSymbols || branch.constantGSymbols || "";
+      return active;
+    }
+
+    function normalizePackageNetworkCases(branch) {
+      const pkg = branch?.packageOriginal;
+      if (!pkg) return;
+      if (!Array.isArray(pkg.networkCases) || !pkg.networkCases.length) {
+        pkg.networkCases = [packageNetworkCaseFromBranch(branch, 0)];
+      }
+      pkg.networkCases = pkg.networkCases.map((source, index) => ({
+        ...packageNetworkCaseFromBranch(branch, index),
+        ...(source || {}),
+        name: String(source?.name || `Case ${index + 1}`)
+      }));
+      const activeIndex = Math.max(0, Math.min(pkg.networkCases.length - 1, Number(pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0));
+      pkg.activeNetworkCase = activeIndex;
+      branch.switchCases = pkg.networkCases.map((item, index) => ({
+        name: item.name || `Case ${index + 1}`,
+        gMatrix: item.gMatrix || "[]",
+        ihisVector: item.ihisVector || "[]",
+        gIsConstant: item.gIsConstant !== false,
+        constantGSymbols: item.constantGSymbols || ""
+      }));
+      branch.activeSwitchCase = activeIndex;
+      applyPackageNetworkCase(branch, activeIndex);
+    }
+
     function normalizeSwitchCases(branch) {
       if (branch?.kind === "current_source" || branch?.kind === "voltage_source_series_r") {
         delete branch.switchCases;
@@ -5175,8 +5542,7 @@
         return;
       }
       if (branch?.packageOriginal) {
-        delete branch.switchCases;
-        branch.activeSwitchCase = 0;
+        normalizePackageNetworkCases(branch);
         return;
       }
       if (!Array.isArray(branch.switchCases) || branch.switchCases.length <= 1) {
@@ -5207,7 +5573,6 @@
     }
 
     function branchValue(branch, field) {
-      if (branch?.packageOriginal) return branch[field] ?? "";
       return activeSwitchCase(branch)?.[field] ?? branch[field] ?? "";
     }
 
@@ -5475,18 +5840,6 @@
       branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(value) || 0));
     }
 
-    function cycleSwitchCase(branch) {
-      normalizeSwitchCases(branch);
-      if (!branch.switchCases?.length || branch.switchCases.length <= 1) return false;
-      commitHistory();
-      branch.activeSwitchCase = ((branch.activeSwitchCase || 0) + 1) % branch.switchCases.length;
-      invalidateMathCaches();
-      selectBranch(branch.id);
-      statusEl.textContent = `${branch.name} switch: ${switchCaseLabel(branch)}`;
-      render();
-      return true;
-    }
-
     function switchCaseEditor(branch, showCaption = true) {
       normalizeSwitchCases(branch);
       const count = branch.switchCases?.length || 1;
@@ -5509,7 +5862,6 @@
           </div>
         </div>
         ${activeCase ? editableField("工况名称", "switchCaseName", activeCase.name || `Case ${activeIndex + 1}`) : ""}
-        <div class="modal-help">${escapeHtml(tr("在画布中双击元件可切换工况。"))}</div>
       `;
     }
 
@@ -5521,8 +5873,10 @@
 
     function packagedCaseEditor(branch, showCaption = true) {
       const items = packagedCaseBranches(branch);
+      const networkCaseUi = packagedNetworkCaseEditor(branch);
       return `
         ${showCaption ? `<div class="field-caption">${escapeHtml(tr("内部工况"))}</div>` : ""}
+        ${networkCaseUi}
         ${items.length ? `
           <div class="packaged-case-list">
             ${items.map(({ inner, index }) => {
@@ -5542,6 +5896,31 @@
           </div>
           <div class="modal-help">${escapeHtml(tr("切换内部支路工况后，会重新计算这个打包黑盒的 G/Ihis 和观测公式。"))}</div>
         ` : `<div class="modal-help">${escapeHtml(tr("没有内部支路包含多个工况。"))}</div>`}
+      `;
+    }
+
+    function packagedNetworkCaseEditor(branch) {
+      normalizePackageNetworkCases(branch);
+      const pkg = branch.packageOriginal;
+      const cases = pkg?.networkCases || [];
+      const activeIndex = Number(pkg?.activeNetworkCase ?? branch.activeSwitchCase) || 0;
+      return `
+        <div class="field-caption">${escapeHtml(tr("内部网络工况"))}</div>
+        <div class="row">
+          <div class="field">
+            <label>${escapeHtml(tr("当前 Pack 工况"))}</label>
+            <select data-package-network-case-active ${cases.length <= 1 ? "disabled" : ""}>
+              ${cases.map((item, index) => `
+                <option value="${index}" ${index === activeIndex ? "selected" : ""}>${escapeHtml(item.name || `Case ${index + 1}`)}</option>
+              `).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <button class="text-button" type="button" data-package-network-action="duplicate">${escapeHtml(tr("复制当前内部网络为新工况"))}</button>
+          <button class="text-button" type="button" data-package-network-action="edit">${escapeHtml(tr("编辑当前内部网络工况"))}</button>
+        </div>
+        <div class="modal-help">${escapeHtml(tr("进入内部工况编辑后，画布会暂时显示该 Pack 的内部网络。点击“完成并保存 Pack 工况”重新等效并回到外层。"))}</div>
       `;
     }
 
@@ -7218,6 +7597,7 @@
     }
 
     function renderOutput() {
+      sanitizeDummyProtectedInternalNodes();
       if (state.activeOutput === "model") {
         outputText.className = "output-body code";
         outputText.textContent = JSON.stringify(modelJson(), null, 2);
@@ -8358,13 +8738,18 @@
     }
 
     function optimizedEliminationPayload() {
-      return {
+      const payload = {
         ...buildReducedPayload(),
         mode: "structured_formula",
         display_mode: state.optimizedEliminationDisplay || "compact",
         simplify_level: state.optimizedEliminationSimplify || "light",
         assume_spd: state.optimizedEliminationAssumeSpd !== false,
         use_suggested_order: state.optimizedEliminationUseSuggestedOrder !== false
+      };
+      const dummy_finalization = dummyFinalizationForCaseProfile(activeDummyFinalizationProfile(), payload);
+      return {
+        ...payload,
+        ...(dummy_finalization ? { dummy_finalization } : {})
       };
     }
 
@@ -8388,7 +8773,8 @@
         symbol_dependency_table: payload.symbol_dependency_table,
         symbol_dependency_table_tagged: payload.symbol_dependency_table_tagged,
         G_full_tagged: payload.G_full_tagged,
-        Ihis_full_tagged: payload.Ihis_full_tagged
+        Ihis_full_tagged: payload.Ihis_full_tagged,
+        dummy_finalization: payload.dummy_finalization
       });
     }
 
@@ -8417,7 +8803,6 @@
 
     function multiCaseEligibleBranches() {
       return state.branches.filter(branch => {
-        if (branch?.packageOriginal) return false;
         normalizeSwitchCases(branch);
         return Array.isArray(branch.switchCases) && branch.switchCases.length > 1;
       });
@@ -8484,7 +8869,7 @@
     }
 
     function payloadForCaseProfile(profile) {
-      const originals = state.branches.map(branch => [branch, Number(branch.activeSwitchCase) || 0]);
+      const originals = state.branches.map(branch => [branch, Number(branch.activeSwitchCase) || 0, Number(branch.packageOriginal?.activeNetworkCase) || 0]);
       try {
         Object.entries(profile.case_map || {}).forEach(([branchId, caseIndex]) => {
           const branch = findBranch(branchId);
@@ -8492,13 +8877,67 @@
           normalizeSwitchCases(branch);
           if (!branch.switchCases?.length) return;
           branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(caseIndex) || 0));
+          if (branch.packageOriginal) applyPackageNetworkCase(branch, branch.activeSwitchCase);
         });
         return optimizedEliminationPayload();
       } finally {
-        originals.forEach(([branch, activeSwitchCase]) => {
+        originals.forEach(([branch, activeSwitchCase, activeNetworkCase]) => {
           branch.activeSwitchCase = activeSwitchCase;
+          if (branch.packageOriginal) applyPackageNetworkCase(branch, activeNetworkCase);
         });
       }
+    }
+
+    function dummyFinalizationForCaseProfile(profile, payload) {
+      const leaves = [];
+      const lookup = netLookup();
+      const nodeForPackPort = (branch, port, fallback = "") => {
+        const supportNodes = (payload?.direct_retained_stamps || [])
+          .find(stamp => stamp.id === branch.id)
+          ?.support_nodes || [];
+        const portIndex = (branch.ports || []).indexOf(port);
+        if (portIndex >= 0 && supportNodes[portIndex]) return supportNodes[portIndex];
+        if (!port) return fallback;
+        const netId = lookup.get(terminalKey(branch.id, port));
+        return nodeDisplayName(netId) || branch.nodes?.[port] || fallback || port;
+      };
+      Object.entries(profile.case_map || {}).forEach(([branchId, caseIndex]) => {
+        const branch = findBranch(branchId);
+        if (!branch?.packageOriginal) return;
+        normalizePackageNetworkCases(branch);
+        const cases = branch.packageOriginal.networkCases || [];
+        const index = Math.max(0, Math.min(cases.length - 1, Number(caseIndex) || 0));
+        const active = cases[index] || {};
+        const groups = active.superExternalGroups || active.externalGroups || [];
+        const sourceBranches = active.branches || [];
+        dummyBranchesForPackCase(sourceBranches).forEach(dummy => {
+          const dummySide = dummy.dummyTerminalSide || "B";
+          const anchorSide = dummy.anchorTerminalSide || "A";
+          const dummyKey = terminalKey(dummy.id, dummySide);
+          const anchorKey = terminalKey(dummy.id, anchorSide);
+          const dummyGroup = groups.find(group => (group.members || []).includes(dummyKey));
+          const anchorGroup = groups.find(group => (group.members || []).includes(anchorKey));
+          if (!dummyGroup || !anchorGroup) return;
+          leaves.push({
+            dummy_node: nodeForPackPort(branch, dummyGroup.port, dummyGroup.display),
+            anchor_node: nodeForPackPort(branch, anchorGroup.port, anchorGroup.display),
+            branch_id: dummy.name || dummy.id || "DummyBranch",
+            conductance: dummy.g || "G_EPSILON"
+          });
+        });
+      });
+      return leaves.length ? { dummy_leaves: leaves } : null;
+    }
+
+    function activeDummyFinalizationProfile() {
+      const case_map = {};
+      state.branches.forEach(branch => {
+        if (!branch?.packageOriginal) return;
+        normalizePackageNetworkCases(branch);
+        const active = branch.packageOriginal.activeNetworkCase ?? branch.activeSwitchCase ?? 0;
+        case_map[branch.id] = Math.max(0, Number(active) || 0);
+      });
+      return { name: "Active case", case_map };
     }
 
     function multiCaseExportPayload() {
@@ -8518,12 +8957,17 @@
           kind: branch.kind,
           case_count: branch.switchCases?.length || 0
         })),
-        case_profiles: profiles.map((profile, index) => ({
-          name: profile.name || `Case ${index + 1}`,
-          comment: profile.comment || "",
-          case_map: profile.case_map || {},
-          payload: payloadForCaseProfile(profile)
-        }))
+        case_profiles: profiles.map((profile, index) => {
+          const payload = payloadForCaseProfile(profile);
+          const dummy_finalization = dummyFinalizationForCaseProfile(profile, payload);
+          return {
+            name: profile.name || `Case ${index + 1}`,
+            comment: profile.comment || "",
+            case_map: profile.case_map || {},
+            payload,
+            ...(dummy_finalization ? { dummy_finalization } : {})
+          };
+        })
       };
     }
 
@@ -8644,13 +9088,30 @@
             "该优化消元页面假设待消元矩阵为对称正定，或至少适合对称舒尔消元；如果包含受控电流源、非对称黑盒等非对称元件贡献，请只作为参考。",
             "结构化公式默认显示矩阵、向量和块矩阵形式，不默认展开巨大的标量表达式。"
           ];
-      if (result?.warnings?.length) warnings.push(...result.warnings);
+      if (result?.warnings?.length) warnings.push(...result.warnings.map(localizedBackendWarning));
       return `
         <div class="formula-card validation-warning">
           <div class="formula-name">${optText("提示", "Warning")}</div>
           <div class="formula-empty">${warnings.map(escapeHtml).join("<br>")}</div>
         </div>
       `;
+    }
+
+    function localizedBackendWarning(message) {
+      const text = String(message || "");
+      if (text === "Info: active DummyBranch case is finalized before optimized C stamping; dummy leaf nodes are not solver nodes.") {
+        return optText(
+          "提示：当前 DummyBranch 工况会在优化 C stamp 前完成最终维度裁剪；dummy leaf 节点不会进入求解器节点。",
+          "Info: active DummyBranch case is finalized before optimized C stamping; dummy leaf nodes are not solver nodes."
+        );
+      }
+      if (text === "Info: DummyBranch profiles use case-specific final solver dimensions after the shared super reduction.") {
+        return optText(
+          "提示：DummyBranch profiles 会在共享 super reduction 后使用各自的最终求解器维度。",
+          "Info: DummyBranch profiles use case-specific final solver dimensions after the shared super reduction."
+        );
+      }
+      return text;
     }
 
     function displayNodeList(nodes, displayNames = {}) {
@@ -9138,7 +9599,7 @@
 
     function renderMultiCaseCExportResult(result) {
       const warnings = result.warnings?.length
-        ? `<div class="formula-card"><div class="formula-name">${escapeHtml(optText("提示", "Warnings"))}</div><div class="formula-empty">${result.warnings.map(escapeHtml).join("<br>")}</div></div>`
+        ? `<div class="formula-card"><div class="formula-name">${escapeHtml(optText("提示", "Warnings"))}</div><div class="formula-empty">${result.warnings.map(localizedBackendWarning).map(escapeHtml).join("<br>")}</div></div>`
         : "";
       const multiCase = result.multi_case || {};
       const branchById = new Map(multiCaseEligibleBranches().map(branch => [branch.id, branch]));
@@ -9359,6 +9820,7 @@
     }
 
     function buildPackagedReductionPayload(branch) {
+      normalizePackageNetworkCases(branch);
       const pkg = branch.packageOriginal;
       if (!pkg) return null;
       const allGroups = [...(pkg.externalGroups || []), ...(pkg.internalGroups || [])];
@@ -9443,6 +9905,25 @@
           expression: replaceExternalVoltages(item.rhs, built.externalGroups, ports)
         };
       });
+      const pkg = branch.packageOriginal;
+      const activeIndex = Number(pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0;
+      if (pkg.networkCases?.[activeIndex]) {
+        pkg.networkCases[activeIndex] = {
+          ...pkg.networkCases[activeIndex],
+          branches: structuredClone(pkg.branches || []),
+          wires: structuredClone(packageInternalWiresForBranches(pkg.branches || [], pkg.wires || [])),
+          nodeState: structuredClone(pkg.nodeState || []),
+          externalGroups: structuredClone(pkg.externalGroups || []),
+          internalGroups: structuredClone(pkg.internalGroups || []),
+          K_v: structuredClone(pkg.K_v || []),
+          K_h: structuredClone(pkg.K_h || []),
+          gMatrix: branch.gMatrix,
+          ihisVector: branch.ihisVector,
+          currents: structuredClone(branch.currents || []),
+          gIsConstant: branch.gIsConstant !== false,
+          constantGSymbols: branch.constantGSymbols || ""
+        };
+      }
       invalidateMathCaches();
     }
 
@@ -9858,9 +10339,12 @@
           })),
           internalGroups: subsystem.internalGroups.map(group => ({ id: group.id, display: group.display, globalNet: group.globalNet, members: [...group.members] })),
           K_v: result.K_v,
-          K_h: result.K_h
+          K_h: result.K_h,
+          activeNetworkCase: 0,
+          networkCases: []
         }
       };
+      yBox.packageOriginal.networkCases = [packageNetworkCaseFromBranch(yBox, 0)];
 
       state.branches = state.branches.filter(branch => !selectedIds.has(branch.id));
       state.wires = state.wires.filter(wire => {
@@ -10613,6 +11097,7 @@
     }
 
     function packagedOriginalSystem(branch, netByTerminal) {
+      normalizePackageNetworkCases(branch);
       const pkg = branch.packageOriginal;
       const originalBranches = pkg?.branches || [];
       if (!originalBranches.length) return null;
@@ -10759,6 +11244,12 @@
         const n = terminalSides(branch).length;
         return parseMatrixLiteral(branchValue(branch, "gMatrix"), n, n);
       }
+      if (branch.kind === "dummy_dimension_branch") {
+        return [
+          ["G_EPSILON", "-(G_EPSILON)"],
+          ["-(G_EPSILON)", "G_EPSILON"]
+        ];
+      }
       if (branch.kind === "current_source") {
         return [["0", "0"], ["0", "0"]];
       }
@@ -10781,6 +11272,7 @@
       if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port") {
         return parseVectorLiteral(branchValue(branch, "ihisVector"), terminalSides(branch).length);
       }
+      if (branch.kind === "dummy_dimension_branch") return ["0", "0"];
       if (branch.kind === "current_source") {
         return ["0", "0"];
       }
@@ -11281,6 +11773,417 @@
       }
     }
 
+    function packageCaseGroupSignature(groups = []) {
+      return groups.map(group => String(group.display || group.id || "").trim());
+    }
+
+    function packageCasePortRows(groups = []) {
+      return (groups || []).map((group, index) => {
+        const name = String(group.display || group.id || "").trim() || `N${index + 1}`;
+        const port = String(group.port || `P${index + 1}`).trim();
+        return `${index + 1}. ${name} -> ${port}`;
+      });
+    }
+
+    function packageCasePortMismatchMessage(expectedGroups, actualGroups, message) {
+      const expected = packageCasePortRows(expectedGroups || []);
+      const current = packageCasePortRows(actualGroups || []);
+      const same = expected.length === current.length && expected.every((row, index) => {
+        const expectedName = packageCaseGroupSignature(expectedGroups || [])[index] || "";
+        const currentName = packageCaseGroupSignature(actualGroups || [])[index] || "";
+        return expectedName === currentName;
+      });
+      if (same) return "";
+      return `${tr(message)}\nExpected: ${expected.join(", ") || "-"}\nCurrent: ${current.join(", ") || "-"}`;
+    }
+
+    function validatePackageCaseExternalSignature(branch, subsystem) {
+      const expectedExternalPortRows = packageCasePortRows(branch.packageOriginal?.externalGroups || []);
+      const currentExternalPortRows = packageCasePortRows(subsystem.externalGroups || []);
+      const compare = (expectedGroups, actualGroups, message) => {
+        const expected = packageCaseGroupSignature(expectedGroups);
+        const actual = packageCaseGroupSignature(actualGroups);
+        const same = expected.length === actual.length && expected.every((name, index) => name === actual[index]);
+        return same ? "" : `${tr(message)}：${expected.join(", ") || "-"} != ${actual.join(", ") || "-"}`;
+      };
+      return packageCasePortMismatchMessage(branch.packageOriginal?.externalGroups || [], subsystem.externalGroups || [], "外部端口不一致，不能完成这个 Pack 工况")
+        || (expectedExternalPortRows.length !== currentExternalPortRows.length ? `${tr("外部端口不一致，不能完成这个 Pack 工况")}\nExpected: ${expectedExternalPortRows.join(", ") || "-"}\nCurrent: ${currentExternalPortRows.join(", ") || "-"}` : "")
+        || compare(branch.packageOriginal?.internalGroups || [], subsystem.internalGroups || [], "内部节点不一致，不能完成这个 Pack 工况");
+    }
+
+    function dummyBranchesForPackCase(branches = state.branches) {
+      return (branches || []).filter(branch => branch.kind === "dummy_dimension_branch" || branch.element_type === "dummy_branch" || branch.dummy_role === true);
+    }
+
+    function validateDummyBranchesForPackCase(shell, subsystem) {
+      const edit = state.packageCaseEdit || {};
+      const pkg = shell?.packageOriginal || {};
+      const caseName = pkg.networkCases?.[edit.caseIndex]?.name || `Case ${Number(edit.caseIndex || 0) + 1}`;
+      const packName = shell?.name || shell?.id || "Pack";
+      const internalGroupIds = new Set((subsystem.internalGroups || []).map(group => group.id));
+      const errors = [];
+
+      dummyBranchesForPackCase(subsystem.sourceBranches || state.branches).forEach(branch => {
+        const dummySide = branch.dummyTerminalSide || "B";
+        const anchorSide = branch.anchorTerminalSide || "A";
+        const dummyKey = terminalKey(branch.id, dummySide);
+        const anchorKey = terminalKey(branch.id, anchorSide);
+        const dummyGroup = subsystem.groupByTerminal?.get(dummyKey);
+        const anchorGroup = subsystem.groupByTerminal?.get(anchorKey);
+        const dummyName = dummyGroup?.display || branchNodeForSide(branch, dummySide) || dummySide;
+        const prefix = `${packName} / ${caseName} / ${branch.name || branch.id} / ${dummyName}`;
+
+        if (!dummyGroup || !anchorGroup) {
+          errors.push(`${prefix}: ${tr("Dummy 支路端点缺失。")}`);
+          return;
+        }
+        if ((dummyGroup.members || []).length !== 1 || dummyGroup.members[0] !== dummyKey) {
+          errors.push(`${prefix}: ${tr("Dummy 节点只能连接自己的 Dummy 支路，不能接线或并入其他节点。")}`);
+        }
+        if (internalGroupIds.has(anchorGroup.id)) {
+          errors.push(`${prefix}: ${tr("Dummy anchor 必须连接公共 retained/reference 节点，不能连接内部消去节点。")}`);
+        }
+        if (String(branch.ihis || "0").trim() !== "0") {
+          errors.push(`${prefix}: ${tr("Dummy Ihis 必须固定为 0。")}`);
+        }
+        if (String(branch.g || "G_EPSILON").trim() !== "G_EPSILON") {
+          errors.push(`${prefix}: ${tr("Dummy G 必须固定为 G_EPSILON。")}`);
+        }
+        if (branch.recoverable !== false || branch.forced_final_elimination !== true) {
+          errors.push(`${prefix}: ${tr("Dummy 必须标记为强制最终消去且不恢复电压。")}`);
+        }
+      });
+
+      return errors;
+    }
+
+    function buildDummyAdjustedPackReduction(shell, subsystem) {
+      const dummyGroups = [];
+      const dummyGroupIds = new Set();
+      dummyBranchesForPackCase(subsystem.sourceBranches || state.branches).forEach(branch => {
+        const dummySide = branch.dummyTerminalSide || "B";
+        const dummyGroup = subsystem.groupByTerminal?.get(terminalKey(branch.id, dummySide));
+        if (dummyGroup && !dummyGroupIds.has(dummyGroup.id)) {
+          dummyGroupIds.add(dummyGroup.id);
+          dummyGroups.push(dummyGroup);
+        }
+      });
+
+      const physicalInternalGroups = subsystem.internalGroups || [];
+      if (!dummyGroups.length) {
+        return {
+          hasDummy: false,
+          reductionPayload: subsystem.payload,
+          finalSubsystem: subsystem,
+          physicalInternalCount: physicalInternalGroups.length,
+          trimResult: result => result,
+          superResult: null,
+          trimmedResult: null
+        };
+      }
+
+      const finalExternalGroups = (subsystem.externalGroups || []).filter(group => !dummyGroupIds.has(group.id));
+      const finalSubsystem = {
+        ...subsystem,
+        externalGroups: finalExternalGroups
+      };
+      const reductionPayload = {
+        ...subsystem.payload,
+        external_nodes: finalExternalGroups.map(group => group.id),
+        internal_nodes: [
+          ...physicalInternalGroups.map(group => group.id),
+          ...dummyGroups.map(group => group.id)
+        ]
+      };
+      const physicalInternalCount = physicalInternalGroups.length;
+      const trimResult = result => ({
+        ...result,
+        K_v: (result.K_v || []).slice(0, physicalInternalCount),
+        K_h: (result.K_h || []).slice(0, physicalInternalCount),
+        effective_internal_nodes: (result.effective_internal_nodes || []).slice(0, physicalInternalCount)
+      });
+      return {
+        hasDummy: true,
+        reductionPayload,
+        finalSubsystem,
+        physicalInternalCount,
+        trimResult,
+        superResult: null,
+        trimmedResult: null
+      };
+    }
+
+    function setActivePackageNetworkCase(branch, caseIndex) {
+      if (!branch?.packageOriginal) return;
+      normalizePackageNetworkCases(branch);
+      const nextIndex = Math.max(0, Math.min(branch.packageOriginal.networkCases.length - 1, Number(caseIndex) || 0));
+      if ((Number(branch.packageOriginal.activeNetworkCase) || 0) === nextIndex) return;
+      commitHistory();
+      applyPackageNetworkCase(branch, nextIndex);
+      invalidateMathCaches();
+      render();
+    }
+
+    function duplicateActivePackageNetworkCase(branch) {
+      if (!branch?.packageOriginal) return;
+      normalizePackageNetworkCases(branch);
+      commitHistory();
+      const pkg = branch.packageOriginal;
+      const activeIndex = Number(pkg.activeNetworkCase) || 0;
+      const copy = structuredClone(pkg.networkCases[activeIndex] || packageNetworkCaseFromBranch(branch, 0));
+      copy.name = `Case ${pkg.networkCases.length + 1}`;
+      pkg.networkCases.push(copy);
+      applyPackageNetworkCase(branch, pkg.networkCases.length - 1);
+      invalidateMathCaches();
+      render();
+    }
+
+    function startPackageCaseEdit(branch, caseIndex = null) {
+      if (!branch?.packageOriginal) return;
+      normalizePackageNetworkCases(branch);
+      const pkg = branch.packageOriginal;
+      const index = Math.max(0, Math.min(pkg.networkCases.length - 1, Number(caseIndex ?? pkg.activeNetworkCase) || 0));
+      const caseData = pkg.networkCases[index] || packageNetworkCaseFromBranch(branch, index);
+      saveActiveCanvas();
+      const returnData = currentCanvasData();
+      state.packageCaseEdit = {
+        outerCanvasId: state.activeCanvasId,
+        packageBranchId: branch.id,
+        caseIndex: index,
+        packageShell: structuredClone(branch),
+        returnData
+      };
+      state.branches = structuredClone(caseData.branches || []);
+      state.wires = structuredClone(packageInternalWiresForBranches(state.branches, caseData.wires || []));
+      state.groups = [];
+      state.nodeLabels = {};
+      state.nodeColors = {};
+      state.internalNodes = [];
+      state.nodeOrder = [];
+      state.selectedIds = state.branches.map(item => item.id);
+      state.selectedId = state.selectedIds[0] || null;
+      state.selectedNetIds = [];
+      state.selectedWireId = null;
+      syncNextCounters();
+      applyNodeDisplayState(caseData.nodeState || []);
+      remapNodeOrderAfterTopologyChange(state.nodeOrder, orderedNetGroups(), new Map());
+      statusEl.textContent = tr("正在编辑 Pack 内部工况。完成前请保持外部端口数量、名字和顺序不变。");
+      render();
+    }
+
+    function cancelPackageCaseEdit() {
+      const edit = state.packageCaseEdit;
+      if (!edit) return;
+      state.packageCaseEdit = null;
+      applyCanvasData(edit.returnData || blankCanvasData());
+      render();
+    }
+
+    function renderPackageCasePortReminder(shell) {
+      const rows = packageCasePortRows(shell.packageOriginal?.externalGroups || []);
+      if (!rows.length) return "";
+      return `
+        <div class="package-case-overlay-text">
+          <strong>${escapeHtml(tr("Pack 外部端口必须保持"))}</strong>
+          <div>${rows.map(row => escapeHtml(row)).join("<br>")}</div>
+          <div>${escapeHtml(tr("完成保存前，外部端口数量、名字、顺序必须与上表一致。"))}</div>
+        </div>
+      `;
+    }
+
+    function packagedCaseGroupRows(groups, ports) {
+      return (groups || []).map((group, index) => ({
+        id: group.id,
+        display: group.display,
+        globalNet: group.globalNet,
+        members: [...(group.members || [])],
+        port: ports[index] || `P${index + 1}`,
+        internal: Boolean(group.internal),
+        boundary: Boolean(group.boundary)
+      }));
+    }
+
+    function packagedCaseInternalRows(groups) {
+      return (groups || []).map(group => ({
+        id: group.id,
+        display: group.display,
+        globalNet: group.globalNet,
+        members: [...(group.members || [])]
+      }));
+    }
+
+    function packagedCaseFromReduction(branch, subsystem, result, observerEntries, caseName, finalData = null) {
+      const ports = branch.ports || [];
+      const finalSubsystem = finalData?.subsystem || subsystem;
+      const finalResult = finalData?.result || result;
+      const superExternalGroups = packagedCaseGroupRows(subsystem.externalGroups, ports);
+      const superInternalGroups = packagedCaseInternalRows(subsystem.internalGroups);
+      const superGMatrix = matrixLiteral(result.G_red);
+      const superIhisVector = vectorLiteral(result.Ihis_red);
+      const finalExternalGroups = packagedCaseGroupRows(finalSubsystem.externalGroups, ports);
+      const finalInternalGroups = packagedCaseInternalRows(finalSubsystem.internalGroups);
+      const finalGMatrix = matrixLiteral(finalResult.G_red);
+      const finalIhisVector = vectorLiteral(finalResult.Ihis_red);
+      const currents = (result.reduced_observers || []).map((item, index) => {
+        const source = observerEntries[index] || {};
+        return {
+          name: observerNameFromLhs(source.lhs || item.lhs, index),
+          from: ports[0],
+          to: ports[Math.min(1, ports.length - 1)],
+          fromLabel: source.fromLabel || ports[0],
+          toLabel: source.toLabel || ports[Math.min(1, ports.length - 1)],
+          fromEliminated: Boolean(source.fromEliminated),
+          toEliminated: Boolean(source.toEliminated),
+          expression: replaceExternalVoltages(item.rhs, subsystem.externalGroups, ports)
+        };
+      });
+      return {
+        name: caseName,
+        branches: structuredClone(subsystem.sourceBranches || []),
+        wires: structuredClone(packageInternalWiresForBranches(subsystem.sourceBranches || [], subsystem.sourceWires || [])),
+        nodeState: structuredClone(captureNodeDisplayState()),
+        externalGroups: superExternalGroups,
+        internalGroups: superInternalGroups,
+        K_v: result.K_v,
+        K_h: result.K_h,
+        gMatrix: superGMatrix,
+        ihisVector: superIhisVector,
+        superExternalGroups,
+        superInternalGroups,
+        superK_v: result.K_v,
+        superK_h: result.K_h,
+        superGMatrix,
+        superIhisVector,
+        finalExternalGroups,
+        finalInternalGroups,
+        finalK_v: finalResult.K_v,
+        finalK_h: finalResult.K_h,
+        finalGMatrix,
+        finalIhisVector,
+        currents,
+        gIsConstant: branch.gIsConstant !== false,
+        constantGSymbols: branch.constantGSymbols || ""
+      };
+    }
+
+    async function finishPackageCaseEdit() {
+      const edit = state.packageCaseEdit;
+      if (!edit) return false;
+      const sourceBranches = structuredClone(state.branches);
+      const sourceWires = structuredClone(state.wires);
+      const subsystem = buildSelectedSubsystem(state.branches);
+      subsystem.sourceBranches = sourceBranches;
+      subsystem.sourceWires = sourceWires;
+      const shell = structuredClone(edit.packageShell);
+      normalizePackageNetworkCases(shell);
+      const mismatch = validatePackageCaseExternalSignature(shell, subsystem);
+      if (mismatch) {
+        alert(mismatch);
+        return true;
+      }
+      const dummyErrors = validateDummyBranchesForPackCase(shell, subsystem);
+      if (dummyErrors.length) {
+        alert(dummyErrors.join("\n"));
+        return true;
+      }
+      if (subsystem.warnings?.length) {
+        alert(subsystem.warnings.map(item => tr(item)).join("\n"));
+        return true;
+      }
+      const internalNames = new Set(subsystem.internalGroups.map(group => group.display));
+      const observerEntries = sourceBranches.flatMap(branch => packagedObserverEntries({ packageOriginal: { branches: [branch] } }, subsystem.groupByTerminal, internalNames));
+      const dummyAdjusted = buildDummyAdjustedPackReduction(shell, subsystem);
+      const observerPayload = observerEntries.map(({ lhs, rhs }) => ({ lhs, rhs }));
+      dummyAdjusted.superResult = await requestReduction({
+        ...subsystem.payload,
+        observers: observerPayload
+      });
+      if (dummyAdjusted.hasDummy) {
+        const result = await requestReduction({
+          ...dummyAdjusted.reductionPayload,
+          observers: observerPayload
+        });
+        dummyAdjusted.trimmedResult = dummyAdjusted.trimResult(result);
+      } else {
+        dummyAdjusted.trimmedResult = dummyAdjusted.superResult;
+      }
+      const pkg = shell.packageOriginal;
+      const index = Math.max(0, Math.min(pkg.networkCases.length - 1, Number(edit.caseIndex) || 0));
+      const previousName = pkg.networkCases[index]?.name || `Case ${index + 1}`;
+      pkg.networkCases[index] = packagedCaseFromReduction(
+        shell,
+        subsystem,
+        dummyAdjusted.superResult,
+        observerEntries,
+        previousName,
+        dummyAdjusted.hasDummy ? { subsystem: dummyAdjusted.finalSubsystem, result: dummyAdjusted.trimmedResult } : null
+      );
+      applyPackageNetworkCase(shell, index);
+      const returnData = structuredClone(edit.returnData || blankCanvasData());
+      state.packageCaseEdit = null;
+      applyCanvasData(returnData);
+      const target = state.branches.find(item => item.id === edit.packageBranchId);
+      if (target) Object.assign(target, shell);
+      selectBranch(edit.packageBranchId);
+      invalidateMathCaches();
+      render();
+      return true;
+    }
+
+    function renderPackageCaseEditOverlay() {
+      if (!packageCaseEditOverlay) return;
+      const edit = state.packageCaseEdit;
+      packageCaseEditOverlay.classList.toggle("open", Boolean(edit));
+      if (!edit) {
+        packageCaseEditOverlay.innerHTML = "";
+        return;
+      }
+      const shell = edit.packageShell || {};
+      const cases = shell.packageOriginal?.networkCases || [];
+      const caseName = cases[edit.caseIndex]?.name || `Case ${Number(edit.caseIndex || 0) + 1}`;
+      packageCaseEditOverlay.innerHTML = `
+        <div class="package-case-overlay-title">${escapeHtml(tr("Pack 工况编辑"))}: ${escapeHtml(shell.name || shell.id || "")} / ${escapeHtml(caseName)}</div>
+        <div class="package-case-overlay-text">${escapeHtml(tr("正在编辑 Pack 内部工况。完成前请保持外部端口数量、名字和顺序不变。"))}</div>
+        ${renderPackageCasePortReminder(shell)}
+        <div class="package-case-overlay-actions">
+          <button class="text-button" type="button" data-package-case-overlay-action="dummy">${escapeHtml(tr("新增 Dummy 支路"))}</button>
+          <button class="text-button primary" type="button" data-package-case-overlay-action="finish">${escapeHtml(tr("完成并保存 Pack 工况"))}</button>
+          <button class="text-button" type="button" data-package-case-overlay-action="cancel">${escapeHtml(tr("取消 Pack 工况编辑"))}</button>
+        </div>
+      `;
+      packageCaseEditOverlay.querySelectorAll("[data-package-case-overlay-action]").forEach(button => {
+        const run = () => {
+          if (button.dataset.packageCaseOverlayAction === "dummy") {
+            createDummyDimensionBranch();
+          } else if (button.dataset.packageCaseOverlayAction === "finish") {
+            finishPackageCaseEdit().catch(error => {
+              alert(optText(
+                `Pack 工况保存失败：${error.message || String(error)}`,
+                `Pack case save failed: ${error.message || String(error)}`
+              ));
+            });
+          } else {
+            cancelPackageCaseEdit();
+          }
+        };
+        button.addEventListener("pointerdown", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          button.dataset.pointerHandled = "1";
+          run();
+        });
+        button.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (button.dataset.pointerHandled === "1") {
+            delete button.dataset.pointerHandled;
+            return;
+          }
+          run();
+        });
+      });
+    }
+
     function defaultCustomObserver(branch, index) {
       const ports = terminalSides(branch);
       return {
@@ -11339,8 +12242,8 @@
       document.getElementById("pasteTool").disabled = !state.clipboard?.branches?.length;
       document.getElementById("groupTool").disabled = state.selectedIds.length < 2;
       document.getElementById("ungroupTool").disabled = !currentSelectedGroup();
-      document.getElementById("packYTool").disabled = selectedBranchSet().size === 0;
-      document.getElementById("unpackYTool").disabled = !findBranch(state.selectedId)?.packageOriginal;
+      document.getElementById("packYTool").disabled = state.packageCaseEdit ? state.branches.length === 0 : selectedBranchSet().size === 0;
+      document.getElementById("unpackYTool").disabled = Boolean(state.packageCaseEdit) || !findBranch(state.selectedId)?.packageOriginal;
       document.getElementById("localLabelTool").classList.toggle("active", state.showLocalLabels);
       document.getElementById("undoTool").disabled = state.history.length === 0;
       document.getElementById("redoTool").disabled = state.future.length === 0;
@@ -11355,6 +12258,20 @@
     }
 
     function renderEditor() {
+      if (state.packageCaseEdit && state.selectedIds.length > 1) {
+        editor.innerHTML = `
+          <div class="empty">
+            ${escapeHtml(tr("正在编辑 Pack 内部工况。完成前请保持外部端口数量、名字和顺序不变。"))}
+            <div class="row" style="margin-top:10px;">
+              <button class="text-button" type="button" id="finishPackageCaseEdit">${escapeHtml(tr("完成并保存 Pack 工况"))}</button>
+              <button class="text-button" type="button" id="cancelPackageCaseEdit">${escapeHtml(tr("取消 Pack 工况编辑"))}</button>
+            </div>
+          </div>
+        `;
+        bindEditorActionButton("finishPackageCaseEdit", () => finishPackageCaseEdit());
+        bindEditorActionButton("cancelPackageCaseEdit", cancelPackageCaseEdit);
+        return;
+      }
       if (state.selectedIds.length > 1) {
         const grouped = state.groups.find(group =>
           group.ids.length === state.selectedIds.length &&
@@ -11366,6 +12283,40 @@
       const branch = findBranch(state.selectedId);
       if (!branch) {
         editor.innerHTML = `<div class="empty">选择一个元件后可编辑节点名、导纳、历史电流和观测方向。</div>`;
+        return;
+      }
+
+      if (branch.kind === "dummy_dimension_branch") {
+        const basics = `
+          ${editableField("支路名", "name", branch.name)}
+          <div class="row">
+            ${editableField("宽度", "width", branch.width || 150)}
+            ${editableField("高度", "height", branch.height || 48)}
+          </div>
+        `;
+        const mathModel = `
+          <div class="field">
+            <label>${escapeHtml(tr("Dummy Dimension Branch"))}</label>
+            <input readonly value="${escapeHtml(tr("固定维度补齐元件"))}">
+          </div>
+          ${readonlyField("G", tr("G: G_EPSILON (fixed)"))}
+          ${readonlyField("Ihis", tr("Ihis: 0 (fixed)"))}
+          <div class="modal-help">${escapeHtml(tr("强制最终消去；不恢复电压。"))}</div>
+        `;
+        const terminals = `
+          <div class="row">
+            ${editableField("Anchor 节点", "nodeA", branch.nodeA)}
+            ${editableField("Dummy 节点", "nodeB", branch.nodeB)}
+          </div>
+        `;
+        editor.innerHTML = editorGroupList([
+          editorGroup("basics", "基本信息", basics, false),
+          editorGroup("math", "工况 / 数学模型", mathModel, true),
+          editorGroup("terminals", "端点标识", terminals, false)
+        ]);
+        bindEditorInputs();
+        bindEditorEditButtons();
+        bindEditorGroups();
         return;
       }
 
@@ -11547,11 +12498,11 @@
             ])}
           `;
         }).join("");
+        const caseAndMath = `${switchCaseEditor(branch, false)}${mathModel}`;
         editor.innerHTML = editorGroupList([
           editorGroup("basics", "基本信息", basics, false),
-          editorGroup("cases", "工况", switchCaseEditor(branch, false), false),
+          editorGroup("math", "工况 / 数学模型", caseAndMath, true),
           editorGroup("highlight", "高亮", branchHighlightEditor(branch, false), false),
-          editorGroup("math", "数学模型", mathModel, true),
           editorGroup("currents", "观测电流", currents, false)
         ]);
         bindEditorInputs();
@@ -11626,12 +12577,12 @@
             <div id="blackBoxValidationResult" class="formula-empty">${escapeHtml(tr("正在校验黑盒支路电流观测器..."))}</div>
           `;
         const gConstEditor = branch.packageOriginal ? packagedGConstEditor(branch, false) : constantGEditor(branch);
+        const caseAndMath = `${branch.packageOriginal ? packagedCaseEditor(branch, false) : switchCaseEditor(branch, false)}${mathModel}`;
         editor.innerHTML = editorGroupList([
           editorGroup("package", "打包信息", packageInfo, false),
           editorGroup("basics", "基本信息", basics, false),
-          editorGroup("cases", "工况", branch.packageOriginal ? packagedCaseEditor(branch, false) : switchCaseEditor(branch, false), false),
+          editorGroup("math", "工况 / 数学模型", caseAndMath, true),
           editorGroup("highlight", "高亮", branchHighlightEditor(branch, false), false),
-          editorGroup("math", "数学模型", mathModel, true),
           editorGroup("gconst", "G 常数属性", gConstEditor, false),
           editorGroup("currents", "观测电流", currents, false),
           editorGroup("validation", "一致性校验", validationCheck, false)
@@ -11671,11 +12622,11 @@
         </div>
       `;
 
+      const caseAndMath = `${switchCaseEditor(branch, false)}${mathModel}`;
       editor.innerHTML = editorGroupList([
         editorGroup("basics", "基本信息", basics, false),
-        editorGroup("cases", "工况", switchCaseEditor(branch, false), false),
+        editorGroup("math", "工况 / 数学模型", caseAndMath, true),
         editorGroup("highlight", "高亮", branchHighlightEditor(branch, false), false),
-        editorGroup("math", "数学模型", mathModel, true),
         editorGroup("terminals", "端点标识", terminalIds, false)
       ]);
 
@@ -11802,6 +12753,27 @@
           const branch = findBranch(state.selectedId);
           updatePackagedInnerCase(branch, Number(input.dataset.packageCaseIndex), input.value);
           input.dataset.lastCommittedValue = input.value;
+        });
+      });
+      editor.querySelectorAll("[data-package-network-case-active]").forEach(input => {
+        input.dataset.lastCommittedValue = input.value;
+        input.addEventListener("change", () => {
+          const branch = findBranch(state.selectedId);
+          setActivePackageNetworkCase(branch, input.value);
+          input.dataset.lastCommittedValue = input.value;
+        });
+      });
+      editor.querySelectorAll("[data-package-network-action]").forEach(button => {
+        button.addEventListener("pointerdown", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          const branch = findBranch(state.selectedId);
+          if (button.dataset.packageNetworkAction === "duplicate") duplicateActivePackageNetworkCase(branch);
+          if (button.dataset.packageNetworkAction === "edit") startPackageCaseEdit(branch);
+        });
+        button.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
         });
       });
     }
@@ -12271,7 +13243,12 @@
       }
     }
 
+    function groupHasDummyTerminal(group) {
+      return (group?.members || []).some(member => terminalIsDummyNode(member));
+    }
+
     function renderNetList() {
+      sanitizeDummyProtectedInternalNodes();
       const groups = mergePackagedRowsInOriginalOrder(orderedNetGroups(), packagedHiddenNodeRows());
       if (!groups.length) {
         netList.innerHTML = `<div class="empty">暂无节点。</div>`;
@@ -12280,8 +13257,10 @@
       const rowName = group => group.virtualInternal ? group.display : nodeDisplayName(group.id);
       const rowColor = group => group.virtualInternal ? group.color : netColor(group.id);
       const groundSet = new Set(groundNodesFromGroups(groups));
+      const dummyProtectedIds = dummyProtectedNetIds();
       const rowGround = group => !group.virtualInternal && groundSet.has(group.id);
-      const rowInternal = group => !rowGround(group) && (group.virtualInternal || state.internalNodes.includes(group.id));
+      const rowInternal = group => !rowGround(group) && !dummyProtectedIds.has(group.id) && (group.virtualInternal || state.internalNodes.includes(group.id));
+      const rowDummy = group => !group.virtualInternal && groupHasDummyTerminal(group);
       const rowExposure = group => group.virtualInternal
         ? (group.customHidden
           ? { custom: true, branchId: group.branchId, port: group.port, exposed: false }
@@ -12297,9 +13276,20 @@
           const info = exposedPackagedNodeForGroup(group);
           return info ? { branchId: info.branch.id, kind: info.kind, index: info.index, exposed: true } : null;
         })();
+      const terminalMappingHtml = groups.map(group => {
+        if (group.virtualInternal) {
+          return `<div class="field"><label>${escapeHtml(rowName(group))}</label><input readonly value="${escapeHtml(`${tr("隐藏")} - ${group.branchName}`)}"></div>`;
+        }
+        const names = group.members.map(key => {
+          const parsed = parseTerminal(key);
+          const branch = findBranch(parsed.branchId);
+          return `${branch.name}.${parsed.side}`;
+        }).join(", ");
+        return `<div class="field"><label>${escapeHtml(nodeDisplayName(group.id))}</label><input readonly value="${escapeHtml(names)}"></div>`;
+      }).join("");
       netList.innerHTML = `
         <div class="field">
-          <label>节点顺序</label>
+          <label>${escapeHtml(tr("节点顺序"))}</label>
           <div class="node-order-list" id="nodeOrderList">
             ${groups.map(group => `
               <div class="node-order-item ${state.hoverNetId === group.id ? "hovering" : ""} ${(state.selectedNetIds || []).includes(group.id) ? "selected" : ""}" ${group.virtualInternal ? "" : `data-node-id="${group.id}"`} data-hover-net="${group.id}">
@@ -12308,8 +13298,9 @@
                 </span>
                 <button class="node-color-button" ${group.virtualInternal ? "disabled" : `data-node-color-menu="${group.id}"`} type="button" draggable="false" style="background:${rowColor(group)}" title="选择节点颜色" aria-label="选择节点颜色"></button>
                 <span class="node-order-name">${escapeHtml(rowName(group))}</span>
+                ${rowDummy(group) ? `<span class="node-dummy-badge" title="${escapeHtml(tr("Dummy 节点"))}">Dummy</span>` : ""}
                 <span class="node-order-id">${escapeHtml(group.virtualInternal ? group.branchName : group.id)}</span>
-                <button class="node-internal-button ${rowInternal(group) ? "active" : ""} ${rowGround(group) ? "active" : ""}" ${rowGround(group) ? "disabled" : (group.virtualInternal ? (group.customHidden ? `data-custom-node-external="${group.branchId}:${group.port}"` : `data-packaged-node-external="${group.branchId}:${group.packageKind || "internal"}:${group.internalIndex}"`) : `data-internal-node="${group.id}"`)} type="button" draggable="false" title="${rowGround(group) ? escapeHtml(tr("Ground / V=0")) : (group.virtualInternal ? escapeHtml(tr("隐藏节点会强制作为内部节点参与消元。")) : escapeHtml(tr("切换外部/内部节点")))}">
+                <button class="node-internal-button ${rowInternal(group) ? "active" : ""} ${rowGround(group) ? "active" : ""}" ${rowGround(group) ? "disabled" : (dummyProtectedIds.has(group.id) ? "disabled" : (group.virtualInternal ? (group.customHidden ? `data-custom-node-external="${group.branchId}:${group.port}"` : `data-packaged-node-external="${group.branchId}:${group.packageKind || "internal"}:${group.internalIndex}"`) : `data-internal-node="${group.id}"`))} type="button" draggable="false" title="${rowGround(group) ? escapeHtml(tr("Ground / V=0")) : (dummyProtectedIds.has(group.id) ? escapeHtml(tr("Dummy anchor 不能被设为内部节点。")) : (group.virtualInternal ? escapeHtml(tr("隐藏节点会强制作为内部节点参与消元。")) : escapeHtml(tr("切换外部/内部节点"))))}">
                   ${tr(rowGround(group) ? "Ground / V=0" : (rowInternal(group) ? "内部" : "外部"))}
                 </button>
                 ${rowExposure(group) ? (rowExposure(group).custom
@@ -12329,17 +13320,14 @@
             `).join("")}
           </div>
         </div>
-      ` + groups.map(group => {
-        if (group.virtualInternal) {
-          return `<div class="field"><label>${escapeHtml(rowName(group))}</label><input readonly value="${escapeHtml(`${tr("隐藏")} - ${group.branchName}`)}"></div>`;
-        }
-        const names = group.members.map(key => {
-          const parsed = parseTerminal(key);
-          const branch = findBranch(parsed.branchId);
-          return `${branch.name}.${parsed.side}`;
-        }).join(", ");
-        return `<div class="field"><label>${escapeHtml(nodeDisplayName(group.id))}</label><input readonly value="${escapeHtml(names)}"></div>`;
-      }).join("");
+        <details class="editor-group node-terminal-map">
+          <summary>${escapeHtml(tr("节点端子映射"))}</summary>
+          <div class="editor-group-body">
+            <div class="field-caption">${escapeHtml(tr("主要用于检查后端节点组装；通常不需要展开。"))}</div>
+            ${terminalMappingHtml}
+          </div>
+        </details>
+      `;
       bindNodeOrderDrag();
       netList.querySelectorAll("[data-hover-net]").forEach(item => {
         item.addEventListener("pointerdown", event => {
@@ -12455,6 +13443,12 @@
           event.stopPropagation();
           const id = input.dataset.internalNode;
           if (!state.internalNodes.includes(id)) {
+            if (dummyProtectedNetIds().has(id)) {
+              alert(dummyNetIds().has(id)
+                ? optText("Dummy 节点不能被设为内部节点。", "Dummy node cannot be marked as an internal node.")
+                : optText("Dummy anchor 不能被设为内部节点。", "Dummy anchor cannot be marked as an internal node."));
+              return;
+            }
             if (!state.internalNodes.includes(id)) state.internalNodes.push(id);
           } else {
             state.internalNodes = state.internalNodes.filter(item => item !== id);
@@ -12729,7 +13723,7 @@
           <circle class="port-drag-hit" cx="${posA.x}" cy="${posA.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="A"></circle>
           <circle class="port-drag-hit" cx="${posB.x}" cy="${posB.y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="B"></circle>
           <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "A") ? "hot" : ""}${netHoverClass(netAId)}" cx="${posA.x}" cy="${posA.y}" r="8" data-terminal="${terminalKey(branch.id, "A")}" data-port-side="A"></circle>
-          <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, "B") ? "hot" : ""}${netHoverClass(netBId)}" cx="${posB.x}" cy="${posB.y}" r="8" data-terminal="${terminalKey(branch.id, "B")}" data-port-side="B"></circle>
+          <circle class="terminal ${isDummyTerminal(branch, "B") ? "dummy-terminal" : ""} ${state.pendingTerminal === terminalKey(branch.id, "B") ? "hot" : ""}${netHoverClass(netBId)}" cx="${posB.x}" cy="${posB.y}" r="8" data-terminal="${terminalKey(branch.id, "B")}" data-port-side="B"></circle>
           <rect class="net-badge-bg${netHoverClass(netAId)}" data-net-id="${netAId}" data-port-side="A" x="${posA.x - 17}" y="${posA.y - 42}" width="34" height="18" rx="5" fill="${colorA}"></rect>
           <rect class="net-badge-bg${netHoverClass(netBId)}" data-net-id="${netBId}" data-port-side="B" x="${posB.x - 17}" y="${posB.y - 42}" width="34" height="18" rx="5" fill="${colorB}"></rect>
           <text class="net-badge" data-net-id="${netAId}" data-port-side="A" x="${posA.x}" y="${posA.y - 33}">${escapeSvg(netA)}</text>
@@ -12765,6 +13759,11 @@
           }
           const terminal = event.target.dataset.terminal;
           const portSide = event.target.dataset.portSide;
+          if (isDummyTerminal(branch, portSide)) {
+            statusEl.textContent = optText("Dummy 节点不可连接；只能重命名并在最终维度补齐中使用。", "Dummy node is not connectable; rename it only for final dimension padding.");
+            event.stopPropagation();
+            return;
+          }
           if (state.tool === "select" && portSide) {
             startCustomPortDrag(branch, portSide);
             event.stopPropagation();
@@ -12801,11 +13800,6 @@
           }
           render();
           event.stopPropagation();
-        });
-
-        group.addEventListener("dblclick", event => {
-          if (event.target.dataset.netId || event.target.dataset.terminal || event.target.dataset.portSide) return;
-          if (cycleSwitchCase(branch)) event.stopPropagation();
         });
 
         branchLayer.appendChild(group);
@@ -13114,11 +14108,12 @@
           const inner = customLeadInnerPoint(branch, x, y, edge, side);
           const labelY = edge === "top" ? y - 13 : (edge === "bottom" ? y + 28 : y + 24);
           const badgeY = edge === "bottom" ? y + 10 : y - 34;
+          const isDummyPort = packagedDummyPortSides(branch).has(side);
           return `
             <circle class="port-drag-hit" cx="${x}" cy="${y}" r="${PORT_DRAG_HIT_RADIUS}" data-port-side="${side}"></circle>
             <line class="lead" x1="${x}" y1="${y}" x2="${inner.x}" y2="${inner.y}"></line>
             <circle class="port-pin lead-anchor" cx="${inner.x}" cy="${inner.y}" r="5" data-lead-anchor-side="${side}"></circle>
-            <circle class="terminal ${state.pendingTerminal === terminalKey(branch.id, side) ? "hot" : ""}${netHoverClass(netId)}" cx="${x}" cy="${y}" r="8" data-terminal="${terminalKey(branch.id, side)}" data-port-side="${side}"></circle>
+            <circle class="terminal ${isDummyPort ? "dummy-terminal" : ""} ${state.pendingTerminal === terminalKey(branch.id, side) ? "hot" : ""}${netHoverClass(netId)}" cx="${x}" cy="${y}" r="8" data-terminal="${terminalKey(branch.id, side)}" data-port-side="${side}"></circle>
             <rect class="net-badge-bg${netHoverClass(netId)}" data-net-id="${netId}" data-port-side="${side}" x="${x - 17}" y="${badgeY}" width="34" height="18" rx="5" fill="${color}"></rect>
             <text class="net-badge" data-net-id="${netId}" data-port-side="${side}" x="${x}" y="${badgeY + 9}">${escapeSvg(net)}</text>
             ${state.showLocalLabels ? `<text class="node-label" data-port-side="${side}" x="${x}" y="${labelY}">${escapeSvg(branch.nodes[side] || side)}</text>` : ""}
@@ -13377,10 +14372,6 @@
         event.stopPropagation();
       });
 
-      group.addEventListener("dblclick", event => {
-        if (event.target.dataset.netId || event.target.dataset.terminal || event.target.dataset.portSide || event.target.dataset.leadAnchorSide) return;
-        if (cycleSwitchCase(branch)) event.stopPropagation();
-      });
     }
 
     function startCustomPortDrag(branch, side) {
@@ -13539,6 +14530,7 @@ function startResizeDrag(branch, handle, event) {
       applyCanvasView();
       renderWires();
       renderBranches();
+      renderPackageCaseEditOverlay();
       renderEditor();
       renderNetList();
       renderOutput();
@@ -13549,8 +14541,8 @@ function startResizeDrag(branch, handle, event) {
       document.getElementById("pasteTool").disabled = !state.clipboard?.branches?.length;
       document.getElementById("groupTool").disabled = state.selectedIds.length < 2;
       document.getElementById("ungroupTool").disabled = !currentSelectedGroup();
-      document.getElementById("packYTool").disabled = selectedBranchSet().size === 0;
-      document.getElementById("unpackYTool").disabled = !findBranch(state.selectedId)?.packageOriginal;
+      document.getElementById("packYTool").disabled = state.packageCaseEdit ? state.branches.length === 0 : selectedBranchSet().size === 0;
+      document.getElementById("unpackYTool").disabled = Boolean(state.packageCaseEdit) || !findBranch(state.selectedId)?.packageOriginal;
       document.getElementById("localLabelTool").classList.toggle("active", state.showLocalLabels);
       document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.output === state.activeOutput));
       document.getElementById("undoTool").disabled = state.history.length === 0;
@@ -14036,6 +15028,15 @@ function startResizeDrag(branch, handle, event) {
     document.getElementById("groupTool").addEventListener("click", groupSelectedBranches);
     document.getElementById("ungroupTool").addEventListener("click", ungroupSelectedBranches);
     document.getElementById("packYTool").addEventListener("click", () => {
+      if (state.packageCaseEdit) {
+        finishPackageCaseEdit().catch(error => {
+          alert(optText(
+            `Pack 工况保存失败：${error.message || String(error)}`,
+            `Pack case save failed: ${error.message || String(error)}`
+          ));
+        });
+        return;
+      }
       packSelectedAsYBox().catch(error => {
         alert(optText(
           `打包失败：${error.message || String(error)}`,
