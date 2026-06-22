@@ -120,6 +120,28 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertNotIn("base + delta", draft)
         self.assertLessEqual(draft.count("Gred ="), 1)
 
+    def test_alias_template_response_exposes_template_block_preview(self):
+        response = build_multi_case_response(
+            _request(
+                [
+                    {"name": "R1 Case 0", "case_map": {"R1": 0}, "payload": _series_payload("X")},
+                    {"name": "R1 Case 1", "case_map": {"R1": 1}, "payload": _series_payload("X + Y")},
+                ],
+                deps=_deps("X", "Y", "G2"),
+            )
+        )
+
+        multi = response["multi_case"]
+        blocks = multi["template_blocks"]
+        self.assertIn("G_rr", blocks)
+        self.assertIn("G_ri", blocks)
+        self.assertIn("G_ir", blocks)
+        self.assertIn("G_ii", blocks)
+        self.assertEqual(blocks["G_ri"][0][0], "-cr_R1_G_eff")
+        self.assertEqual(blocks["G_ir"][0][0], "-cr_R1_G_eff")
+        self.assertEqual(multi["template_block_nodes"]["retained_order"], ["A", "B"])
+        self.assertEqual(multi["template_block_nodes"]["internal_order"], ["X"])
+
     def test_identical_profiles_collapse_to_single_structured_draft(self):
         response = build_multi_case_response(
             _request(
@@ -322,6 +344,56 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(response["multi_case"]["block_type"], "general")
         self.assertIn("mat_3x3_sym_inv_code", draft)
         self.assertNotIn("MATH_matx_invert(NK", draft)
+
+    def test_mixed_case_diagonal_gkk_uses_conditional_diagonal_w_fast_path(self):
+        def payload(diagonal: str, offdiag: str) -> dict:
+            deps = _deps("P", "Q", "D0", "D1", "C1", code=("P", "Q", "D0", "D1", "C1"))
+            return {
+                "all_nodes": ["A", "B", "K1", "K2", "K3"],
+                "external_nodes": ["A", "B"],
+                "internal_nodes": ["K1", "K2", "K3"],
+                "ground_nodes": [],
+                "node_display_names": {"A": "A", "B": "B", "K1": "K1", "K2": "K2", "K3": "K3"},
+                "G_full": [
+                    ["P", "0", "-P", "0", "0"],
+                    ["0", "Q", "0", "-Q", "0"],
+                    ["-P", "0", diagonal, offdiag, offdiag],
+                    ["0", "-Q", offdiag, diagonal, offdiag],
+                    ["0", "0", offdiag, offdiag, diagonal],
+                ],
+                "G_full_tagged": [
+                    ["P", "0", "-P", "0", "0"],
+                    ["0", "Q", "0", "-Q", "0"],
+                    ["-P", "0", diagonal, offdiag, offdiag],
+                    ["0", "-Q", offdiag, diagonal, offdiag],
+                    ["0", "0", offdiag, offdiag, diagonal],
+                ],
+                "Ihis_full": ["0", "0", "0", "0", "0"],
+                "Ihis_full_tagged": ["0", "0", "0", "0", "0"],
+                "direct_retained_stamps": [],
+                "symbol_dependency_table": deps,
+                "symbol_dependency_table_tagged": deps,
+            }
+
+        response = build_multi_case_response(
+            {
+                "mode": "multi_case_c_export",
+                "case_id_symbol": "case_id",
+                "case_profiles": [
+                    {"name": "diagonal", "case_map": {"R1": 0}, "payload": payload("D0", "0")},
+                    {"name": "dense", "case_map": {"R1": 1}, "payload": payload("D1", "C1")},
+                ],
+            }
+        )
+
+        draft = response["multi_case"]["c_draft"]
+        self.assertIn("Case-resolved diagonal Gkk fast path", draft)
+        self.assertIn("case 0:", draft)
+        self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", draft)
+        self.assertIn("set_CODE(&W_code, 0, 1, 0.0);", draft)
+        self.assertIn("case 1:", draft)
+        self.assertIn("mat_3x3_sym_inv_code", draft)
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
 
     def test_same_branch_code_aliases_share_one_local_case_switch(self):
         aliases = {

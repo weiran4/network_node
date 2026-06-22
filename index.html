@@ -1644,6 +1644,15 @@
       padding: 1px 4px;
     }
 
+    .matrix-cell.dummy-pruned-cell,
+    .actual-block-cell.dummy-pruned-cell {
+      color: #ffd7e8;
+      background: rgba(219, 39, 119, 0.18);
+      outline: 1px dashed rgba(244, 114, 182, 0.78);
+      outline-offset: -2px;
+      border-radius: 5px;
+    }
+
     .actual-block-preview {
       display: inline-grid;
       grid-template-columns: auto auto;
@@ -1884,6 +1893,64 @@
       font-weight: 700;
       letter-spacing: 0;
       line-height: 1.45;
+    }
+
+    .actual-block-dummy-pruned-notice {
+      grid-column: 1 / -1;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      max-width: min(920px, 100%);
+      margin: 4px 0 8px;
+      padding: 7px 10px;
+      border: 1px solid rgba(244, 114, 182, 0.72);
+      border-radius: 7px;
+      background: rgba(80, 18, 47, 0.46);
+      color: #ffd7e8;
+      font-family: system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+
+    .multi-case-template-grid {
+      display: grid;
+      grid-template-columns: minmax(320px, max-content);
+      gap: 16px;
+      align-items: start;
+      width: max-content;
+      max-width: 100%;
+    }
+
+    .multi-case-template-block {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      overflow-x: auto;
+    }
+
+    .multi-case-template-flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      max-width: min(980px, 100%);
+      color: #d9ecff;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 750;
+      line-height: 1.45;
+    }
+
+    .multi-case-template-flow span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 4px 8px;
+      border: 1px solid rgba(101, 207, 255, 0.38);
+      border-radius: 7px;
+      background: rgba(8, 31, 45, 0.48);
     }
 
     .math-branch-highlight {
@@ -2492,6 +2559,10 @@
       }
 
       .optimized-summary-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .multi-case-template-grid {
         grid-template-columns: 1fr;
       }
 
@@ -3240,6 +3311,19 @@
       "编辑当前内部网络工况": "Edit Active Internal Network Case",
       "Pack 工况编辑": "Pack Case Edit",
       "新增 Dummy 支路": "Add Dummy Branch",
+      "新增 N-Dummy 节点块": "Add N-Dummy Node Block",
+      "N-Dummy 节点块": "N-Dummy Node Block",
+      "N-Dummy 节点数量": "N-Dummy Node Count",
+      "孤立 Dummy 内部节点块": "Isolated dummy internal-node block",
+      "Dummy internal node — connection disabled": "Dummy internal node — connection disabled",
+      "强制消去": "Forced elimination",
+      "Voltage recovery: No": "Voltage recovery: No",
+      "所有 N-Dummy 节点都会强制作为内部节点参与维度补齐，不允许连线、接地、暴露或恢复电压。": "All N-Dummy nodes are forced internal padding nodes. They cannot be wired, grounded, exposed, or voltage-recovered.",
+      "N-Dummy 节点块端点缺失。": "N-Dummy Node Block terminal is missing.",
+      "N-Dummy 节点必须保持孤立，不能接线或并入其他节点。": "N-Dummy nodes must remain isolated; do not wire or merge them with any other node.",
+      "N-Dummy 节点会强制作为内部节点参与维度补齐。": "N-Dummy nodes are forced internal dimension-padding nodes.",
+      "N-Dummy 节点会在 C 导出时强制消去。": "N-Dummy nodes are forced eliminated during C export.",
+      "N-Dummy 节点块只能在 Pack 工况编辑中新增。": "N-Dummy Node Blocks can only be added while editing a Pack case.",
       "完成并保存 Pack 工况": "Finish and Save Pack Case",
       "取消 Pack 工况编辑": "Cancel Pack Case Edit",
       "正在编辑 Pack 内部工况。完成前请保持外部端口数量、名字和顺序不变。": "Editing a Pack internal case. Keep the external port count, names, and order unchanged before finishing.",
@@ -3259,8 +3343,8 @@
       "G: G_EPSILON (fixed)": "G: G_EPSILON (fixed)",
       "Ihis: 0 (fixed)": "Ihis: 0 (fixed)",
       "强制最终消去；不恢复电压。": "Forced final elimination; voltage recovery disabled.",
-      "Pack 外部端口必须保持": "Required Pack external ports",
-      "完成保存前，外部端口数量、名字、顺序必须与上表一致。": "Before saving, the external port count, names, and order must match this list.",
+      "Pack 外部节点必须保持": "Required Pack external nodes",
+      "完成保存前，外部节点数量、名字、顺序必须与上表一致。": "Before saving, the external node count, names, and order must match this list.",
       "外部端口不一致，不能完成这个 Pack 工况": "External ports are inconsistent; this Pack case cannot be finished",
       "内部节点不一致，不能完成这个 Pack 工况": "Internal nodes are inconsistent; this Pack case cannot be finished",
       "进入内部工况编辑后，画布会暂时显示该 Pack 的内部网络。点击“完成并保存 Pack 工况”重新等效并回到外层。": "When entering internal case editing, the canvas temporarily shows that Pack's internal network. Click Finish and Save Pack Case to reduce it again and return.",
@@ -3281,6 +3365,7 @@
       "工况数量": "Case Count",
       "当前工况": "Active Case",
       "工况名称": "Case Name",
+      "Pack 工况名称": "Pack Case Name",
       "高亮": "Formula Highlighting",
       "公式高亮": "Formula",
       "高亮颜色": "Highlight Color",
@@ -3629,6 +3714,61 @@
         constantGSymbols: "G_EPSILON",
         ihis: "0",
         direction: "AtoB"
+      };
+      state.branches.push(branch);
+      clampComponent(branch);
+      selectBranch(branch.id);
+      render();
+    }
+
+    function createDummyNodeBlock(x = state.viewCenter.x, y = state.viewCenter.y, count = 1) {
+      if (!state.packageCaseEdit) {
+        statusEl.textContent = optText(
+          "N-Dummy 节点块只能在 Pack 工况编辑中新增。",
+          "N-Dummy Node Blocks can only be added while editing a Pack case."
+        );
+        return;
+      }
+      let nodeCount = count;
+      if (nodeCount === null) nodeCount = 1;
+      if (!Number.isFinite(nodeCount) || nodeCount < 1) nodeCount = 1;
+      nodeCount = Math.max(1, Math.min(32, Math.floor(nodeCount)));
+      commitHistory();
+      syncNextCounters();
+      const n = state.nextBranch++;
+      const sides = Array.from({ length: nodeCount }, (_, index) => `D${index + 1}`);
+      const half = Math.ceil(nodeCount / 2);
+      const layout = sides.map((id, index) => ({
+        id,
+        side: index < half ? "left" : "right",
+        t: ((index < half ? index : index - half) + 1) / ((index < half ? half : nodeCount - half) + 1),
+        order: index
+      }));
+      const branch = {
+        id: `B${n}`,
+        name: `N-Dummy${n}`,
+        kind: "dummy_node_block",
+        element_type: "dummy_node_block",
+        dummy_role: "isolated_dummy_internal",
+        forced_elimination: true,
+        recoverable: false,
+        x,
+        y,
+        width: Math.max(120, Math.min(220, 94 + nodeCount * 5)),
+        height: Math.max(72, Math.min(260, 44 + Math.ceil(nodeCount / 2) * 18)),
+        rotation: 0,
+        ports: sides,
+        nodes: Object.fromEntries(sides.map((side, index) => [side, `dummy_${n}_${index + 1}`])),
+        dummyNodes: sides.map((side, index) => ({
+          id: side,
+          node_id: `dummy_${n}_${index + 1}`,
+          display_name: `dummy_${index + 1}`,
+          dummy_role: "isolated_dummy_internal"
+        })),
+        portLayout: layout,
+        fixedConductance: "G_EPSILON",
+        gIsConstant: true,
+        constantGSymbols: "G_EPSILON"
       };
       state.branches.push(branch);
       clampComponent(branch);
@@ -4109,19 +4249,24 @@
       if (branch.kind === "ground") return ["G"];
       if (branch.kind === "single_phase_transformer") return ["P", "N", "S", "T"];
       if (branch.kind === "voltage_source_series_r") return ["P", "N"];
+      if (branch.kind === "dummy_node_block") return branch.ports || Object.keys(branch.nodes || {});
       if (branch.kind === "custom_n_port") return branch.ports || Object.keys(branch.nodes || {});
       return ["A", "B"];
     }
 
     function branchNodeForSide(branch, side) {
       if (branch.kind === "ground") return branch.nodeG;
-      if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port" || branch.kind === "voltage_source_series_r") return branch.nodes?.[side];
+      if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port" || branch.kind === "dummy_node_block" || branch.kind === "voltage_source_series_r") return branch.nodes?.[side];
       if (branch.kind === "dummy_dimension_branch") return side === (branch.dummyTerminalSide || "B") ? branch.nodeB : branch.nodeA;
       return side === "A" ? branch.nodeA : branch.nodeB;
     }
 
     function isDummyTerminal(branch, side) {
       return branch?.kind === "dummy_dimension_branch" && side === (branch.dummyTerminalSide || "B");
+    }
+
+    function isDummyNodeBlockTerminal(branch, side) {
+      return branch?.kind === "dummy_node_block" && terminalSides(branch).includes(side);
     }
 
     function visibleTerminalSides(branch) {
@@ -4141,7 +4286,7 @@
     }
 
     function terminalLocalPosition(branch, side) {
-      if (branch.kind === "custom_n_port") {
+      if (branch.kind === "custom_n_port" || branch.kind === "dummy_node_block") {
         const position = customPortPosition(branch, side);
         return { x: position.x - branch.x, y: position.y - branch.y };
       }
@@ -4294,7 +4439,7 @@
     function terminalIsDummyNode(key) {
       const parsed = parseTerminal(key);
       const branch = findBranch(parsed.branchId);
-      return Boolean(branch && (isDummyTerminal(branch, parsed.side) || isPackagedDummyTerminal(branch, parsed.side)));
+      return Boolean(branch && (isDummyTerminal(branch, parsed.side) || isDummyNodeBlockTerminal(branch, parsed.side) || isPackagedDummyTerminal(branch, parsed.side)));
     }
 
     function packagedDummyPortSides(branch) {
@@ -4304,7 +4449,10 @@
       const index = Math.max(0, Math.min(cases.length - 1, Number(pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0));
       const active = cases[index] || {};
       const sourceBranches = active.branches || pkg.branches || [];
-      const dummyKeys = new Set(dummyBranchesForPackCase(sourceBranches).map(item => terminalKey(item.id, item.dummyTerminalSide || "B")));
+      const dummyKeys = new Set([
+        ...dummyBranchesForPackCase(sourceBranches).map(item => terminalKey(item.id, item.dummyTerminalSide || "B")),
+        ...dummyNodeBlocksForPackCase(sourceBranches).flatMap(item => terminalSides(item).map(side => terminalKey(item.id, side)))
+      ]);
       if (!dummyKeys.size) return new Set();
       const groups = active.superExternalGroups || active.externalGroups || pkg.superExternalGroups || pkg.externalGroups || [];
       const sides = new Set();
@@ -4368,6 +4516,19 @@
       state.branches.forEach(branch => {
         terminalSides(branch).forEach(side => {
           if (!packagedDummyAnchorPortSides(branch).has(side)) return;
+          const netId = lookup.get(terminalKey(branch.id, side));
+          if (netId) ids.add(netId);
+        });
+      });
+      return ids;
+    }
+
+    function dummyNodeBlockNetIds() {
+      const lookup = netLookup();
+      const ids = new Set();
+      state.branches.forEach(branch => {
+        if (branch.kind !== "dummy_node_block") return;
+        terminalSides(branch).forEach(side => {
           const netId = lookup.get(terminalKey(branch.id, side));
           if (netId) ids.add(netId);
         });
@@ -4934,6 +5095,7 @@
     }
 
     function branchGExpressions(branch) {
+      if (branch.kind === "dummy_node_block") return [branch.fixedConductance || "G_EPSILON"];
       if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port") return [branchValue(branch, "gMatrix")];
       if (branch.kind === "current_source") return currentSourceControlRows(branch).map(row => row.coefficient || "");
       if (branch.kind === "voltage_source_series_r") return [voltageSourceSeriesConductance(branch)];
@@ -5041,6 +5203,7 @@
 
     function getBranchFieldValue(branch, field) {
       if (field === "switchCaseName") return activeSwitchCase(branch)?.name || "";
+      if (field === "packageNetworkCaseName") return activePackageNetworkCaseName(branch);
       if (field === "constantGSymbols") return branchConstantGSymbolsText(branch);
       if (field.startsWith("controlRow.")) {
         const [, index, key] = field.split(".");
@@ -5192,6 +5355,7 @@
             originalNet: group.globalNet,
             display,
             members: [],
+            isolatedDummyInternal: Boolean(group.isolatedDummyInternal),
             color: state.nodeColors?.[group.globalNet] || state.nodeColors?.[group.id] || defaultNetColor(`N${index + 1}`)
           });
         });
@@ -5451,6 +5615,7 @@
         branches: structuredClone(pkg.branches || []),
         wires: structuredClone(packageInternalWiresForBranches(pkg.branches || [], pkg.wires || [])),
         nodeState: structuredClone(pkg.nodeState || []),
+        nodeOrder: structuredClone(pkg.nodeOrder || []),
         externalGroups: structuredClone(pkg.externalGroups || []),
         internalGroups: structuredClone(pkg.internalGroups || []),
         K_v: structuredClone(pkg.K_v || []),
@@ -5469,6 +5634,7 @@
         finalK_h: structuredClone(pkg.finalK_h || pkg.K_h || []),
         finalGMatrix: branch.finalGMatrix || gMatrix,
         finalIhisVector: branch.finalIhisVector || ihisVector,
+        dummyNodeBlocks: structuredClone(pkg.dummyNodeBlocks || []),
         currents: structuredClone(branch.currents || []),
         gIsConstant: branch.gIsConstant !== false,
         constantGSymbols: branch.constantGSymbols || ""
@@ -5487,6 +5653,7 @@
       pkg.branches = structuredClone(active.branches || []);
       pkg.wires = structuredClone(active.wires || []);
       pkg.nodeState = structuredClone(active.nodeState || []);
+      pkg.nodeOrder = structuredClone(active.nodeOrder || []);
       packageOriginal.externalGroups = structuredClone(active.superExternalGroups || active.externalGroups || []);
       pkg.internalGroups = structuredClone(active.superInternalGroups || active.internalGroups || []);
       pkg.K_v = structuredClone(active.superK_v || active.K_v || []);
@@ -5505,6 +5672,7 @@
       branch.superIhisVector = active.superIhisVector || active.ihisVector || branch.ihisVector || "[]";
       branch.finalGMatrix = active.finalGMatrix || active.gMatrix || branch.gMatrix || "[]";
       branch.finalIhisVector = active.finalIhisVector || active.ihisVector || branch.ihisVector || "[]";
+      pkg.dummyNodeBlocks = structuredClone(active.dummyNodeBlocks || []);
       branch.currents = structuredClone(active.currents || branch.currents || []);
       branch.gIsConstant = active.gIsConstant !== false;
       branch.constantGSymbols = active.constantGSymbols || branch.constantGSymbols || "";
@@ -5533,6 +5701,19 @@
       }));
       branch.activeSwitchCase = activeIndex;
       applyPackageNetworkCase(branch, activeIndex);
+    }
+
+    function activePackageNetworkCaseIndex(branch) {
+      const pkg = branch?.packageOriginal;
+      const count = pkg?.networkCases?.length || 1;
+      return Math.max(0, Math.min(count - 1, Number(pkg?.activeNetworkCase ?? branch?.activeSwitchCase) || 0));
+    }
+
+    function activePackageNetworkCaseName(branch) {
+      normalizePackageNetworkCases(branch);
+      const pkg = branch?.packageOriginal;
+      const index = activePackageNetworkCaseIndex(branch);
+      return pkg?.networkCases?.[index]?.name || `Case ${index + 1}`;
     }
 
     function normalizeSwitchCases(branch) {
@@ -5903,7 +6084,7 @@
       normalizePackageNetworkCases(branch);
       const pkg = branch.packageOriginal;
       const cases = pkg?.networkCases || [];
-      const activeIndex = Number(pkg?.activeNetworkCase ?? branch.activeSwitchCase) || 0;
+      const activeIndex = activePackageNetworkCaseIndex(branch);
       return `
         <div class="field-caption">${escapeHtml(tr("内部网络工况"))}</div>
         <div class="row">
@@ -5916,6 +6097,7 @@
             </select>
           </div>
         </div>
+        ${cases[activeIndex] ? editableField("Pack 工况名称", "packageNetworkCaseName", cases[activeIndex].name || `Case ${activeIndex + 1}`) : ""}
         <div class="row">
           <button class="text-button" type="button" data-package-network-action="duplicate">${escapeHtml(tr("复制当前内部网络为新工况"))}</button>
           <button class="text-button" type="button" data-package-network-action="edit">${escapeHtml(tr("编辑当前内部网络工况"))}</button>
@@ -5924,10 +6106,18 @@
       `;
     }
 
+    function isFixedDummyGElement(branch) {
+      return branch?.kind === "dummy_node_block" || branch?.element_type === "dummy_node_block";
+    }
+
     function packagedGBranches(branch) {
       return (branch.packageOriginal?.branches || [])
         .map((inner, index) => ({ inner, index }))
-        .filter(({ inner }) => inner.kind !== "ground");
+        .filter(({ inner }) => inner.kind !== "ground")
+        .filter(({ inner }) => {
+          if (isFixedDummyGElement(inner)) return false;
+          return true;
+        });
     }
 
     function packagedGConstEditor(branch, showCaption = true) {
@@ -6122,6 +6312,7 @@
 
     function currentFormula(branch, groupByTerminal = null) {
       const netName = side => terminalNetNameFromMap(terminalKey(branch.id, side), groupByTerminal);
+      if (branch.kind === "dummy_node_block") return "";
       if (branch.kind === "ground") {
         return `V_${netName("G")} = 0`;
       }
@@ -6179,6 +6370,7 @@
     }
 
     function currentFormulaEntries(branch, groupByTerminal = null) {
+      if (branch.kind === "dummy_node_block") return [];
       const lines = currentFormula(branch, groupByTerminal).split("\n").filter(Boolean);
       if (branch.kind === "ground") {
         return lines.map(line => ({ line, branchId: branch.id, part: "ground" }));
@@ -8459,7 +8651,7 @@
       }</span>`;
     }
 
-    function renderMatrix(rows, cols = null, taggedRows = null) {
+    function renderMatrix(rows, cols = null, taggedRows = null, cellClassFor = null) {
       const columnCount = cols || Math.max(1, ...rows.map(row => row.length));
       return `<span class="matrix" style="grid-template-columns: repeat(${columnCount}, minmax(58px, auto));">${
         rows.flatMap((row, rowIndex) => {
@@ -8467,8 +8659,17 @@
           const taggedFilled = taggedRows?.[rowIndex] ? [...taggedRows[rowIndex]] : null;
           while (filled.length < columnCount) filled.push("");
           while (taggedFilled && taggedFilled.length < columnCount) taggedFilled.push("");
-          return filled.map((item, colIndex) => ({ item, tagged: taggedFilled?.[colIndex] }));
-        }).map(({ item, tagged }) => `<span class="matrix-cell">${formatMathWithTagged(item || "0", tagged)}</span>`).join("")
+          return filled.map((item, colIndex) => ({
+            item,
+            tagged: taggedFilled?.[colIndex],
+            rowIndex,
+            colIndex,
+          }));
+        }).map(({ item, tagged, rowIndex, colIndex }) => {
+          const extraClass = cellClassFor ? String(cellClassFor(rowIndex, colIndex, item) || "") : "";
+          const className = ["matrix-cell", extraClass].filter(Boolean).join(" ");
+          return `<span class="${className}">${formatMathWithTagged(item || "0", tagged)}</span>`;
+        }).join("")
       }</span>`;
     }
 
@@ -8613,10 +8814,23 @@
       return cached?.html || null;
     }
 
-    function buildReducedPayload() {
+    function buildReducedPayload(options = {}) {
+      const deferDummyNodeBlocks = Boolean(options.deferDummyNodeBlocks);
       const assembled = assembleGlobalSystem({ expandPackaged: true });
       const groundSet = new Set(assembled.groundNodes || []);
       const forcedInternal = new Set(assembled.forcedInternalNodes || []);
+      const nodeDisplayNames = Object.fromEntries(assembled.nodes.map(node => [node, displayNameForAssembledNode(assembled, node)]));
+      const dummyNodeBlocks = dummyNodeBlocksForReducedPayload({
+        all_nodes: assembled.nodes,
+        node_display_names: nodeDisplayNames
+      });
+      if (!deferDummyNodeBlocks) {
+        dummyNodeBlocks.forEach(block => {
+          (block.dummy_nodes || []).forEach(node => {
+            if (node?.node_id) forcedInternal.add(node.node_id);
+          });
+        });
+      }
       const internal = assembled.nodes.filter(node => !groundSet.has(node) && (state.internalNodes.includes(node) || forcedInternal.has(node)));
       const external = assembled.nodes.filter(node => !groundSet.has(node) && !state.internalNodes.includes(node));
       const externalVisible = external.filter(node => !forcedInternal.has(node));
@@ -8625,7 +8839,7 @@
       const payload = {
         all_nodes: assembled.nodes,
         voltage_nodes: assembled.nodes.map(node => displayNameForAssembledNode(assembled, node)),
-        node_display_names: Object.fromEntries(assembled.nodes.map(node => [node, displayNameForAssembledNode(assembled, node)])),
+        node_display_names: nodeDisplayNames,
         external_nodes: externalVisible,
         internal_nodes: internal,
         ground_nodes: [...groundSet],
@@ -8640,6 +8854,10 @@
       };
       payload.symbol_dependency_table = buildSymbolDependencyTable(payload);
       payload.symbol_dependency_table_tagged = buildTaggedSymbolDependencyTable(payload);
+      if (dummyNodeBlocks.length) {
+        payload.dummy_node_blocks = dummyNodeBlocks;
+        if (deferDummyNodeBlocks) payload.defer_dummy_node_blocks = true;
+      }
       return payload;
     }
 
@@ -8737,9 +8955,9 @@
       };
     }
 
-    function optimizedEliminationPayload() {
+    function optimizedEliminationPayload(options = {}) {
       const payload = {
-        ...buildReducedPayload(),
+        ...buildReducedPayload(options),
         mode: "structured_formula",
         display_mode: state.optimizedEliminationDisplay || "compact",
         simplify_level: state.optimizedEliminationSimplify || "light",
@@ -8879,7 +9097,7 @@
           branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(caseIndex) || 0));
           if (branch.packageOriginal) applyPackageNetworkCase(branch, branch.activeSwitchCase);
         });
-        return optimizedEliminationPayload();
+        return optimizedEliminationPayload({ deferDummyNodeBlocks: true });
       } finally {
         originals.forEach(([branch, activeSwitchCase, activeNetworkCase]) => {
           branch.activeSwitchCase = activeSwitchCase;
@@ -8940,10 +9158,111 @@
       return { name: "Active case", case_map };
     }
 
+    function dummyNodeBlocksForReducedPayload(payload) {
+      const blocks = [];
+      const allNodes = new Set(payload?.all_nodes || []);
+      const lookup = netLookup();
+
+      dummyNodeBlocksForPackCase(state.branches).forEach(branch => {
+        const dummy_nodes = terminalSides(branch)
+          .map(side => {
+            const node = lookup.get(terminalKey(branch.id, side));
+            if (!node || !allNodes.has(node)) return null;
+            return {
+              side,
+              node_id: node,
+              display_name: nodeDisplayName(node),
+              dummy_role: "isolated_dummy_internal"
+            };
+          })
+          .filter(Boolean);
+        if (dummy_nodes.length) {
+          blocks.push({
+            element_type: "dummy_node_block",
+            block_id: branch.name || branch.id || "N-Dummy",
+            dimension: dummy_nodes.length,
+            fixed_conductance: branch.fixedConductance || "G_EPSILON",
+            forced_elimination: true,
+            recoverable: false,
+            dummy_nodes
+          });
+        }
+      });
+
+      state.branches.forEach(branch => {
+        if (!branch?.packageOriginal) return;
+        normalizePackageNetworkCases(branch);
+        const pkg = branch.packageOriginal;
+        const index = Math.max(0, Math.min((pkg.networkCases || []).length - 1, Number(pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0));
+        const active = pkg.networkCases?.[index] || {};
+        const groupRefs = [
+          ...((active.superExternalGroups || active.externalGroups || []).map((group, groupIndex) => ({ group, groupIndex, kind: "external" }))),
+          ...((active.superInternalGroups || active.internalGroups || []).map((group, groupIndex) => ({ group, groupIndex, kind: "internal" })))
+        ];
+        const groups = [...(active.superExternalGroups || active.externalGroups || []), ...(active.superInternalGroups || active.internalGroups || [])];
+        const sourceBranches = active.branches || pkg.branches || [];
+        const derivedBlocks = dummyNodeBlockPayloadForCase(sourceBranches, groups);
+        (derivedBlocks.length ? derivedBlocks : (active.dummyNodeBlocks || pkg.dummyNodeBlocks || [])).forEach(block => {
+          const dummy_nodes = (block.dummy_nodes || []).map(node => {
+            const sourceBranchId = block.source_branch_id || block.sourceBranchId || block.block_id || "";
+            const match = groupRefs.find(item => item.group.id === node.node_id)
+              || groupRefs.find(item => node.side && (item.group.members || []).includes(terminalKey(sourceBranchId, node.side)))
+              || groupRefs.find(item => item.group.display === node.display_name);
+            if (!match) return null;
+            const { group, groupIndex, kind } = match;
+            const exposedPort = kind === "external"
+              ? group.port
+              : (group.exposePort || packagedNodeExposePort(branch, "internal", groupIndex));
+            const payloadNode = exposedPort && terminalSides(branch).includes(exposedPort)
+              ? lookup.get(terminalKey(branch.id, exposedPort))
+              : (kind === "internal"
+                ? packagedInternalNodeId(branch, group, groupIndex)
+                : packagedHiddenNodeId(branch, "external", groupIndex));
+            if (!payloadNode || !allNodes.has(payloadNode)) return null;
+            return {
+              side: node.side || `D${groupIndex + 1}`,
+              node_id: payloadNode,
+              display_name: nodeDisplayName(payloadNode) || group.display || node.display_name || payloadNode,
+              dummy_role: "isolated_dummy_internal"
+            };
+          }).filter(Boolean);
+          if (dummy_nodes.length) {
+            blocks.push({
+              element_type: "dummy_node_block",
+              block_id: `${branch.name || branch.id}:${block.block_id || "N-Dummy"}`,
+              dimension: dummy_nodes.length,
+              fixed_conductance: block.fixed_conductance || "G_EPSILON",
+              forced_elimination: true,
+              recoverable: false,
+              dummy_nodes
+            });
+          }
+        });
+      });
+
+      return blocks;
+    }
+
     function multiCaseExportPayload() {
       const branches = multiCaseEligibleBranches();
       ensureMultiCaseProfilesText(branches);
       const profiles = parseMultiCaseProfiles();
+      const case_profiles = profiles.map((profile, index) => {
+        const payload = payloadForCaseProfile(profile);
+        const dummy_finalization = dummyFinalizationForCaseProfile(profile, payload);
+        return {
+          name: profile.name || `Case ${index + 1}`,
+          comment: profile.comment || "",
+          case_map: profile.case_map || {},
+          payload,
+          ...(dummy_finalization ? { dummy_finalization } : {})
+        };
+      });
+      const common_dummy_internal_nodes = [...new Set(case_profiles.flatMap(profile =>
+        (profile.payload?.dummy_node_blocks || []).flatMap(block =>
+          (block.dummy_nodes || []).map(node => node.node_id).filter(Boolean)
+        )
+      ))];
       return {
         mode: "multi_case_c_export",
         case_id_symbol: state.multiCaseIdSymbol || "case_id",
@@ -8957,17 +9276,8 @@
           kind: branch.kind,
           case_count: branch.switchCases?.length || 0
         })),
-        case_profiles: profiles.map((profile, index) => {
-          const payload = payloadForCaseProfile(profile);
-          const dummy_finalization = dummyFinalizationForCaseProfile(profile, payload);
-          return {
-            name: profile.name || `Case ${index + 1}`,
-            comment: profile.comment || "",
-            case_map: profile.case_map || {},
-            payload,
-            ...(dummy_finalization ? { dummy_finalization } : {})
-          };
-        })
+        common_dummy_internal_nodes,
+        case_profiles
       };
     }
 
@@ -9088,6 +9398,14 @@
             "该优化消元页面假设待消元矩阵为对称正定，或至少适合对称舒尔消元；如果包含受控电流源、非对称黑盒等非对称元件贡献，请只作为参考。",
             "结构化公式默认显示矩阵、向量和块矩阵形式，不默认展开巨大的标量表达式。"
           ];
+      const dummyBlocks = result?.structured?.dummy_node_blocks || {};
+      if (dummyBlocks.dropped_before_schur) {
+        const nodes = (dummyBlocks.nodes || []).join(", ") || "-";
+        warnings.push(optText(
+          `N-Dummy 孤立节点已验证，并在 Schur 消元 / C 导出前裁掉：${nodes}。这些节点不会进入求解矩阵，也不会恢复电压。`,
+          `N-Dummy isolated nodes were validated and pruned before Schur reduction / C export: ${nodes}. These nodes are not solver nodes and their voltages are not recovered.`
+        ));
+      }
       if (result?.warnings?.length) warnings.push(...result.warnings.map(localizedBackendWarning));
       return `
         <div class="formula-card validation-warning">
@@ -9116,6 +9434,25 @@
 
     function displayNodeList(nodes, displayNames = {}) {
       return (nodes || []).map(node => displayNames[node] || nodeDisplayName(node)).join(", ");
+    }
+
+    function optimizedDummyPrunedNodes(result = null) {
+      const dummyBlocks = result?.structured?.dummy_node_blocks || {};
+      return dummyBlocks.dropped_before_schur ? (dummyBlocks.nodes || []).map(String) : [];
+    }
+
+    function renderDummyPrunedNotice(result = null, displayNames = {}) {
+      const nodes = optimizedDummyPrunedNodes(result);
+      if (!nodes.length) return "";
+      const names = displayNodeList(nodes, displayNames) || "-";
+      return `
+        <div class="actual-block-dummy-pruned-notice">
+          ${escapeHtml(optText(
+            `这些 N-Dummy 行/列只用于验证原始矩阵，Schur 消元 / C 导出前会被裁掉：${names}`,
+            `These N-Dummy rows/columns are shown for source-matrix validation and are pruned before Schur reduction / C export: ${names}`
+          ))}
+        </div>
+      `;
     }
 
     function renderOptimizedPartition(payload, result = null) {
@@ -9158,11 +9495,12 @@
       return payload.G_full?.[row]?.[col] ?? "0";
     }
 
-    function renderFormulaModeActualBlock(payload) {
+    function renderFormulaModeActualBlock(payload, result = null) {
       const displayNames = payload.node_display_names || {};
       const external = payload.external_nodes || [];
       const internal = payload.internal_nodes || [];
       if (!internal.length) return "";
+      const dummyPrunedSet = new Set(optimizedDummyPrunedNodes(result));
       const orderTitle = optText("当前 G 矩阵节点顺序", "Current G Matrix Node Order");
       const orderNodeStack = nodes => (nodes || []).length
         ? nodes.map(node => `<span class="actual-block-order-node">${escapeHtml(displayNames[node] || nodeDisplayName(node))}</span>`).join("")
@@ -9190,6 +9528,7 @@
           "actual-block-cell",
           isInternalBoundaryCol ? "split-left" : "",
           isInternalBoundaryRow ? "split-top" : "",
+          (dummyPrunedSet.has(String(rowEntry.node)) || dummyPrunedSet.has(String(colEntry.node))) ? "dummy-pruned-cell" : "",
           rowEntry.type === "ellipsis" || colEntry.type === "ellipsis" ? "block-ellipsis" : ""
         ].filter(Boolean).join(" ");
         return `<span class="${classes}" title="${escapeHtml(blockEntryLabel(rowEntry, displayNames))}, ${escapeHtml(blockEntryLabel(colEntry, displayNames))}">${formatMath(value)}</span>`;
@@ -9197,6 +9536,7 @@
 
       return `
         <div class="actual-block-preview" aria-label="${escapeHtml(optText("G 矩阵分块预览", "G matrix block preview"))}">
+          ${renderDummyPrunedNotice(result, displayNames)}
           <div class="actual-block-column-labels" style="grid-template-columns: ${gridColumns};">
             <span class="actual-block-label" style="grid-column: 1 / span ${externalColSpan};">Grr</span>
             <span class="actual-block-label" style="grid-column: ${internalColStart} / span ${internalColSpan};">Grk</span>
@@ -9338,13 +9678,24 @@
       if (result.structured?.block_type === "no_elimination") {
         const displayNames = payload.node_display_names || {};
         const externalNames = (payload.external_nodes || []).map(node => displayNames[node] || nodeDisplayName(node));
+        const dummyPrunedSet = new Set(optimizedDummyPrunedNodes(result));
+        const nodeOrder = payload.all_nodes || payload.external_nodes || [];
+        const dummyPrunedIndexes = new Set(
+          nodeOrder
+            .map((node, index) => dummyPrunedSet.has(String(node)) ? index : -1)
+            .filter(index => index >= 0)
+        );
+        const dummyCellClass = (row, col) => (
+          dummyPrunedIndexes.has(row) || dummyPrunedIndexes.has(col)
+        ) ? "dummy-pruned-cell" : "";
         return `
           <div class="formula-card">
             <div class="formula-name">${optText("原始 G/Ihis 预览", "Original G/Ihis Preview")}</div>
             <div class="formula-empty">${optText("当前没有内部节点，C 导出直接使用原始节点顺序生成导纳写入和注入。", "No internal nodes are selected, so C export uses the original retained-node order for stamping and injection.")}</div>
+            ${renderDummyPrunedNotice(result, displayNames)}
             <div class="formula-line"><span class="formula-lhs">${optText("节点顺序", "Node order")}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(externalNames.join(", ") || "-")}</span></div>
             <div class="matrix-equation">
-              <span class="formula-lhs">${formatMath("G")}</span><span class="formula-eq">=</span>${renderMatrix(payload.G_full || [])}
+              <span class="formula-lhs">${formatMath("G")}</span><span class="formula-eq">=</span>${renderMatrix(payload.G_full || [], null, null, dummyCellClass)}
               <span class="formula-lhs">${formatMath("Ihis")}</span><span class="formula-eq">=</span>${renderVectorMatrix(payload.Ihis_full || [])}
             </div>
           </div>
@@ -9361,7 +9712,7 @@
         <div class="formula-card">
           <div class="formula-name">${optText("G 分块预览", "G Block Preview")}</div>
           ${orderNotice}
-          ${renderFormulaModeActualBlock(blockPayload)}
+          ${renderFormulaModeActualBlock(blockPayload, result)}
         </div>
         ${renderIhisPartition(result)}
         <div class="formula-card">
@@ -9597,10 +9948,99 @@
       `;
     }
 
+    function renderMultiCaseBlockMatrix(rows, label) {
+      const matrixRows = Array.isArray(rows) ? rows : [];
+      const rowCount = matrixRows.length;
+      const colCount = Math.max(0, ...matrixRows.map(row => Array.isArray(row) ? row.length : 0));
+      if (!rowCount || !colCount) {
+        return `<span class="formula-rhs">${escapeHtml(optText("空矩阵", "empty matrix"))}</span>`;
+      }
+      const shouldCompact = rowCount > 6 || colCount > 6;
+      return shouldCompact ? renderCompactMatrix(matrixRows, label, colCount) : renderMatrix(matrixRows, colCount);
+    }
+
+    function multiCaseCompactedEntryDefinitions(rows, label) {
+      const matrixRows = Array.isArray(rows) ? rows : [];
+      const rowCount = matrixRows.length;
+      const colCount = Math.max(0, ...matrixRows.map(row => Array.isArray(row) ? row.length : 0));
+      if (rowCount <= 6 && colCount <= 6) return "";
+      const definitions = [];
+      matrixRows.forEach((row, rowIndex) => {
+        (row || []).forEach((value, colIndex) => {
+          const token = compactMatrixToken(value, label, rowIndex, colIndex);
+          if (token !== String(value ?? "0").trim()) {
+            definitions.push(`
+              <div class="formula-line">
+                <span class="formula-lhs">${escapeHtml(token)}</span>
+                <span class="formula-eq">=</span>
+                <span class="formula-rhs">${formatMath(value || "0")}</span>
+              </div>
+            `);
+          }
+        });
+      });
+      if (!definitions.length) return "";
+      return `
+        <div class="actual-block-caption">${escapeHtml(optText("被折叠项定义", "Compacted entry definitions"))}</div>
+        ${definitions.join("")}
+      `;
+    }
+
+    function renderMultiCaseTemplateVisualization(multiCase) {
+      const blocks = multiCase.template_blocks || {};
+      const blockNodes = multiCase.template_block_nodes || {};
+      const retained = blockNodes.retained_order || (multiCase.template_summary || {}).retained_order || multiCase.external_nodes || [];
+      const internal = blockNodes.internal_order || (multiCase.template_summary || {}).internal_order || multiCase.effective_internal_nodes || [];
+      const blockItems = [
+        ["Grr", "G_rr", "retained x retained"],
+        ["Grk", "G_ri", "retained x internal"],
+        ["Gkr", "G_ir", "internal x retained"],
+        ["Gkk", "G_ii", "internal x internal"],
+      ].map(([label, key, shape]) => {
+        const rows = blocks[key];
+        const hasRows = Array.isArray(rows) && rows.length;
+        return `
+          <div class="multi-case-template-block">
+            <div class="actual-block-caption">${escapeHtml(label)} (${escapeHtml(shape)})</div>
+            ${hasRows ? multiCaseCompactedEntryDefinitions(rows, label) : ""}
+            <div class="matrix-equation">
+              <span class="formula-lhs">${formatMath(label)}</span>
+              <span class="formula-eq">=</span>
+              ${hasRows ? renderMultiCaseBlockMatrix(rows, label) : `<span class="formula-rhs">${escapeHtml(optText("未返回预览", "preview unavailable"))}</span>`}
+            </div>
+          </div>
+        `;
+      }).join("");
+      const hasAnyBlock = Object.values(blocks).some(rows => Array.isArray(rows) && rows.length);
+      const nodeLine = `${optText("retained", "retained")}: ${(retained || []).join(", ") || "-"}; ${optText("internal", "internal")}: ${(internal || []).join(", ") || "-"}`;
+      return `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("多Case 模板可视化", "Multi-Case Template Visualization"))}</div>
+          <div class="multi-case-template-flow">
+            <span>${escapeHtml(optText("case_id 解码", "case_id decode"))}</span>
+            <span>${escapeHtml(optText("case-resolved aliases", "case-resolved aliases"))}</span>
+            <span>Grr / Grk / Gkr / Gkk</span>
+            <span>W = inv(Gkk)</span>
+            <span>Gred / Ihisred / Vk</span>
+          </div>
+          <div class="formula-empty">${escapeHtml(nodeLine)}</div>
+          <div class="actual-block-caption">${escapeHtml(optText("模板分块矩阵", "Template block matrices"))}</div>
+          ${hasAnyBlock ? `<div class="multi-case-template-grid">${blockItems}</div>` : `<div class="formula-empty">${escapeHtml(optText(
+            "当前后端结果没有返回模板分块预览；C 草稿仍按共享矩阵 DAG 生成。",
+            "The backend result did not return template block previews; the C draft is still generated from the shared matrix DAG."
+          ))}</div>`}
+        </div>
+      `;
+    }
+
+    function displayedMultiCaseCDraft(draft) {
+      return String(draft || "")
+        .split(/\r?\n/)
+        .filter(line => !/^\s*\/\*\s*WARNING:\s*Symbol .* no dependency category\./.test(line))
+        .join("\n");
+    }
+
     function renderMultiCaseCExportResult(result) {
-      const warnings = result.warnings?.length
-        ? `<div class="formula-card"><div class="formula-name">${escapeHtml(optText("提示", "Warnings"))}</div><div class="formula-empty">${result.warnings.map(localizedBackendWarning).map(escapeHtml).join("<br>")}</div></div>`
-        : "";
       const multiCase = result.multi_case || {};
       const branchById = new Map(multiCaseEligibleBranches().map(branch => [branch.id, branch]));
       const branchLabel = branch => branch?.name || branch?.id || "-";
@@ -9653,26 +10093,8 @@
           ${conditionRows || `<div class="formula-empty">${escapeHtml(optText("没有 case 条件 GValue。", "No case-conditional GValue entries."))}</div>`}
         </div>
       `;
-      const summary = multiCase.template_summary || {};
-      const summaryRows = [
-        ["codegen mode", multiCase.codegen_mode || multiCase.fast_path || "-"],
-        [optText("拓扑校验", "Topology validation"), optText("通过", "passed")],
-        [optText("Template nodes", "Template nodes"), (summary.nodes || []).join(", ") || "-"],
-        [optText("retained/internal order", "retained/internal order"), `${(summary.retained_order || []).join(", ") || "-"} / ${(summary.internal_order || []).join(", ") || "-"}`],
-        ["Gred shape", (summary.Gred_shape || []).join(" x ") || "-"],
-        ["Ihisred shape", (summary.Ihisred_shape || []).join(" x ") || "-"],
-        [optText("recovery shape", "recovery shape"), (multiCase.template?.recovery_shape || []).join(" x ") || "-"],
-        ["W structure", multiCase.block_type || "-"]
-      ].map(([lhs, rhs]) => `<div class="formula-line"><span class="formula-lhs">${escapeHtml(lhs)}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(rhs)}</span></div>`).join("");
-      const summaryHtml = `
-        <div class="formula-card">
-          <div class="formula-name">${escapeHtml(optText("模板消元摘要", "Template Reduction Summary"))}</div>
-          ${summaryRows}
-        </div>
-      `;
       return `
-        ${warnings}
-        ${summaryHtml}
+        ${renderMultiCaseTemplateVisualization(multiCase)}
         ${conditionalGValueHtml}
         ${aliasHtml}
         <div class="formula-card" data-c-draft-card>
@@ -9680,14 +10102,14 @@
             <div class="formula-name">${escapeHtml(optText("多Case 集合 C 草稿", "Multi-case Collection C Draft"))}</div>
             <button class="copy-draft-button" type="button" data-copy-c-draft>${escapeHtml(optText("复制 C", "Copy C"))}</button>
           </div>
-          <pre class="code" data-c-draft-code tabindex="0">${escapeHtml(result.multi_case?.c_draft || "")}</pre>
+          <pre class="code" data-c-draft-code tabindex="0">${escapeHtml(displayedMultiCaseCDraft(result.multi_case?.c_draft))}</pre>
         </div>
       `;
     }
 
     function multiCaseExportCacheKey(payload) {
       return JSON.stringify({
-        version: "multi-case-fast-symmetric-inverse-v2",
+        version: "multi-case-template-visualization-v1",
         case_id_symbol: payload.case_id_symbol,
         eligible_branches: payload.eligible_branches,
         case_profiles: payload.case_profiles?.map(profile => ({
@@ -9779,6 +10201,7 @@
     function packagedObserverEntries(branch, groupByTerminal, internalNames) {
       return (branch.packageOriginal?.branches || []).flatMap(inner => {
         if (inner.kind === "ground") return [];
+        if (inner.kind === "dummy_node_block") return [];
         const displayForSide = side => groupByTerminal.get(terminalKey(inner.id, side))?.display || side;
         const lines = localCurrentFormula(inner, groupByTerminal).split("\n").filter(Boolean);
         if (inner.kind === "single_phase_transformer" || inner.kind === "custom_n_port") {
@@ -9913,6 +10336,7 @@
           branches: structuredClone(pkg.branches || []),
           wires: structuredClone(packageInternalWiresForBranches(pkg.branches || [], pkg.wires || [])),
           nodeState: structuredClone(pkg.nodeState || []),
+          nodeOrder: structuredClone(pkg.nodeOrder || []),
           externalGroups: structuredClone(pkg.externalGroups || []),
           internalGroups: structuredClone(pkg.internalGroups || []),
           K_v: structuredClone(pkg.K_v || []),
@@ -10003,12 +10427,17 @@
       const groups = Array.from(byRoot.values()).map((members, index) => {
         const globalNet = globalLookup.get(members[0]) || `N${index + 1}`;
         const boundary = members.some(member => boundaryTerminals.has(member));
+        const isolatedDummyInternal = members.some(member => {
+          const parsed = parseTerminal(member);
+          return isDummyNodeBlockTerminal(findBranch(parsed.branchId), parsed.side);
+        });
         return {
           id: `Y${index + 1}`,
           members,
           globalNet,
           display: nodeDisplayName(globalNet),
           internal: state.internalNodes.includes(globalNet),
+          isolatedDummyInternal,
           boundary
         };
       });
@@ -10220,6 +10649,7 @@
       const internalNames = new Set(subsystem.internalGroups.map(group => group.display));
       const observerEntries = branches.flatMap(branch => {
         if (branch.kind === "ground") return [];
+        if (branch.kind === "dummy_node_block") return [];
         const displayForSide = side => subsystem.groupByTerminal.get(terminalKey(branch.id, side))?.display || side;
         const lines = localCurrentFormula(branch, subsystem.groupByTerminal).split("\n").filter(Boolean);
         if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port") {
@@ -10328,6 +10758,7 @@
           branches: structuredClone(branches),
           wires: structuredClone(touchingWires),
           nodeState: structuredClone(beforeNodeState),
+          nodeOrder: structuredClone(currentNodeOrder()),
           externalGroups: subsystem.externalGroups.map((group, index) => ({
             id: group.id,
             display: group.display,
@@ -10825,7 +11256,9 @@
       }
       const nodes = groups.map(group => group.id);
       const displayByNode = new Map(groups.map(group => [group.id, group.display || nodeDisplayName(group.id)]));
-      const forcedInternalNodes = groups.filter(group => group.virtualInternal).map(group => group.id);
+      const forcedInternalNodes = groups
+        .filter(group => group.virtualInternal)
+        .map(group => group.id);
       const netByTerminal = new Map();
       groups.forEach(group => group.members.forEach(member => netByTerminal.set(member, group.id)));
       const nodeIndex = new Map(nodes.map((node, index) => [node, index]));
@@ -11244,6 +11677,12 @@
         const n = terminalSides(branch).length;
         return parseMatrixLiteral(branchValue(branch, "gMatrix"), n, n);
       }
+      if (branch.kind === "dummy_node_block") {
+        const n = terminalSides(branch).length;
+        return Array.from({ length: n }, (_, row) =>
+          Array.from({ length: n }, (_, col) => row === col ? (branch.fixedConductance || "G_EPSILON") : "0")
+        );
+      }
       if (branch.kind === "dummy_dimension_branch") {
         return [
           ["G_EPSILON", "-(G_EPSILON)"],
@@ -11272,6 +11711,7 @@
       if (branch.kind === "single_phase_transformer" || branch.kind === "custom_n_port") {
         return parseVectorLiteral(branchValue(branch, "ihisVector"), terminalSides(branch).length);
       }
+      if (branch.kind === "dummy_node_block") return terminalSides(branch).map(() => "0");
       if (branch.kind === "dummy_dimension_branch") return ["0", "0"];
       if (branch.kind === "current_source") {
         return ["0", "0"];
@@ -11595,6 +12035,16 @@
         render();
         return;
       }
+      if (field === "packageNetworkCaseName") {
+        normalizePackageNetworkCases(branch);
+        const pkg = branch.packageOriginal;
+        const index = activePackageNetworkCaseIndex(branch);
+        const name = String(value || "").trim() || `Case ${index + 1}`;
+        if (pkg?.networkCases?.[index]) pkg.networkCases[index].name = name;
+        if (branch.switchCases?.[index]) branch.switchCases[index].name = name;
+        render();
+        return;
+      }
       if (field === "formulaHighlightEnabled") {
         branch.formulaHighlightEnabled = Boolean(value);
         if (!branch.formulaHighlightColor) branch.formulaHighlightColor = "#ef4444";
@@ -11615,7 +12065,11 @@
         const [, indexText, key] = field.split(".");
         const inner = branch.packageOriginal?.branches?.[Number(indexText)];
         if (inner) {
-          if (key === "gIsConstant") inner.gIsConstant = value === true || value === "1" || value === "true";
+          if (isFixedDummyGElement(inner)) {
+            inner.gIsConstant = true;
+            inner.constantGSymbols = "G_EPSILON";
+          }
+          else if (key === "gIsConstant") inner.gIsConstant = value === true || value === "1" || value === "true";
           else if (key === "constantGSymbols") inner.constantGSymbols = String(value || "").trim();
         }
         renderAfterSidePanelEdit();
@@ -11641,6 +12095,22 @@
         const next = Math.max(min, Math.min(max, Number(value)));
         if (Number.isFinite(next)) branch[field] = next;
         clampComponent(branch);
+        renderAfterSidePanelEdit();
+        return;
+      }
+      if (branch.kind === "dummy_node_block") {
+        if (field === "name") branch.name = value.trim();
+        else if (field.startsWith("node.")) {
+          const side = field.slice(5);
+          const next = value.trim() || side;
+          branch.nodes = { ...(branch.nodes || {}), [side]: next };
+          const node = (branch.dummyNodes || []).find(item => item.id === side || item.side === side);
+          if (node) {
+            node.node_id = next;
+            node.display_name = next;
+            node.dummy_role = "isolated_dummy_internal";
+          }
+        }
         renderAfterSidePanelEdit();
         return;
       }
@@ -11780,8 +12250,8 @@
     function packageCasePortRows(groups = []) {
       return (groups || []).map((group, index) => {
         const name = String(group.display || group.id || "").trim() || `N${index + 1}`;
-        const port = String(group.port || `P${index + 1}`).trim();
-        return `${index + 1}. ${name} -> ${port}`;
+        const netId = String(group.globalNet || group.id || `N${index + 1}`).trim() || `N${index + 1}`;
+        return `${netId}. ${name}`;
       });
     }
 
@@ -11820,7 +12290,6 @@
       const pkg = shell?.packageOriginal || {};
       const caseName = pkg.networkCases?.[edit.caseIndex]?.name || `Case ${Number(edit.caseIndex || 0) + 1}`;
       const packName = shell?.name || shell?.id || "Pack";
-      const internalGroupIds = new Set((subsystem.internalGroups || []).map(group => group.id));
       const errors = [];
 
       dummyBranchesForPackCase(subsystem.sourceBranches || state.branches).forEach(branch => {
@@ -11855,6 +12324,62 @@
       });
 
       return errors;
+    }
+
+    function dummyNodeBlocksForPackCase(branches = state.branches) {
+      return (branches || []).filter(branch => branch.kind === "dummy_node_block" || branch.element_type === "dummy_node_block" || branch.dummy_role === "isolated_dummy_internal");
+    }
+
+    function validateDummyNodeBlocksForPackCase(shell, subsystem) {
+      const edit = state.packageCaseEdit || {};
+      const pkg = shell?.packageOriginal || {};
+      const caseName = pkg.networkCases?.[edit.caseIndex]?.name || `Case ${Number(edit.caseIndex || 0) + 1}`;
+      const packName = shell?.name || shell?.id || "Pack";
+      const errors = [];
+
+      dummyNodeBlocksForPackCase(subsystem.sourceBranches || state.branches).forEach(branch => {
+        terminalSides(branch).forEach(side => {
+          const key = terminalKey(branch.id, side);
+          const group = subsystem.groupByTerminal?.get(key);
+          const nodeName = group?.display || branchNodeForSide(branch, side) || side;
+          const prefix = `${packName} / ${caseName} / ${branch.name || branch.id} / ${nodeName}`;
+          if (!group) {
+            errors.push(`${prefix}: ${tr("N-Dummy 节点块端点缺失。")}`);
+            return;
+          }
+          if ((group.members || []).length !== 1 || group.members[0] !== key) {
+            errors.push(`${prefix}: ${tr("N-Dummy 节点必须保持孤立，不能接线或并入其他节点。")}`);
+          }
+        });
+        if (branch.recoverable !== false || branch.forced_elimination !== true || branch.dummy_role !== "isolated_dummy_internal") {
+          errors.push(`${packName} / ${caseName} / ${branch.name || branch.id}: ${tr("N-Dummy 节点会强制作为内部节点参与维度补齐。")}`);
+        }
+      });
+
+      return errors;
+    }
+
+    function dummyNodeBlockPayloadForCase(sourceBranches, groups = []) {
+      const groupByTerminal = new Map();
+      (groups || []).forEach(group => (group.members || []).forEach(member => groupByTerminal.set(member, group)));
+      return dummyNodeBlocksForPackCase(sourceBranches).map(branch => ({
+        element_type: "dummy_node_block",
+        block_id: branch.name || branch.id || "N-Dummy",
+        source_branch_id: branch.id,
+        dimension: terminalSides(branch).length,
+        fixed_conductance: branch.fixedConductance || "G_EPSILON",
+        forced_elimination: true,
+        recoverable: false,
+        dummy_nodes: terminalSides(branch).map(side => {
+          const group = groupByTerminal.get(terminalKey(branch.id, side));
+          return {
+            side,
+            node_id: group?.id || branchNodeForSide(branch, side) || side,
+            display_name: group?.display || branchNodeForSide(branch, side) || side,
+            dummy_role: "isolated_dummy_internal"
+          };
+        })
+      }));
     }
 
     function buildDummyAdjustedPackReduction(shell, subsystem) {
@@ -11948,6 +12473,8 @@
       const returnData = currentCanvasData();
       state.packageCaseEdit = {
         outerCanvasId: state.activeCanvasId,
+        returnActiveCanvasId: state.activeCanvasId,
+        returnCanvases: structuredClone(state.canvases),
         packageBranchId: branch.id,
         caseIndex: index,
         packageShell: structuredClone(branch),
@@ -11959,7 +12486,7 @@
       state.nodeLabels = {};
       state.nodeColors = {};
       state.internalNodes = [];
-      state.nodeOrder = [];
+      state.nodeOrder = structuredClone(caseData.nodeOrder || []);
       state.selectedIds = state.branches.map(item => item.id);
       state.selectedId = state.selectedIds[0] || null;
       state.selectedNetIds = [];
@@ -11974,9 +12501,18 @@
     function cancelPackageCaseEdit() {
       const edit = state.packageCaseEdit;
       if (!edit) return;
-      state.packageCaseEdit = null;
-      applyCanvasData(edit.returnData || blankCanvasData());
+      restorePackageCaseEditOuterCanvas(edit);
       render();
+    }
+
+    function restorePackageCaseEditOuterCanvas(edit) {
+      state.canvases = structuredClone(edit.returnCanvases || state.canvases);
+      state.activeCanvasId = edit.returnActiveCanvasId || edit.outerCanvasId || state.activeCanvasId;
+      const canvasState = currentCanvas();
+      const returnData = structuredClone(canvasState?.data || edit.returnData || blankCanvasData());
+      state.packageCaseEdit = null;
+      applyCanvasData(returnData);
+      state.packageCaseEdit = null;
     }
 
     function renderPackageCasePortReminder(shell) {
@@ -11984,9 +12520,9 @@
       if (!rows.length) return "";
       return `
         <div class="package-case-overlay-text">
-          <strong>${escapeHtml(tr("Pack 外部端口必须保持"))}</strong>
+          <strong>${escapeHtml(tr("Pack 外部节点必须保持"))}</strong>
           <div>${rows.map(row => escapeHtml(row)).join("<br>")}</div>
-          <div>${escapeHtml(tr("完成保存前，外部端口数量、名字、顺序必须与上表一致。"))}</div>
+          <div>${escapeHtml(tr("完成保存前，外部节点数量、名字、顺序必须与上表一致。"))}</div>
         </div>
       `;
     }
@@ -12008,7 +12544,8 @@
         id: group.id,
         display: group.display,
         globalNet: group.globalNet,
-        members: [...(group.members || [])]
+        members: [...(group.members || [])],
+        isolatedDummyInternal: Boolean(group.isolatedDummyInternal)
       }));
     }
 
@@ -12024,6 +12561,7 @@
       const finalInternalGroups = packagedCaseInternalRows(finalSubsystem.internalGroups);
       const finalGMatrix = matrixLiteral(finalResult.G_red);
       const finalIhisVector = vectorLiteral(finalResult.Ihis_red);
+      const dummyNodeBlocks = dummyNodeBlockPayloadForCase(subsystem.sourceBranches || [], subsystem.allGroups || []);
       const currents = (result.reduced_observers || []).map((item, index) => {
         const source = observerEntries[index] || {};
         return {
@@ -12042,6 +12580,7 @@
         branches: structuredClone(subsystem.sourceBranches || []),
         wires: structuredClone(packageInternalWiresForBranches(subsystem.sourceBranches || [], subsystem.sourceWires || [])),
         nodeState: structuredClone(captureNodeDisplayState()),
+        nodeOrder: structuredClone(currentNodeOrder()),
         externalGroups: superExternalGroups,
         internalGroups: superInternalGroups,
         K_v: result.K_v,
@@ -12060,6 +12599,7 @@
         finalK_h: finalResult.K_h,
         finalGMatrix,
         finalIhisVector,
+        dummyNodeBlocks,
         currents,
         gIsConstant: branch.gIsConstant !== false,
         constantGSymbols: branch.constantGSymbols || ""
@@ -12084,6 +12624,11 @@
       const dummyErrors = validateDummyBranchesForPackCase(shell, subsystem);
       if (dummyErrors.length) {
         alert(dummyErrors.join("\n"));
+        return true;
+      }
+      const dummyNodeBlockErrors = validateDummyNodeBlocksForPackCase(shell, subsystem);
+      if (dummyNodeBlockErrors.length) {
+        alert(dummyNodeBlockErrors.join("\n"));
         return true;
       }
       if (subsystem.warnings?.length) {
@@ -12119,12 +12664,11 @@
         dummyAdjusted.hasDummy ? { subsystem: dummyAdjusted.finalSubsystem, result: dummyAdjusted.trimmedResult } : null
       );
       applyPackageNetworkCase(shell, index);
-      const returnData = structuredClone(edit.returnData || blankCanvasData());
-      state.packageCaseEdit = null;
-      applyCanvasData(returnData);
+      restorePackageCaseEditOuterCanvas(edit);
       const target = state.branches.find(item => item.id === edit.packageBranchId);
       if (target) Object.assign(target, shell);
       selectBranch(edit.packageBranchId);
+      saveActiveCanvas();
       invalidateMathCaches();
       render();
       return true;
@@ -12147,6 +12691,7 @@
         ${renderPackageCasePortReminder(shell)}
         <div class="package-case-overlay-actions">
           <button class="text-button" type="button" data-package-case-overlay-action="dummy">${escapeHtml(tr("新增 Dummy 支路"))}</button>
+          <button class="text-button" type="button" data-package-case-overlay-action="dummyNodeBlock">${escapeHtml(tr("新增 N-Dummy 节点块"))}</button>
           <button class="text-button primary" type="button" data-package-case-overlay-action="finish">${escapeHtml(tr("完成并保存 Pack 工况"))}</button>
           <button class="text-button" type="button" data-package-case-overlay-action="cancel">${escapeHtml(tr("取消 Pack 工况编辑"))}</button>
         </div>
@@ -12155,6 +12700,8 @@
         const run = () => {
           if (button.dataset.packageCaseOverlayAction === "dummy") {
             createDummyDimensionBranch();
+          } else if (button.dataset.packageCaseOverlayAction === "dummyNodeBlock") {
+            createDummyNodeBlock();
           } else if (button.dataset.packageCaseOverlayAction === "finish") {
             finishPackageCaseEdit().catch(error => {
               alert(optText(
@@ -12283,6 +12830,39 @@
       const branch = findBranch(state.selectedId);
       if (!branch) {
         editor.innerHTML = `<div class="empty">选择一个元件后可编辑节点名、导纳、历史电流和观测方向。</div>`;
+        return;
+      }
+
+      if (branch.kind === "dummy_node_block") {
+        const basics = `
+          ${editableField("支路名", "name", branch.name)}
+          <div class="row">
+            ${editableField("宽度", "width", branch.width || 150)}
+            ${editableField("高度", "height", branch.height || 72)}
+          </div>
+        `;
+        const mathModel = `
+          <div class="field">
+            <label>${escapeHtml(tr("N-Dummy 节点块"))}</label>
+            <input readonly value="${escapeHtml(tr("孤立 Dummy 内部节点块"))}">
+          </div>
+          ${readonlyField("G", "G_EPSILON * I_n")}
+          ${readonlyField("Ihis", tr("Ihis: 0 (fixed)"))}
+          ${readonlyField(tr("强制消去"), "yes")}
+          ${readonlyField("Voltage recovery", "No")}
+          <div class="modal-help">${escapeHtml(tr("所有 N-Dummy 节点都会强制作为内部节点参与维度补齐，不允许连线、接地、暴露或恢复电压。"))}</div>
+        `;
+        const terminals = `
+          ${terminalSides(branch).map(side => editableField(`${tr("Dummy 节点")} ${side}`, `node.${side}`, branch.nodes?.[side] || side)).join("")}
+        `;
+        editor.innerHTML = editorGroupList([
+          editorGroup("basics", "基本信息", basics, false),
+          editorGroup("math", "工况 / 数学模型", mathModel, true),
+          editorGroup("terminals", "端点标识", terminals, false)
+        ]);
+        bindEditorInputs();
+        bindEditorEditButtons();
+        bindEditorGroups();
         return;
       }
 
@@ -13258,9 +13838,10 @@
       const rowColor = group => group.virtualInternal ? group.color : netColor(group.id);
       const groundSet = new Set(groundNodesFromGroups(groups));
       const dummyProtectedIds = dummyProtectedNetIds();
+      const isolatedDummyIds = dummyNodeBlockNetIds();
       const rowGround = group => !group.virtualInternal && groundSet.has(group.id);
       const rowInternal = group => !rowGround(group) && !dummyProtectedIds.has(group.id) && (group.virtualInternal || state.internalNodes.includes(group.id));
-      const rowDummy = group => !group.virtualInternal && groupHasDummyTerminal(group);
+      const rowDummy = group => Boolean(group.isolatedDummyInternal) || (!group.virtualInternal && (dummyProtectedIds.has(group.id) || groupHasDummyTerminal(group)));
       const rowExposure = group => group.virtualInternal
         ? (group.customHidden
           ? { custom: true, branchId: group.branchId, port: group.port, exposed: false }
@@ -13276,6 +13857,22 @@
           const info = exposedPackagedNodeForGroup(group);
           return info ? { branchId: info.branch.id, kind: info.kind, index: info.index, exposed: true } : null;
         })();
+      const rowInternalButtonAttr = group => {
+        if (rowGround(group) || isolatedDummyIds.has(group.id) || dummyProtectedIds.has(group.id)) return "disabled";
+        if (group.virtualInternal) {
+          return group.customHidden
+            ? `data-custom-node-external="${group.branchId}:${group.port}"`
+            : `data-packaged-node-external="${group.branchId}:${group.packageKind || "internal"}:${group.internalIndex}"`;
+        }
+        return `data-internal-node="${group.id}"`;
+      };
+      const rowInternalButtonTitle = group => {
+        if (rowGround(group)) return tr("Ground / V=0");
+        if (isolatedDummyIds.has(group.id) || group.isolatedDummyInternal) return tr("N-Dummy 节点会在 C 导出时强制消去。");
+        if (dummyProtectedIds.has(group.id)) return tr("Dummy anchor 不能被设为内部节点。");
+        if (group.virtualInternal) return tr("隐藏节点会强制作为内部节点参与消元。");
+        return tr("切换外部/内部节点");
+      };
       const terminalMappingHtml = groups.map(group => {
         if (group.virtualInternal) {
           return `<div class="field"><label>${escapeHtml(rowName(group))}</label><input readonly value="${escapeHtml(`${tr("隐藏")} - ${group.branchName}`)}"></div>`;
@@ -13300,7 +13897,7 @@
                 <span class="node-order-name">${escapeHtml(rowName(group))}</span>
                 ${rowDummy(group) ? `<span class="node-dummy-badge" title="${escapeHtml(tr("Dummy 节点"))}">Dummy</span>` : ""}
                 <span class="node-order-id">${escapeHtml(group.virtualInternal ? group.branchName : group.id)}</span>
-                <button class="node-internal-button ${rowInternal(group) ? "active" : ""} ${rowGround(group) ? "active" : ""}" ${rowGround(group) ? "disabled" : (dummyProtectedIds.has(group.id) ? "disabled" : (group.virtualInternal ? (group.customHidden ? `data-custom-node-external="${group.branchId}:${group.port}"` : `data-packaged-node-external="${group.branchId}:${group.packageKind || "internal"}:${group.internalIndex}"`) : `data-internal-node="${group.id}"`))} type="button" draggable="false" title="${rowGround(group) ? escapeHtml(tr("Ground / V=0")) : (dummyProtectedIds.has(group.id) ? escapeHtml(tr("Dummy anchor 不能被设为内部节点。")) : (group.virtualInternal ? escapeHtml(tr("隐藏节点会强制作为内部节点参与消元。")) : escapeHtml(tr("切换外部/内部节点"))))}">
+                <button class="node-internal-button ${rowInternal(group) ? "active" : ""} ${rowGround(group) ? "active" : ""}" ${rowInternalButtonAttr(group)} type="button" draggable="false" title="${escapeHtml(rowInternalButtonTitle(group))}">
                   ${tr(rowGround(group) ? "Ground / V=0" : (rowInternal(group) ? "内部" : "外部"))}
                 </button>
                 ${rowExposure(group) ? (rowExposure(group).custom
@@ -13670,6 +14267,10 @@
         }
         if (branch.kind === "custom_n_port") {
           renderCustomNPort(branch, selected, nets);
+          return;
+        }
+        if (branch.kind === "dummy_node_block") {
+          renderDummyNodeBlock(branch, selected, nets);
           return;
         }
         if (branch.kind === "current_source") {
@@ -14072,6 +14673,47 @@
 
       bindBranchGroupInteractions(group, branch);
 
+      branchLayer.appendChild(group);
+    }
+
+    function renderDummyNodeBlock(branch, selected, nets) {
+      const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      const canvasHighlight = branchCanvasHighlight(branch);
+      group.setAttribute("class", `branch dummy-node-block${selected ? " selected" : ""}${canvasHighlight.className}`);
+      if (canvasHighlight.style) group.setAttribute("style", canvasHighlight.style);
+      group.setAttribute("transform", `rotate(${branch.rotation} ${branch.x} ${branch.y})`);
+      group.dataset.branchId = branch.id;
+
+      const left = branch.x - branch.width / 2;
+      const top = branch.y - branch.height / 2;
+      const layout = customPortLayout(branch);
+      const terminals = layout.map(port => {
+        const p = terminalDrawPosition(branch, port.id);
+        return [port.id, p.x, p.y, port.side];
+      });
+      group.innerHTML = `
+        <rect class="hitbox" x="${left - BRANCH_HIT_PAD_X}" y="${top - BRANCH_HIT_PAD_Y}" width="${branch.width + BRANCH_HIT_PAD_X * 2}" height="${branch.height + BRANCH_HIT_PAD_Y * 2}" rx="8"></rect>
+        <rect class="branch-body" x="${left}" y="${top}" width="${branch.width}" height="${branch.height}" rx="4"></rect>
+        <text class="branch-label" x="${branch.x}" y="${branch.y - 8}">${escapeSvg(branch.name)}</text>
+        <text class="component-subtext" x="${branch.x}" y="${branch.y + 12}">${escapeSvg(tr("N-Dummy 节点块"))}</text>
+        <text class="switch-label" x="${branch.x}" y="${branch.y + 30}">${escapeSvg(tr("强制消去"))}</text>
+        ${resizeHandlesSvg(branch, selected)}
+        ${terminals.map(([side, x, y, edge]) => {
+          const netId = nets.get(terminalKey(branch.id, side)) || "";
+          const net = nodeDisplayName(netId);
+          const color = netColor(netId);
+          const labelY = edge === "top" ? y - 13 : (edge === "bottom" ? y + 28 : y + 24);
+          const badgeY = edge === "bottom" ? y + 10 : y - 34;
+          return `
+            <circle class="terminal dummy-terminal${netHoverClass(netId)}" cx="${x}" cy="${y}" r="8" data-terminal="${terminalKey(branch.id, side)}" data-port-side="${side}"></circle>
+            <rect class="net-badge-bg${netHoverClass(netId)}" data-net-id="${netId}" data-port-side="${side}" x="${x - 17}" y="${badgeY}" width="34" height="18" rx="5" fill="${color}"></rect>
+            <text class="net-badge" data-net-id="${netId}" data-port-side="${side}" x="${x}" y="${badgeY + 9}">${escapeSvg(net)}</text>
+            ${state.showLocalLabels ? `<text class="node-label" data-port-side="${side}" x="${x}" y="${labelY}">${escapeSvg(branch.nodes?.[side] || side)}</text>` : ""}
+          `;
+        }).join("")}
+      `;
+
+      bindBranchGroupInteractions(group, branch);
       branchLayer.appendChild(group);
     }
 

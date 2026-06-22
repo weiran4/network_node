@@ -4,7 +4,8 @@ import json
 import itertools
 import re
 import sys
-from collections.abc import Iterable, Sequence
+import time
+from collections.abc import Iterable, Mapping, Sequence
 
 import sympy as sp
 
@@ -19,6 +20,10 @@ from nodal_tool.optimized_elimination import (
 from nodal_tool.multicase_finalization_profiles import (
     build_finalization_profiles,
     finalize_profile_result,
+)
+from nodal_tool.dummy_node_block_model import (
+    dummy_node_blocks_from_payload,
+    validate_dummy_node_blocks,
 )
 
 
@@ -293,6 +298,51 @@ def _slice_direct_retained(
     return direct_G.extract(indices, indices), direct_Ihis.extract(indices, [0])
 
 
+def _drop_isolated_dummy_nodes_before_schur(
+    G: sp.Matrix,
+    Ihis: sp.Matrix,
+    G_tagged: sp.Matrix | None,
+    Ihis_tagged: sp.Matrix | None,
+    node_order: list[str],
+    external_nodes: list[str],
+    internal_nodes: list[str],
+    dummy_nodes: set[str],
+) -> tuple[sp.Matrix, sp.Matrix, sp.Matrix | None, sp.Matrix | None, list[str], list[str], list[str]]:
+    if not dummy_nodes:
+        return G, Ihis, G_tagged, Ihis_tagged, node_order, external_nodes, internal_nodes
+
+    keep_indices = [
+        index
+        for index, node in enumerate(node_order)
+        if str(node) not in dummy_nodes
+    ]
+    kept_nodes = [node_order[index] for index in keep_indices]
+
+    G_pruned = sp.Matrix(G).extract(keep_indices, keep_indices)
+    Ihis_pruned = sp.Matrix(Ihis).extract(keep_indices, [0])
+    G_tagged_pruned = (
+        sp.Matrix(G_tagged).extract(keep_indices, keep_indices)
+        if G_tagged is not None
+        else None
+    )
+    Ihis_tagged_pruned = (
+        sp.Matrix(Ihis_tagged).extract(keep_indices, [0])
+        if Ihis_tagged is not None
+        else None
+    )
+    external_pruned = [node for node in external_nodes if str(node) not in dummy_nodes]
+    internal_pruned = [node for node in internal_nodes if str(node) not in dummy_nodes]
+    return (
+        G_pruned,
+        Ihis_pruned,
+        G_tagged_pruned,
+        Ihis_tagged_pruned,
+        kept_nodes,
+        external_pruned,
+        internal_pruned,
+    )
+
+
 def build_optimized_response(payload: dict) -> dict:
     simplify_level = payload.get("simplify_level") or "light"
     display_mode = payload.get("display_mode") or "compact"
@@ -308,6 +358,24 @@ def build_optimized_response(payload: dict) -> dict:
 
     G, Ihis, G_tagged, Ihis_tagged, node_order, external_nodes, internal_nodes, partition_warnings = _partition_payload(payload)
     warnings = list(partition_warnings)
+    single_dummy_blocks = dummy_node_blocks_from_payload(payload)
+    single_dummy_nodes: set[str] = set()
+    if single_dummy_blocks:
+        validate_dummy_node_blocks(G, Ihis, node_order, single_dummy_blocks, common_internal_nodes=internal_nodes)
+        for block in single_dummy_blocks:
+            single_dummy_nodes.update(str(node) for node in block.dummy_nodes)
+        G, Ihis, G_tagged, Ihis_tagged, node_order, external_nodes, internal_nodes = (
+            _drop_isolated_dummy_nodes_before_schur(
+                G,
+                Ihis,
+                G_tagged,
+                Ihis_tagged,
+                node_order,
+                external_nodes,
+                internal_nodes,
+                single_dummy_nodes,
+            )
+        )
     borrowed_dependency = payload.get("reduced_dependency_analysis") or payload.get("reduced_dependency")
     direct_G, direct_Ihis, direct_stamps = _direct_retained_matrices(payload, node_order, external_nodes)
     direct_Grr, direct_Ihisr = _slice_direct_retained(direct_G, direct_Ihis, node_order, external_nodes)
@@ -342,6 +410,9 @@ def build_optimized_response(payload: dict) -> dict:
         direct_Grr_ram_tagged = direct_Grr_code_tagged = None
         direct_Ihisr_ram_tagged = direct_Ihisr_code_tagged = None
 
+    skip_symbolic_w_details = bool(borrowed_dependency) and not bool(
+        payload.get("preserve_structured_details_with_borrowed_dependency")
+    )
     structured = build_structured_formula(
         G,
         Ihis,
@@ -350,7 +421,7 @@ def build_optimized_response(payload: dict) -> dict:
         internal_nodes,
         use_suggested_order=use_suggested_order,
         simplify_level=simplify_level,
-        skip_symbolic_w_details=bool(borrowed_dependency),
+        skip_symbolic_w_details=skip_symbolic_w_details,
     )
     tagged_structured = None
     if G_tagged is not None and Ihis_tagged is not None and not borrowed_dependency:
@@ -419,6 +490,24 @@ def build_optimized_response(payload: dict) -> dict:
     warnings.extend(structured.get("warnings", []))
     blocks = structured["blocks"]
 
+    c_draft = c_draft_for_structured_formula(
+        structured,
+        node_display_names=payload.get("node_display_names") or {},
+        rtds_stage_plan=rtds_stage_plan,
+    )
+    if single_dummy_nodes:
+        c_draft = _apply_single_case_dummy_recovery_skip(
+            c_draft,
+            structured["effective_internal_nodes"],
+            single_dummy_nodes,
+        )
+    if single_dummy_blocks and "DummyNodeBlock isolated internal nodes are not recovered" not in c_draft:
+        c_draft = c_draft.replace(
+            "T1_T2:\n",
+            "T1_T2:\n    /* DummyNodeBlock isolated internal nodes are not recovered. */\n",
+            1,
+        )
+
     return {
         "ok": True,
         "mode": "structured_formula",
@@ -471,11 +560,16 @@ def build_optimized_response(payload: dict) -> dict:
             },
             "dependency_analysis": _clean_value(rtds_stage_plan.get("dependency_analysis", {})),
             "dynamic_subblock": _clean_value(rtds_stage_plan.get("dynamic_subblock", {})),
-            "c_draft": c_draft_for_structured_formula(
-                structured,
-                node_display_names=payload.get("node_display_names") or {},
-                rtds_stage_plan=rtds_stage_plan,
+            "dummy_node_blocks": _clean_value(
+                {
+                    "count": len(single_dummy_blocks),
+                    "nodes": sorted(single_dummy_nodes),
+                    "dropped_before_schur": True,
+                }
+                if single_dummy_blocks
+                else {}
             ),
+            "c_draft": c_draft,
         },
     }
 
@@ -1247,7 +1341,12 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     }
 
 
-def _attach_multicase_fast_dependency(payload: dict) -> dict:
+def _attach_multicase_fast_dependency(
+    payload: dict,
+    *,
+    g_dependency: str = "CODE_VARIABLE",
+    ihis_dependency: str = "CODE_VARIABLE",
+) -> dict:
     """Force multi-case symbol-mux exports down the matrix DAG path.
 
     The mux path has already proven that cases differ only by source-level
@@ -1271,11 +1370,20 @@ def _attach_multicase_fast_dependency(payload: dict) -> dict:
         table = dict(clone.get(table_name) or {})
         for row in g_symbols:
             for symbol in row:
-                table[symbol] = "CODE_VARIABLE"
+                table[symbol] = g_dependency
         for symbol in ihis_symbols:
-            table[symbol] = "CODE_VARIABLE"
+            table[symbol] = ihis_dependency
         clone[table_name] = table
     return clone
+
+
+def _promoted_dependency_for_aliases(aliases: dict[str, dict], *, kind: str | None = None) -> str:
+    owners = [
+        str(info.get("owner") or "RAM")
+        for info in aliases.values()
+        if kind is None or info.get("kind") == kind
+    ]
+    return _symbol_dependency_for_owner(_promote_owner(owners))
 
 
 def _case_selector_from_profiles(profiles: list[dict]) -> str | None:
@@ -1608,6 +1716,405 @@ def _profile_alias_substitutions(profile: dict, aliases: dict[str, dict], profil
 
 def _profile_final_expr(expr: sp.Expr, profile: dict, aliases: dict[str, dict], profile_index: int | None = None) -> sp.Expr:
     return sp.sympify(expr).xreplace(_profile_alias_substitutions(profile, aliases, profile_index))
+
+
+def _case_resolved_matrix_is_diagonal(matrix: sp.Matrix, profile: dict, aliases: dict[str, dict], profile_index: int) -> bool:
+    matrix = sp.Matrix(matrix)
+    if matrix.rows != matrix.cols or matrix.rows == 0:
+        return False
+    for row in range(matrix.rows):
+        for col in range(matrix.cols):
+            if row == col:
+                continue
+            if not _expr_equal_light(_profile_final_expr(matrix[row, col], profile, aliases, profile_index), 0):
+                return False
+    return True
+
+
+def _template_gkk_from_payload(payload: dict) -> sp.Matrix:
+    G, _, _, _, node_order, _, internal_nodes, _ = _partition_payload(payload)
+    if not internal_nodes:
+        return sp.zeros(0, 0)
+    indices = [node_order.index(node) for node in internal_nodes]
+    return G.extract(indices, indices)
+
+
+def _find_w_code_sym3_inverse_block(draft: str) -> tuple[int, int, str] | None:
+    marker = "    mat_3x3_sym_inv_code("
+    marker_index = draft.find(marker)
+    if marker_index < 0:
+        return None
+    start = draft.rfind("    double W_code_11 = 0.0;\n", 0, marker_index)
+    end_marker = "    set_CODE(&W_code, 2, 2, W_code_33);\n"
+    end = draft.find(end_marker, marker_index)
+    if start < 0 or end < 0:
+        return None
+    end += len(end_marker)
+    return start, end, draft[start:end]
+
+
+def _indent_c_block(block: str, spaces: int) -> list[str]:
+    prefix = " " * spaces
+    return [prefix + line if line else line for line in block.rstrip("\n").splitlines()]
+
+
+def _diagonal_w_code_lines(size: int, indent: int) -> list[str]:
+    prefix = " " * indent
+    lines: list[str] = []
+    for row in range(size):
+        for col in range(size):
+            value = f"1.0 / get_CODE(&Gkk_code, {row}, {row})" if row == col else "0.0"
+            lines.append(f"{prefix}set_CODE(&W_code, {row}, {col}, {value});")
+    return lines
+
+
+def _apply_multicase_conditional_diagonal_w_builder(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: list[dict],
+    aliases: dict[str, dict],
+    gkk_template: sp.Matrix,
+) -> str:
+    gkk_template = sp.Matrix(gkk_template)
+    if not profiles or gkk_template.rows != 3 or gkk_template.cols != 3:
+        return draft
+    inverse_block = _find_w_code_sym3_inverse_block(draft)
+    if inverse_block is None:
+        return draft
+
+    diagonal_cases: list[int] = []
+    fallback_cases: list[int] = []
+    for index, profile in enumerate(profiles):
+        if _case_resolved_matrix_is_diagonal(gkk_template, profile, aliases, index):
+            diagonal_cases.append(index)
+        else:
+            fallback_cases.append(index)
+    if not diagonal_cases:
+        return draft
+
+    start, end, original_block = inverse_block
+    if not fallback_cases:
+        replacement = "\n".join(
+            ["    /* Case-resolved diagonal Gkk fast path: W = inv(diag(Gkk)). */"]
+            + _diagonal_w_code_lines(3, 4)
+        ) + "\n"
+        return draft[:start] + replacement + draft[end:]
+
+    lines = [
+        "    /* Case-resolved diagonal Gkk fast path: use direct reciprocal for diagonal cases. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for index in diagonal_cases:
+        lines.append(f"    case {index}:")
+    lines.append("    {")
+    lines.extend(_diagonal_w_code_lines(3, 8))
+    lines.append("        break;")
+    lines.append("    }")
+    for index in fallback_cases:
+        lines.append(f"    case {index}:")
+    lines.append("    {")
+    lines.extend(_indent_c_block(original_block, 4))
+    lines.append("        break;")
+    lines.append("    }")
+    lines.append("    default:")
+    lines.append("    {")
+    lines.extend(_indent_c_block(original_block, 4))
+    lines.append("        break;")
+    lines.append("    }")
+    lines.append("    }")
+    replacement = "\n".join(lines) + "\n"
+    return draft[:start] + replacement + draft[end:]
+
+
+def _retained_layout_profiles_from_finalization(profile_set, super_node_ids: Sequence[str]) -> tuple[list[dict], list[str]]:
+    case_profiles = list(getattr(profile_set, "case_profiles", []) or [])
+    if not case_profiles:
+        return [], list(super_node_ids)
+    final_sets = [set(str(node) for node in profile.final_node_order) for profile in case_profiles]
+    common = set.intersection(*final_sets) if final_sets else set()
+    super_order = [str(node) for node in super_node_ids]
+    common_order = [node for node in super_order if node in common]
+    optional_order = [node for node in super_order if node not in common and any(node in final_set for final_set in final_sets)]
+    compact_super_order = common_order + optional_order
+
+    grouped: dict[tuple[str, ...], dict] = {}
+    for index, profile in enumerate(case_profiles):
+        active = tuple([node for node in common_order if node in profile.final_node_order] + [
+            node for node in optional_order if node in profile.final_node_order
+        ])
+        if active not in grouped:
+            grouped[active] = {
+                "case_ids": [],
+                "ordered_active_nodes": list(active),
+                "nr_active": len(active),
+                "super_to_active_index": {
+                    node: active_index
+                    for active_index, node in enumerate(active)
+                },
+            }
+        grouped[active]["case_ids"].append(index)
+
+    profiles = sorted(grouped.values(), key=lambda item: (-item["nr_active"], item["case_ids"]))
+    if len(profiles) == 2:
+        profiles[0]["profile_id"] = "PROFILE_Y"
+        profiles[1]["profile_id"] = "PROFILE_D"
+    else:
+        for index, item in enumerate(profiles):
+            item["profile_id"] = f"PROFILE_{index}"
+    return profiles, compact_super_order
+
+
+def _with_reordered_external_nodes(payload: dict, external_nodes: Sequence[str]) -> dict:
+    clone = dict(payload)
+    clone["external_nodes"] = [str(node) for node in external_nodes]
+    return clone
+
+
+def _replace_enum_for_retained_layouts(draft: str, profiles: list[dict], nk: int) -> str:
+    if not profiles:
+        return draft
+    enum_parts = [f"{profile['profile_id']} = {index}" for index, profile in enumerate(profiles)]
+    dim_parts = [f"NR_{profile['profile_id'].removeprefix('PROFILE_')} = {profile['nr_active']}" for profile in profiles]
+    enum_line = f"enum {{ {', '.join(enum_parts)}, {', '.join(dim_parts)}, NK = {nk} }};"
+    return re.sub(r"enum \{ NR = \d+, NK = \d+ \};", enum_line, draft, count=1)
+
+
+def _case_condition_from_ids(case_id_symbol: str, case_ids: Sequence[int]) -> str:
+    return " || ".join(f"{case_id_symbol} == {case_id}" for case_id in case_ids) or "FALSE"
+
+
+def _insert_retained_profile_selection(draft: str, *, case_id_symbol: str, profiles: list[dict]) -> str:
+    if not profiles or "int nr_active = " in draft:
+        return draft
+    largest = profiles[0]
+    static_lines = [
+        f"    int retained_profile = {largest['profile_id']};",
+        f"    int nr_active = NR_{largest['profile_id'].removeprefix('PROFILE_')};",
+    ]
+    draft = draft.replace("    /* Runtime matrix objects */", "\n".join(static_lines) + "\n    /* Runtime matrix objects */", 1)
+    selection = [
+        "    /* Retained layout is selected during initialization. Runtime profile switching is not supported. */",
+    ]
+    for index, profile in enumerate(profiles):
+        keyword = "if" if index == 0 else "else if"
+        selection.append(f"    {keyword} ({_case_condition_from_ids(case_id_symbol, profile['case_ids'])}) {{")
+        selection.append(f"        retained_profile = {profile['profile_id']};")
+        selection.append(f"        nr_active = NR_{profile['profile_id'].removeprefix('PROFILE_')};")
+        selection.append("    }")
+    marker = "    int err = 0;"
+    return draft.replace(marker, "\n".join(selection) + "\n" + marker, 1)
+
+
+def _apply_active_matrix_dimensions(draft: str) -> str:
+    replacements = {
+        "matrixDim(&Grr_code, NR, NR)": "matrixDim(&Grr_code, nr_active, nr_active)",
+        "matrixDim(&Grk_code, NR, NK)": "matrixDim(&Grk_code, nr_active, NK)",
+        "matrixDim(&Gkr_code, NK, NR)": "matrixDim(&Gkr_code, NK, nr_active)",
+        "matrixDim(&Gred_code, NR, NR)": "matrixDim(&Gred_code, nr_active, nr_active)",
+        "matrixDim(&Ihisr_code, NR, 1)": "matrixDim(&Ihisr_code, nr_active, 1)",
+        "matrixDim(&Ihisred_code, NR, 1)": "matrixDim(&Ihisred_code, nr_active, 1)",
+        "matrixDim(&Vr_code, NR, 1)": "matrixDim(&Vr_code, nr_active, 1)",
+        "matrixDim(&tmp_Grk_W_code, NR, NK)": "matrixDim(&tmp_Grk_W_code, nr_active, NK)",
+        "matrixDim(&tmp_Grk_W_Gkr_code, NR, NR)": "matrixDim(&tmp_Grk_W_Gkr_code, nr_active, nr_active)",
+        "matrixDim(&tmp_Grk_W_Ihisk_code, NR, 1)": "matrixDim(&tmp_Grk_W_Ihisk_code, nr_active, 1)",
+        "matrixDim(&tmp_W_Gkr_code, NK, NR)": "matrixDim(&tmp_W_Gkr_code, NK, nr_active)",
+    }
+    for old, new in replacements.items():
+        draft = draft.replace(old, new)
+    return draft
+
+
+def _apply_active_ram_overlay_dimension(draft: str, *, y_profile: dict, d_profile: dict) -> str:
+    nr_d = int(d_profile["nr_active"])
+    draft = re.sub(
+        r"for \(int row = 0; row < \d+; row\+\+\) \{\n        for \(int col = 0; col < \d+; col\+\+\) \{\n            g_mat_over\[row\]\[col\] = 0\.0;",
+        "for (int row = 0; row < nr_active; row++) {\n        for (int col = 0; col < nr_active; col++) {\n            g_mat_over[row][col] = 0.0;",
+        draft,
+    )
+    draft = re.sub(r"setupGMatrix\(\d+\);", "setupGMatrix(nr_active);", draft, count=1)
+
+    lines = draft.splitlines()
+    guarded: list[str] = []
+    pending: list[str] = []
+    nods_pattern = re.compile(r"^    g_mat_nods\[(?P<index>\d+)\] = ")
+    over_pattern = re.compile(r"^    g_mat_over\[(?P<row>\d+)\]\[(?P<col>\d+)\] = ")
+
+    def needs_guard(line: str) -> bool:
+        nods = nods_pattern.match(line)
+        if nods:
+            return int(nods.group("index")) >= nr_d
+        over = over_pattern.match(line)
+        if over:
+            return int(over.group("row")) >= nr_d or int(over.group("col")) >= nr_d
+        return False
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        guarded.append(f"    if (retained_profile == {y_profile['profile_id']}) {{")
+        guarded.extend("    " + line for line in pending)
+        guarded.append("    }")
+        pending = []
+
+    for line in lines:
+        if needs_guard(line):
+            pending.append(line)
+            continue
+        flush_pending()
+        guarded.append(line)
+    flush_pending()
+    return "\n".join(guarded) + ("\n" if draft.endswith("\n") else "")
+
+
+def _guard_optional_retained_set_code_lines(draft: str, *, y_profile: dict, d_profile: dict) -> str:
+    nr_d = int(d_profile["nr_active"])
+    condition = " || ".join(f"retained_profile == {y_profile['profile_id']}" for _ in [0])
+    lines = draft.splitlines()
+    guarded: list[str] = []
+    pattern = re.compile(r"^    set_CODE\(&(?P<matrix>Gkr_code|Grk_code|Grr_code|Gred_code|Ihisr_code|Ihisred_code|Vr_code|tmp_W_Gkr_code), (?P<row>\d+), (?P<col>\d+),")
+    pending: list[str] = []
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        guarded.append(f"    if ({condition}) {{")
+        guarded.extend("    " + line for line in pending)
+        guarded.append("    }")
+        pending = []
+
+    for line in lines:
+        match = pattern.match(line)
+        needs_guard = False
+        if match:
+            matrix = match.group("matrix")
+            row = int(match.group("row"))
+            col = int(match.group("col"))
+            if matrix in {"Gkr_code", "tmp_W_Gkr_code"}:
+                needs_guard = col >= nr_d
+            elif matrix == "Vr_code":
+                needs_guard = row >= nr_d
+            else:
+                needs_guard = row >= nr_d or col >= nr_d
+        if needs_guard:
+            pending.append(line)
+            continue
+        flush_pending()
+        guarded.append(line)
+    flush_pending()
+    return "\n".join(guarded) + ("\n" if draft.endswith("\n") else "")
+
+
+def _guard_profile_y_matrix_lifecycle_lines(draft: str, *, y_profile: dict) -> str:
+    y_only_names = {
+        "Grr_dyn_code",
+        "Grk_dyn_code",
+        "Gkr_dyn_code",
+        "Gred_dyn_code",
+        "tmp_Grk_W_dyn_code",
+        "tmp_Grk_W_Gkr_dyn_code",
+    }
+    lines = draft.splitlines()
+    guarded: list[str] = []
+    pending: list[str] = []
+
+    def is_y_only_lifecycle(line: str) -> bool:
+        stripped = line.strip()
+        return any(
+            stripped.startswith(f"err += matrixDim(&{name},")
+            or stripped == f"matrix_register(&{name});"
+            or stripped == f"conditionMatrixForCODE(&{name});"
+            for name in y_only_names
+        )
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        indent = pending[0][: len(pending[0]) - len(pending[0].lstrip())]
+        guarded.append(f"{indent}if (retained_profile == {y_profile['profile_id']}) {{")
+        guarded.extend(indent + "    " + line[len(indent):] if line.startswith(indent) else indent + "    " + line for line in pending)
+        guarded.append(f"{indent}}}")
+        pending = []
+
+    for line in lines:
+        if is_y_only_lifecycle(line):
+            pending.append(line)
+            continue
+        flush_pending()
+        guarded.append(line)
+    flush_pending()
+    return "\n".join(guarded) + ("\n" if draft.endswith("\n") else "")
+
+
+def _guard_profile_y_dynamic_schur_lines(draft: str, *, y_profile: dict) -> str:
+    y_only_names = (
+        "Grr_dyn_code",
+        "Grk_dyn_code",
+        "Gkr_dyn_code",
+        "Gred_dyn_code",
+        "tmp_Grk_W_dyn_code",
+        "tmp_Grk_W_Gkr_dyn_code",
+    )
+    lines = draft.splitlines()
+    guarded: list[str] = []
+    pending: list[str] = []
+
+    def is_y_only_runtime(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("/*") or stripped.startswith("*"):
+            return False
+        if (
+            stripped.startswith("err += matrixDim(")
+            or stripped.startswith("matrix_register(")
+            or stripped.startswith("conditionMatrixForCODE(")
+        ):
+            return False
+        return any(f"&{name}" in stripped for name in y_only_names)
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        indent = pending[0][: len(pending[0]) - len(pending[0].lstrip())]
+        guarded.append(f"{indent}if (retained_profile == {y_profile['profile_id']}) {{")
+        guarded.extend(indent + "    " + line[len(indent):] if line.startswith(indent) else indent + "    " + line for line in pending)
+        guarded.append(f"{indent}}}")
+        pending = []
+
+    for line in lines:
+        if is_y_only_runtime(line):
+            pending.append(line)
+            continue
+        flush_pending()
+        guarded.append(line)
+    flush_pending()
+    return "\n".join(guarded) + ("\n" if draft.endswith("\n") else "")
+
+
+def _apply_retained_layout_profile_compaction(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: list[dict],
+    nk: int,
+) -> str:
+    if len(profiles) < 2:
+        return draft
+    profiles = sorted(profiles, key=lambda item: -int(item["nr_active"]))
+    if int(profiles[0]["nr_active"]) == int(profiles[-1]["nr_active"]):
+        return draft
+    draft = _replace_enum_for_retained_layouts(draft, profiles, nk)
+    draft = _insert_retained_profile_selection(draft, case_id_symbol=case_id_symbol, profiles=profiles)
+    draft = _apply_active_matrix_dimensions(draft)
+    if nk == 0:
+        draft = _apply_active_ram_overlay_dimension(draft, y_profile=profiles[0], d_profile=profiles[-1])
+    draft = _guard_optional_retained_set_code_lines(draft, y_profile=profiles[0], d_profile=profiles[-1])
+    draft = _guard_profile_y_matrix_lifecycle_lines(draft, y_profile=profiles[0])
+    draft = _guard_profile_y_dynamic_schur_lines(draft, y_profile=profiles[0])
+    return draft
 
 
 def _profile_symbol_table(profile: dict) -> dict:
@@ -1998,7 +2505,21 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
     alias_model = _build_multicase_alias_template_payload(payload)
     if alias_model is None:
         return None
-    template_payload = alias_model["template_payload"]
+    dummy_analysis = payload.get("_dummy_node_block_analysis") or _dummy_node_block_analysis(alias_model["profiles"])
+    aliases = alias_model["aliases"]
+    raw_template_payload = alias_model["template_payload"]
+    template_internal_count = len(raw_template_payload.get("internal_nodes") or [])
+    use_synthetic_dependency = template_internal_count >= 4
+    template_payload = (
+        _attach_multicase_fast_dependency(
+            raw_template_payload,
+            g_dependency=_promoted_dependency_for_aliases(aliases, kind="G"),
+            ihis_dependency=_promoted_dependency_for_aliases(aliases),
+        )
+        if use_synthetic_dependency
+        else raw_template_payload
+    )
+    preserve_structured_details = not use_synthetic_dependency
     request_payload = {
         **template_payload,
         "mode": "structured_formula",
@@ -2006,12 +2527,12 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         "simplify_level": payload.get("simplify_level") or template_payload.get("simplify_level") or "light",
         "assume_spd": payload.get("assume_spd", template_payload.get("assume_spd", True)),
         "use_suggested_order": payload.get("use_suggested_order", template_payload.get("use_suggested_order", False)),
+        "preserve_structured_details_with_borrowed_dependency": preserve_structured_details,
     }
     result = build_optimized_response(request_payload)
     template_G, template_Ihis, _, _, template_nodes, template_external, _, _ = _partition_payload(template_payload)
     template_reduced = eliminate_internal_nodes(template_G, template_Ihis, template_nodes, template_external)
     case_id_symbol = str(payload.get("case_id_symbol") or "global_case_id")
-    aliases = alias_model["aliases"]
     display_names = template_payload.get("node_display_names") or {}
     c_external_nodes = [str(display_names.get(node, node)) for node in template_external]
     symbol_table = {}
@@ -2075,8 +2596,22 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 branch_ids=alias_model["branch_ids"],
                 aliases=aliases,
             )
+            draft = _apply_multicase_conditional_diagonal_w_builder(
+                draft,
+                case_id_symbol=case_id_symbol,
+                profiles=alias_model["profiles"],
+                aliases=aliases,
+                gkk_template=_template_gkk_from_payload(template_payload),
+            )
             codegen_mode = "case-agnostic alias template"
             fast_path = "case_alias_template"
+        draft = _apply_dummy_recovery_profiles_to_draft(
+            draft,
+            case_id_symbol=case_id_symbol,
+            internal_nodes=result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],
+            node_display_names=template_payload.get("node_display_names") or {},
+            dummy_analysis=dummy_analysis,
+        )
         if aliases and has_mixed_final_g:
             draft, gvalue_conditions = _apply_conditional_final_gvalues_to_structured_draft(
                 draft,
@@ -2117,6 +2652,18 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             "aliases": aliases,
             "gvalue_conditions": gvalue_conditions,
             "uses_case_conditional_gvalue": bool(gvalue_conditions),
+            **(
+                {
+                    "dummy_node_blocks": {
+                        "count": dummy_analysis.get("count", 0),
+                        "common_internal_nodes": dummy_analysis.get("common_internal_nodes", []),
+                        "case_roles": dummy_analysis.get("case_roles", []),
+                    },
+                    "recovery_profiles": dummy_analysis.get("recovery_profiles", []),
+                }
+                if dummy_analysis
+                else {}
+            ),
             "template": {
                 "Gred": _clean_matrix(template_reduced.G_red),
                 "Ihisred": _clean_vector(template_reduced.Ihis_red),
@@ -2124,6 +2671,11 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                     len(result.get("effective_internal_nodes") or []),
                     len(result.get("external_nodes") or []),
                 ],
+            },
+            "template_blocks": _clean_value((result.get("structured") or {}).get("blocks") or {}),
+            "template_block_nodes": {
+                "retained_order": result.get("external_nodes") or template_payload.get("external_nodes") or [],
+                "internal_order": result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],
             },
             "template_summary": {
                 "nodes": (template_payload.get("all_nodes") or []),
@@ -2293,7 +2845,247 @@ def _profiles_have_dummy_finalization(profiles: list[dict]) -> bool:
         dummy = profile.get("dummy_finalization") or {}
         if dummy.get("dummy_leaves"):
             return True
+        payload = profile.get("payload") or {}
+        if payload.get("defer_dummy_node_blocks") and dummy_node_blocks_from_payload(payload):
+            return True
     return False
+
+
+def _isolated_dummy_nodes_for_payload(payload: dict) -> list[str]:
+    nodes: list[str] = []
+    for block in dummy_node_blocks_from_payload(payload):
+        for node in block.dummy_nodes:
+            if node not in nodes:
+                nodes.append(str(node))
+    return nodes
+
+
+def _ordered_nodes(nodes: Iterable[str], reference_order: Sequence[str]) -> list[str]:
+    wanted = {str(node) for node in nodes}
+    ordered = [str(node) for node in reference_order if str(node) in wanted]
+    ordered.extend(sorted(wanted.difference(ordered)))
+    return ordered
+
+
+def _classify_multicase_dummy_node_roles(profiles: list[dict], *, common_internal_hint: set[str] | None = None) -> dict:
+    common_internal_hint = common_internal_hint or set()
+    isolated_nodes = sorted({
+        node
+        for profile in profiles
+        for node in _isolated_dummy_nodes_for_payload(profile.get("payload") or {})
+    })
+    role_by_node: dict[str, list[dict]] = {}
+    common_internal: list[str] = []
+    unsupported: list[str] = []
+    for node in isolated_nodes:
+        roles: list[dict] = []
+        for case_index, profile in enumerate(profiles):
+            payload = profile.get("payload") or {}
+            dummy_nodes = set(_isolated_dummy_nodes_for_payload(payload))
+            external = {str(item) for item in (payload.get("external_nodes") or [])}
+            internal = {str(item) for item in (payload.get("internal_nodes") or [])}
+            all_nodes = {str(item) for item in (payload.get("all_nodes") or [])}
+            if node in dummy_nodes:
+                role = "isolated_dummy_internal" if node in internal else "isolated_dummy_final"
+            elif node in internal:
+                role = "physical_internal"
+            elif node in external:
+                role = "retained_physical"
+            elif node in all_nodes:
+                role = "present_unclassified"
+            else:
+                role = "missing"
+            roles.append({"case_id": case_index, "role": role})
+        role_names = {item["role"] for item in roles}
+        if role_names <= {"physical_internal", "isolated_dummy_internal"}:
+            common_internal.append(node)
+        elif node in common_internal_hint and role_names <= {"physical_internal", "isolated_dummy_final"}:
+            common_internal.append(node)
+        elif "isolated_dummy_internal" in role_names and not role_names <= {"physical_internal", "isolated_dummy_internal"}:
+            unsupported.append(node)
+        role_by_node[node] = roles
+    return {
+        "isolated_dummy_nodes": isolated_nodes,
+        "mixed_physical_dummy_internal": common_internal,
+        "unsupported_role_mix": unsupported,
+        "roles": role_by_node,
+    }
+
+
+def _promote_common_isolated_dummy_internal_profiles(profiles: list[dict], payload: dict | None = None) -> tuple[list[dict], dict]:
+    payload = payload or {}
+    common_internal_hint = {str(node) for node in (payload.get("common_dummy_internal_nodes") or [])}
+    classification = _classify_multicase_dummy_node_roles(profiles, common_internal_hint=common_internal_hint)
+    unsupported = classification.get("unsupported_role_mix") or []
+    if unsupported:
+        node = unsupported[0]
+        raise ValueError(
+            "DummyNodeBlock currently supports isolated dummy nodes only when the same canonical node "
+            f"is eliminated in every case. The node {node} has an unsupported retained/dummy role mix."
+        )
+    common_internal = set(classification.get("mixed_physical_dummy_internal") or [])
+    if not common_internal:
+        return profiles, classification
+
+    normalized: list[dict] = []
+    for profile in profiles:
+        payload = dict(profile.get("payload") or {})
+        promote_nodes = common_internal.intersection({str(node) for node in (payload.get("all_nodes") or [])})
+        if promote_nodes:
+            external = [str(node) for node in (payload.get("external_nodes") or []) if str(node) not in promote_nodes]
+            internal_existing = [str(node) for node in (payload.get("internal_nodes") or [])]
+            all_nodes = [str(node) for node in (payload.get("all_nodes") or [])]
+            internal = _ordered_nodes([*internal_existing, *promote_nodes], all_nodes)
+            payload["external_nodes"] = external
+            payload["internal_nodes"] = internal
+            payload.pop("defer_dummy_node_blocks", None)
+        normalized.append({**profile, "payload": payload})
+    return normalized, classification
+
+
+def _dummy_node_block_analysis(profiles: list[dict]) -> dict | None:
+    case_roles: list[dict] = []
+    common_internal_order: list[str] = []
+    all_dummy_nodes: set[str] = set()
+    block_count = 0
+    for case_index, profile in enumerate(profiles):
+        payload = profile.get("payload") or {}
+        blocks = dummy_node_blocks_from_payload(payload)
+        if not blocks:
+            case_roles.append({
+                "case_id": case_index,
+                "dummy_nodes": [],
+                "recoverable_nodes": [str(node) for node in (payload.get("internal_nodes") or [])],
+            })
+            continue
+        block_count += len(blocks)
+        nodes = [str(node) for node in (payload.get("all_nodes") or [])]
+        internal_nodes = [str(node) for node in (payload.get("internal_nodes") or [])]
+        G = _expr_matrix_from_payload(payload, "G_full")
+        Ihis = _expr_matrix_from_payload(payload, "Ihis_full")
+        validate_dummy_node_blocks(G, Ihis, nodes, blocks, common_internal_nodes=internal_nodes)
+        dummy_nodes = [node for block in blocks for node in block.dummy_nodes]
+        all_dummy_nodes.update(dummy_nodes)
+        for node in internal_nodes:
+            if node not in common_internal_order:
+                common_internal_order.append(node)
+        dummy_set = set(dummy_nodes)
+        case_roles.append({
+            "case_id": case_index,
+            "dummy_nodes": dummy_nodes,
+            "recoverable_nodes": [node for node in internal_nodes if node not in dummy_set],
+        })
+    if not block_count:
+        return None
+
+    for profile in profiles:
+        payload = profile.get("payload") or {}
+        external = {str(node) for node in (payload.get("external_nodes") or [])}
+        for node in sorted(all_dummy_nodes):
+            if node in external:
+                raise ValueError(
+                    "DummyNodeBlock currently supports only nodes eliminated in every case. "
+                    f"The node {node} is retained in case {profile.get('name') or 'profile'}."
+                )
+
+    grouped: dict[tuple[str, ...], list[int]] = {}
+    for role in case_roles:
+        key = tuple(role["recoverable_nodes"])
+        grouped.setdefault(key, []).append(int(role["case_id"]))
+    recovery_profiles = [
+        {"case_ids": case_ids, "recoverable_nodes": list(nodes)}
+        for nodes, case_ids in grouped.items()
+    ]
+    return {
+        "count": block_count,
+        "common_internal_nodes": [node for node in common_internal_order if node in all_dummy_nodes],
+        "case_roles": case_roles,
+        "recovery_profiles": recovery_profiles,
+    }
+
+
+def _apply_dummy_recovery_profiles_to_draft(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    internal_nodes: Sequence[str],
+    node_display_names: Mapping[str, str] | None = None,
+    dummy_analysis: dict | None,
+) -> str:
+    if not dummy_analysis or not internal_nodes:
+        return draft
+    node_display_names = node_display_names or {}
+    node_to_row = {str(node): index for index, node in enumerate(internal_nodes)}
+    draft = draft.replace("    /* One variable per eliminated node, in effective k order. */\n", "")
+
+    def recovery_c_name(node: str, row: int) -> str:
+        display_name = str(node_display_names.get(node, node))
+        return _c_identifier_name(display_name, f"K{row + 1}")
+
+    for node, row in node_to_row.items():
+        candidate_names = {
+            _c_identifier_name(node, f"K{row + 1}"),
+            recovery_c_name(node, row),
+        }
+        for c_name in candidate_names:
+            draft = draft.replace(
+                f"    {c_name} = get_CODE(&Vk_code, {row}, 0);\n",
+                "",
+            )
+    lines = [
+        "    /* Recovery profiles: DummyNodeBlock isolated internal nodes are not recovered. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for profile in dummy_analysis.get("recovery_profiles") or []:
+        for case_id in profile.get("case_ids") or []:
+            lines.append(f"    case {case_id}:")
+        recoverable = [str(node) for node in (profile.get("recoverable_nodes") or [])]
+        if recoverable:
+            for node in recoverable:
+                if node not in node_to_row:
+                    continue
+                row = node_to_row[node]
+                lines.append(f"        {recovery_c_name(node, row)} = get_CODE(&Vk_code, {row}, 0);")
+        else:
+            lines.append("        /* DummyNodeBlock isolated internal nodes are not recovered. */")
+        lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+    ])
+    marker = "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);\n"
+    if marker in draft:
+        return draft.replace(marker, marker + "\n".join(lines) + "\n", 1)
+    return draft.rstrip() + "\n" + "\n".join(lines) + "\n"
+
+
+def _apply_single_case_dummy_recovery_skip(
+    draft: str,
+    internal_nodes: Sequence[str],
+    dummy_nodes: set[str],
+) -> str:
+    if not dummy_nodes or not internal_nodes:
+        return draft
+    removed = False
+    for row, node in enumerate(internal_nodes):
+        if str(node) not in dummy_nodes:
+            continue
+        c_name = _c_identifier_name(str(node), f"K{row + 1}")
+        needle = f"    {c_name} = get_CODE(&Vk_code, {row}, 0);\n"
+        if needle in draft:
+            draft = draft.replace(needle, "")
+            removed = True
+    comment = "    /* DummyNodeBlock isolated internal nodes are not recovered. */\n"
+    if not removed:
+        marker = "T1_T2:\n"
+        if marker in draft and comment not in draft:
+            return draft.replace(marker, marker + comment, 1)
+        return draft
+    marker = "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);\n"
+    if marker in draft and comment not in draft:
+        return draft.replace(marker, marker + comment, 1)
+    return draft
 
 
 def _reduced_super_result_from_payload(case_payload: dict) -> dict:
@@ -2401,6 +3193,21 @@ def _build_dummy_finalized_multi_case_c_draft(
             original_symbols.update(symbol.name for symbol in _parse_expr(expr).free_symbols)
     declarations: list[str] = []
     declared_names: set[str] = set()
+    ccode_cache: dict[str, str] = {}
+    stage_cache: dict[tuple[int, str], str] = {}
+
+    def emit_c(expr: object) -> str:
+        key = str(expr)
+        if key not in ccode_cache:
+            ccode_cache[key] = _ccode(expr)
+        return ccode_cache[key]
+
+    def stage_of(expr: sp.Expr, symbol_table: dict[str, str]) -> str:
+        key = (id(symbol_table), str(expr))
+        if key not in stage_cache:
+            stage_cache[key] = _expr_stage(expr, symbol_table)
+        return stage_cache[key]
+
     def add_declaration(line: str, name: str) -> None:
         if name in declared_names:
             return
@@ -2424,7 +3231,7 @@ def _build_dummy_finalized_multi_case_c_draft(
         for row in range(final.G.rows):
             for col in range(row, final.G.cols):
                 expr = sp.sympify(final.G[row, col])
-                if expr == 0 or _expr_stage(expr, symbol_table) == "RAM":
+                if expr == 0 or stage_of(expr, symbol_table) == "RAM":
                     continue
                 left = str(nodes[row])
                 right = str(nodes[col])
@@ -2438,7 +3245,7 @@ def _build_dummy_finalized_multi_case_c_draft(
                     "cases": [],
                 })
                 entry["cases"].append(case_index)
-                dynamic_case_assignments.setdefault(case_index, []).append(f"{var} = {_ccode(expr)};")
+                dynamic_case_assignments.setdefault(case_index, []).append(f"{var} = {emit_c(expr)};")
 
     lines = [
         "/* Multi-case C draft with case-specific DummyBranch finalization.",
@@ -2479,9 +3286,9 @@ def _build_dummy_finalized_multi_case_c_draft(
         for row in range(final.G.rows):
             for col in range(final.G.cols):
                 expr = sp.sympify(final.G[row, col])
-                if expr == 0 or _expr_stage(expr, item.get("symbol_table") or {}) != "RAM":
+                if expr == 0 or stage_of(expr, item.get("symbol_table") or {}) != "RAM":
                     continue
-                lines.append(f"        g_mat_over[{row}][{col}] = {_ccode(expr)};")
+                lines.append(f"        g_mat_over[{row}][{col}] = {emit_c(expr)};")
         lines.extend([
             f"        setupGMatrix({dim});",
             "        break;",
@@ -2540,7 +3347,7 @@ def _build_dummy_finalized_multi_case_c_draft(
         final = item["final"]
         lines.append(f"    case {case_index}:")
         for row, node in enumerate(final.nodes):
-            lines.append(f"        Inj{_c_identifier_name(node, f'N{row + 1}')} = {_ccode(final.Ihis[row, 0])};")
+            lines.append(f"        Inj{_c_identifier_name(node, f'N{row + 1}')} = {emit_c(final.Ihis[row, 0])};")
         lines.extend([
             "        break;",
         ])
@@ -2572,6 +3379,210 @@ def _build_dummy_finalized_multi_case_c_draft(
     return "\n".join(lines)
 
 
+def _dummy_finalized_formula_cost(final_results: list[dict]) -> int:
+    cost = 0
+    for item in final_results:
+        final = item["final"]
+        for expr in list(final.G) + list(final.Ihis):
+            cost += int(sp.count_ops(sp.sympify(expr)))
+    return cost
+
+
+def _dummy_finalized_matrix_dag_is_preferred(final_results: list[dict], *, max_ops: int = 5000) -> bool:
+    return _dummy_finalized_formula_cost(final_results) > max_ops
+
+
+def _apply_dummy_finalization_gvalue_conditions(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profile_set,
+    super_node_ids: list[str],
+    c_external_nodes: list[str],
+) -> tuple[str, list[dict]]:
+    gvalue_conditions: list[dict] = []
+    grouped_assignments: dict[tuple[int, ...], list[str]] = {}
+    for row in range(len(super_node_ids)):
+        for col in range(row, len(super_node_ids)):
+            left_id = str(super_node_ids[row])
+            right_id = str(super_node_ids[col])
+            left_c = str(c_external_nodes[row])
+            right_c = str(c_external_nodes[col])
+            active_cases = [
+                index
+                for index, profile in enumerate(profile_set.case_profiles)
+                if left_id in profile.final_node_order and right_id in profile.final_node_order
+            ]
+            if len(active_cases) == len(profile_set.case_profiles):
+                continue
+            var = _var_g_name(c_external_nodes, row, col)
+            condition = _case_condition(case_id_symbol, active_cases)
+            gvalue_conditions.append({
+                "var": var,
+                "row": row,
+                "col": col,
+                "condition": condition,
+            })
+            pattern = (
+                f'double {var} = createGValue("{var}", '
+                f'"{left_c}", "{right_c}", 0, "TRUE");'
+            )
+            replacement = (
+                f'double {var} = createGValue("{var}", '
+                f'"{left_c}", "{right_c}", 0, "{condition}");'
+            )
+            draft = draft.replace(pattern, replacement)
+            for matrix_name in ["Gred_code", "Gred_dyn_code", "G_code"]:
+                assignment = f"{var} = get_CODE(&{matrix_name}, {row}, {col});"
+                if f"    {assignment}" in draft:
+                    grouped_assignments.setdefault(tuple(active_cases), []).append(assignment)
+                    break
+            else:
+                match = re.search(
+                    rf"^    ({re.escape(var)}\s*=\s*get_CODE\(&[^;]+;\s*)$",
+                    draft,
+                    flags=re.MULTILINE,
+                )
+                if match:
+                    grouped_assignments.setdefault(tuple(active_cases), []).append(match.group(1).strip())
+
+    for case_indices, assignments in grouped_assignments.items():
+        first_assignment = assignments[0]
+        for assignment in assignments[1:]:
+            draft = draft.replace(f"    {assignment}", "", 1)
+        draft = draft.replace(
+            f"    {first_assignment}",
+            "\n".join(_case_switch_assignment_lines(case_id_symbol, case_indices, assignments)),
+            1,
+        )
+    return draft, gvalue_conditions
+
+
+def _apply_dummy_finalization_injection_guards(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profile_set,
+    super_node_ids: list[str],
+    c_external_nodes: list[str],
+) -> str:
+    grouped_assignments: dict[tuple[int, ...], list[str]] = {}
+    for row, node_id in enumerate(super_node_ids):
+        active_cases = [
+            index
+            for index, profile in enumerate(profile_set.case_profiles)
+            if str(node_id) in profile.final_node_order
+        ]
+        if len(active_cases) == len(profile_set.case_profiles):
+            continue
+        node_c = _c_identifier_name(c_external_nodes[row], f"N{row + 1}")
+        candidates = [
+            f"Inj{node_c} = get_CODE(&Ihisred_code, {row}, 0);",
+            f"Inj{node_c} = get_CODE(&Ihisfinal_code, {row}, 0);",
+            f"Inj{node_c} = 0.0;",
+        ]
+        for assignment in candidates:
+            if f"    {assignment}" in draft:
+                grouped_assignments.setdefault(tuple(active_cases), []).append(assignment)
+                break
+
+    for case_indices, assignments in grouped_assignments.items():
+        first_assignment = assignments[0]
+        for assignment in assignments[1:]:
+            draft = draft.replace(f"    {assignment}", "", 1)
+        draft = draft.replace(
+            f"    {first_assignment}",
+            "\n".join(_case_switch_assignment_lines(case_id_symbol, case_indices, assignments)),
+            1,
+        )
+    return draft
+
+
+def _build_dummy_finalized_matrix_dag_c_draft(
+    payload: dict,
+    *,
+    alias_model: dict,
+    profile_set,
+    case_id_symbol: str,
+) -> tuple[str, list[dict], list[str], dict]:
+    raw_template_payload = alias_model["template_payload"]
+    aliases = alias_model["aliases"]
+    retained_layout_profiles, compact_external_order = _retained_layout_profiles_from_finalization(
+        profile_set,
+        raw_template_payload.get("external_nodes") or [],
+    )
+    if compact_external_order:
+        raw_template_payload = _with_reordered_external_nodes(raw_template_payload, compact_external_order)
+    template_internal_count = len(raw_template_payload.get("internal_nodes") or [])
+    use_synthetic_dependency = template_internal_count >= 4
+    template_payload = (
+        _attach_multicase_fast_dependency(
+            raw_template_payload,
+            g_dependency=_promoted_dependency_for_aliases(aliases, kind="G"),
+            ihis_dependency=_promoted_dependency_for_aliases(aliases),
+        )
+        if use_synthetic_dependency
+        else raw_template_payload
+    )
+    request_payload = {
+        **template_payload,
+        "mode": "structured_formula",
+        "display_mode": payload.get("display_mode") or template_payload.get("display_mode") or "compact",
+        "simplify_level": payload.get("simplify_level") or template_payload.get("simplify_level") or "light",
+        "assume_spd": payload.get("assume_spd", template_payload.get("assume_spd", True)),
+        "use_suggested_order": payload.get("use_suggested_order", template_payload.get("use_suggested_order", False)),
+        "preserve_structured_details_with_borrowed_dependency": not use_synthetic_dependency,
+    }
+    result = build_optimized_response(request_payload)
+    draft = _insert_multicase_alias_layer(
+        result["structured"]["c_draft"],
+        case_id_symbol=case_id_symbol,
+        profiles=alias_model["profiles"],
+        branch_ids=alias_model["branch_ids"],
+        aliases=aliases,
+    )
+    draft = _apply_multicase_conditional_diagonal_w_builder(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=alias_model["profiles"],
+        aliases=aliases,
+        gkk_template=_template_gkk_from_payload(template_payload),
+    )
+    draft = _apply_retained_layout_profile_compaction(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=retained_layout_profiles,
+        nk=len(template_payload.get("internal_nodes") or []),
+    )
+    display_names = template_payload.get("node_display_names") or {}
+    template_external = list(template_payload.get("external_nodes") or result.get("external_nodes") or [])
+    c_external_nodes = [str(display_names.get(node, node)) for node in template_external]
+    draft, gvalue_conditions = _apply_dummy_finalization_gvalue_conditions(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profile_set=profile_set,
+        super_node_ids=template_external,
+        c_external_nodes=c_external_nodes,
+    )
+    draft = _apply_dummy_finalization_injection_guards(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profile_set=profile_set,
+        super_node_ids=template_external,
+        c_external_nodes=c_external_nodes,
+    )
+    warnings = list(result.get("warnings") or [])
+    warnings.append(
+        "Info: dummy-finalized multi-case export used the shared structured matrix DAG "
+        "instead of expanded final Gred formulas because the finalized formulas exceed the codegen budget."
+    )
+    result = {
+        **result,
+        "retained_layout_profiles": retained_layout_profiles,
+    }
+    return draft, gvalue_conditions, warnings, result
+
+
 def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
     profiles = payload.get("case_profiles") or []
     case_id_symbol = str(payload.get("case_id_symbol") or "case_id")
@@ -2583,10 +3594,21 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
     aliases = alias_model["aliases"] if alias_model is not None else {}
     branch_ids = alias_model["branch_ids"] if alias_model is not None else []
     template_super_result = _reduced_super_result_from_payload(template_payload) if template_payload is not None else None
+    alias_symbol_table = {
+        alias: _symbol_dependency_for_owner(str(info.get("owner") or "RAM"))
+        for alias, info in aliases.items()
+    }
+    use_alias_template_final_values = bool(
+        template_super_result is not None
+        and aliases
+        and all(not profile.dummy_leaf_specs for profile in profile_set.case_profiles)
+    )
 
     for case_index, source_profile in enumerate(profiles):
         case_payload = template_payload or source_profile.get("payload") or {}
-        if template_super_result is not None:
+        if use_alias_template_final_values:
+            super_result = template_super_result
+        elif template_super_result is not None:
             substitutions = _profile_alias_substitutions(source_profile, aliases, case_index)
             super_result = {
                 **template_super_result,
@@ -2612,12 +3634,61 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
             "name": source_profile.get("name") or f"Case {case_index}",
             "profile": profile,
             "final": final,
-            "symbol_table": case_payload.get("symbol_dependency_table_tagged") or case_payload.get("symbol_dependency_table") or {},
+            "symbol_table": {
+                **(case_payload.get("symbol_dependency_table_tagged") or case_payload.get("symbol_dependency_table") or {}),
+                **alias_symbol_table,
+            },
             "recovery_nodes": super_result["internal_nodes"],
             "super_nodes": super_result["external_nodes"],
             "K_v": super_result["K_v"],
             "K_h": super_result["K_h"],
         })
+
+    has_isolated_dummy_final_nodes = any(
+        getattr(profile, "isolated_dummy_nodes", ())
+        for profile in profile_set.case_profiles
+    )
+    use_matrix_dag_draft = bool(
+        alias_model is not None
+        and aliases
+        and (
+            has_isolated_dummy_final_nodes
+            or _dummy_finalized_matrix_dag_is_preferred(final_results)
+        )
+    )
+    gvalue_conditions: list[dict] = []
+    extra_warnings: list[str] = []
+    matrix_dag_result: dict | None = None
+    if use_matrix_dag_draft:
+        c_draft, gvalue_conditions, extra_warnings, matrix_dag_result = _build_dummy_finalized_matrix_dag_c_draft(
+            payload,
+            alias_model=alias_model,
+            profile_set=profile_set,
+            case_id_symbol=case_id_symbol,
+        )
+        fast_path = "dummy_finalization_alias_template_matrix_dag"
+    else:
+        c_draft = _build_dummy_finalized_multi_case_c_draft(
+            case_id_symbol,
+            profile_set,
+            final_results,
+            aliases=aliases,
+            profiles=profiles,
+            branch_ids=branch_ids,
+        )
+        fast_path = "dummy_finalization_alias_template" if aliases else "dummy_finalization_profiles"
+
+    warnings = [
+        "Info: DummyBranch profiles use case-specific final solver dimensions after the shared super reduction."
+    ] + extra_warnings + [
+        (
+            f"Warning: {alias} has mixed case owners {sorted(set((info.get('case_owners') or {}).values()))}; "
+            f"promoted to {info.get('owner')} for safety. "
+            "case_id is fixed before simulation and must not change at runtime."
+        )
+        for alias, info in aliases.items()
+        if len(set((info.get("case_owners") or {}).values())) > 1
+    ]
 
     return {
         "ok": True,
@@ -2631,24 +3702,23 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
             }
             for index, profile in enumerate(profiles)
         ],
-        "warnings": [
-            "Info: DummyBranch profiles use case-specific final solver dimensions after the shared super reduction."
-        ] + [
-            (
-                f"Warning: {alias} has mixed case owners {sorted(set((info.get('case_owners') or {}).values()))}; "
-                f"promoted to {info.get('owner')} for safety. "
-                "case_id is fixed before simulation and must not change at runtime."
-            )
-            for alias, info in aliases.items()
-            if len(set((info.get("case_owners") or {}).values())) > 1
-        ],
+        "warnings": list(dict.fromkeys(warnings)),
         "multi_case": {
             "codegen_mode": "case-agnostic alias template with dummy finalization" if aliases else "case-specific dummy finalization",
-            "fast_path": "dummy_finalization_alias_template" if aliases else "dummy_finalization_profiles",
+            "fast_path": fast_path,
             "profile_count": len(profiles),
             "aliases": aliases,
+            "gvalue_conditions": gvalue_conditions,
+            "uses_case_conditional_gvalue": bool(gvalue_conditions),
             "external_nodes": profile_set.super_node_order,
             "effective_internal_nodes": [],
+            "block_type": ((matrix_dag_result or {}).get("structured") or {}).get("block_type"),
+            "template_blocks": _clean_value(((matrix_dag_result or {}).get("structured") or {}).get("blocks") or {}),
+            "template_block_nodes": {
+                "retained_order": (matrix_dag_result or {}).get("external_nodes") or profile_set.super_node_order,
+                "internal_order": (matrix_dag_result or {}).get("effective_internal_nodes") or [],
+            },
+            "retained_layout_profiles": (matrix_dag_result or {}).get("retained_layout_profiles") or [],
             "finalization_profiles": [
                 {
                     "profile_id": profile.profile_id,
@@ -2656,10 +3726,11 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
                     "super_node_order": list(profile.super_node_order),
                     "final_node_order": list(profile.final_node_order),
                     "dummy_nodes": list(profile.dummy_nodes),
+                    "isolated_dummy_nodes": list(getattr(profile, "isolated_dummy_nodes", ())),
                     "final_dimension": profile.final_dimension,
                     "node_roles": dict(profile.node_roles),
                 }
-                for profile in profile_set.case_profiles
+                for profile in profile_set.unique_profiles
             ],
             "template_summary": {
                 "super_nodes": profile_set.super_node_order,
@@ -2667,33 +3738,136 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
                 "NR_FINAL_MAX": max((item["final"].G.rows for item in final_results), default=0),
                 "profile_dimensions": [item["final"].G.rows for item in final_results],
             },
-            "c_draft": _build_dummy_finalized_multi_case_c_draft(
-                case_id_symbol,
-                profile_set,
-                final_results,
-                aliases=aliases,
-                profiles=profiles,
-                branch_ids=branch_ids,
-            ),
+            "c_draft": c_draft,
         },
     }
 
 
+_MULTICASE_TIMING_KEYS = (
+    "parse_payload",
+    "build_global_local_case_map",
+    "classify_node_roles",
+    "build_effective_aliases",
+    "build_assembled_entry_aliases",
+    "assemble_super_matrices",
+    "partition_blocks",
+    "build_inverse_dag",
+    "build_shared_reduced_dag",
+    "build_recovery_profiles",
+    "build_finalization_profiles",
+    "build_conditional_gvalues",
+    "generate_c_text",
+    "optional_validation",
+    "alias_template_pipeline",
+    "symbol_mux_pipeline",
+    "dummy_finalization_pipeline",
+    "per_case_fallback_pipeline",
+)
+
+
+def _attach_multicase_diagnostics(
+    response: dict,
+    started: float,
+    dummy_role_classification: dict,
+    timing_ms: dict[str, float] | None = None,
+) -> dict:
+    multi = response.get("multi_case") or {}
+    aliases = multi.get("aliases") or {}
+    c_draft = str(multi.get("c_draft") or "")
+    effective_internal = list(multi.get("effective_internal_nodes") or [])
+    final_profiles = multi.get("finalization_profiles") or []
+    retained_layout_profiles = multi.get("retained_layout_profiles") or []
+    recovery_profiles = multi.get("recovery_profiles") or []
+    dummy_blocks = multi.get("dummy_node_blocks") or {}
+    common_dummy_internal = list(dummy_role_classification.get("mixed_physical_dummy_internal") or [])
+    timing = {key: 0.0 for key in _MULTICASE_TIMING_KEYS}
+    if timing_ms:
+        timing.update({key: round(float(value), 3) for key, value in timing_ms.items()})
+    timing["total"] = round((time.perf_counter() - started) * 1000, 3)
+    diagnostics = {
+        "timing_ms": timing,
+        "global_case_count": int(multi.get("profile_count") or len(response.get("case_profiles") or [])),
+        "local_case_group_count": len({
+            str(branch_id)
+            for profile in (response.get("case_profiles") or [])
+            for branch_id in (profile.get("case_map") or {})
+        }),
+        "alias_count": len(aliases),
+        "assembled_entry_alias_count": len([
+            info for info in aliases.values()
+            if str(info.get("source") or "").startswith("assembled")
+            or str(info.get("branch_id") or "").startswith("assembled")
+        ]),
+        "common_retained_count": len(multi.get("external_nodes") or []),
+        "common_internal_count": len(effective_internal),
+        "isolated_dummy_internal_count": len(common_dummy_internal),
+        "mixed_physical_dummy_internal": common_dummy_internal,
+        "unsupported_role_mix": list(dummy_role_classification.get("unsupported_role_mix") or []),
+        "unique_finalization_profile_count": len({tuple(item.get("final_node_order") or []) for item in final_profiles}),
+        "unique_recovery_profile_count": len(recovery_profiles),
+        "shared_inverse_codegen_count": 1 if effective_internal else 0,
+        "per_case_inverse_codegen_count": 0,
+        "per_case_full_reduction_count": 0 if multi.get("fast_path") in {
+            "case_alias_template",
+            "case_alias_template_symbol_mux",
+            "dummy_finalization_alias_template_matrix_dag",
+        } else int(multi.get("profile_count") or 0),
+        "per_case_final_substitution_count": 0 if multi.get("fast_path") == "case_alias_template" else None,
+        "expanded_scalar_ccode_count": 0 if multi.get("fast_path") in {
+            "case_alias_template",
+            "case_alias_template_symbol_mux",
+            "dummy_finalization_alias_template_matrix_dag",
+        } else None,
+        "dummy_finalization_profile_count": len(final_profiles),
+        "retained_layout_profile_count": len(retained_layout_profiles),
+        "retained_profile_dimensions": [int(item.get("nr_active") or 0) for item in retained_layout_profiles],
+        "super_then_slice_runtime_calculations": 0 if retained_layout_profiles else None,
+        "dummy_node_block_count": int(dummy_blocks.get("count") or 0) if isinstance(dummy_blocks, dict) else 0,
+        "c_output_length": len(c_draft),
+    }
+    multi["diagnostics"] = diagnostics
+    response["multi_case"] = multi
+    return response
+
+
 def build_multi_case_response(payload: dict) -> dict:
+    started = time.perf_counter()
+    timing_ms: dict[str, float] = {"parse_payload": 0.0}
+
+    def time_call(name: str, fn, *args, **kwargs):
+        phase_started = time.perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            timing_ms[name] = timing_ms.get(name, 0.0) + (time.perf_counter() - phase_started) * 1000
+
     profiles = payload.get("case_profiles") or []
     if not profiles:
         raise ValueError("case_profiles is required for multi-case C export")
-    if _profiles_have_dummy_finalization(profiles):
-        return _build_dummy_finalized_multi_case_response(payload)
-    alias_response = _try_build_alias_template_response(payload)
+    profiles, dummy_role_classification = time_call(
+        "classify_node_roles",
+        _promote_common_isolated_dummy_internal_profiles,
+        profiles,
+        payload,
+    )
+    payload = {**payload, "case_profiles": profiles}
+    has_dummy_finalization = time_call("build_finalization_profiles", _profiles_have_dummy_finalization, profiles)
+    if has_dummy_finalization:
+        response = time_call("dummy_finalization_pipeline", _build_dummy_finalized_multi_case_response, payload)
+        return _attach_multicase_diagnostics(response, started, dummy_role_classification, timing_ms)
+    dummy_node_block_analysis = time_call("build_recovery_profiles", _dummy_node_block_analysis, profiles)
+    if dummy_node_block_analysis:
+        payload = {**payload, "_dummy_node_block_analysis": dummy_node_block_analysis}
+    alias_response = time_call("alias_template_pipeline", _try_build_alias_template_response, payload)
     if alias_response is not None:
-        return alias_response
-    fast_response = _try_build_payload_symbol_mux_response(payload)
+        return _attach_multicase_diagnostics(alias_response, started, dummy_role_classification, timing_ms)
+    fast_response = time_call("symbol_mux_pipeline", _try_build_payload_symbol_mux_response, payload)
     if fast_response is not None:
-        return fast_response
+        return _attach_multicase_diagnostics(fast_response, started, dummy_role_classification, timing_ms)
     profile_results: list[dict] = []
     signature: dict | None = None
     warnings: list[str] = []
+    fallback_started = time.perf_counter()
     for index, profile in enumerate(profiles):
         case_payload = profile.get("payload")
         if not isinstance(case_payload, dict):
@@ -2716,9 +3890,10 @@ def build_multi_case_response(payload: dict) -> dict:
             )
         warnings.extend(result.get("warnings") or [])
         profile_results.append({"profile": profile, "result": result})
+    timing_ms["per_case_fallback_pipeline"] = (time.perf_counter() - fallback_started) * 1000
 
     case_id_symbol = str(payload.get("case_id_symbol") or "case_id")
-    return {
+    response = {
         "ok": True,
         "mode": "multi_case_c_export",
         "case_id_symbol": case_id_symbol,
@@ -2737,6 +3912,7 @@ def build_multi_case_response(payload: dict) -> dict:
             "c_draft": _build_multi_case_c_draft(case_id_symbol, profile_results),
         },
     }
+    return _attach_multicase_diagnostics(response, started, dummy_role_classification, timing_ms)
 
 
 def main() -> None:

@@ -27,6 +27,7 @@ class FinalizationProfile:
     final_node_order: list[str]
     dummy_nodes: list[str]
     dummy_leaf_specs: tuple[DummyLeaf, ...]
+    isolated_dummy_nodes: tuple[str, ...]
     final_dimension: int
     node_roles: dict[str, str]
 
@@ -47,12 +48,22 @@ def _dummy_leaf_from_payload(item: dict) -> DummyLeaf:
     )
 
 
-def _profile_signature(final_nodes: Sequence[str], leaves: Sequence[DummyLeaf]) -> tuple:
+def _isolated_dummy_nodes_from_payload(payload: dict) -> tuple[str, ...]:
+    nodes: list[str] = []
+    for block in payload.get("dummy_node_blocks") or []:
+        for item in block.get("dummy_nodes") or []:
+            node = item.get("node_id") or item.get("node") or item.get("display_name")
+            if node is not None:
+                nodes.append(str(node))
+    return tuple(dict.fromkeys(nodes))
+
+
+def _profile_signature(final_nodes: Sequence[str], leaves: Sequence[DummyLeaf], isolated_nodes: Sequence[str] = ()) -> tuple:
     leaf_sig = tuple(
         (leaf.dummy_node, leaf.anchor_node, leaf.branch_id, str(sp.sympify(leaf.conductance)))
         for leaf in leaves
     )
-    return tuple(final_nodes), leaf_sig
+    return tuple(final_nodes), leaf_sig, tuple(isolated_nodes)
 
 
 def _contains_node_reference(value, node: str) -> bool:
@@ -88,6 +99,24 @@ def _validate_dummy_metadata_context(profile: dict, leaves: Sequence[DummyLeaf],
                 raise ValueError(f"{prefix}: dummy node {leaf.dummy_node} cannot appear in {field}")
 
 
+def _validate_isolated_dummy_context(profile: dict, isolated_nodes: Sequence[str], super_nodes: Sequence[str]) -> None:
+    payload = profile.get("payload") or {}
+    case_name = str(profile.get("name") or "case profile")
+    internal_nodes = {str(node) for node in (payload.get("internal_nodes") or [])}
+    recovery_nodes = {str(node) for node in (payload.get("effective_internal_nodes") or payload.get("physical_recovery_nodes") or [])}
+    for node in isolated_nodes:
+        prefix = f"{case_name} / N-Dummy {node}"
+        if node not in super_nodes:
+            raise ValueError(f"{prefix}: isolated dummy node is not in super nodes")
+        if node in internal_nodes:
+            raise ValueError(f"{prefix}: isolated dummy node must stay in the super retained template")
+        if node in recovery_nodes:
+            raise ValueError(f"{prefix}: isolated dummy node cannot be a physical recovery node")
+        for field in _DUMMY_FORBIDDEN_NODE_REFERENCE_FIELDS:
+            if _contains_node_reference(payload.get(field), node):
+                raise ValueError(f"{prefix}: isolated dummy node cannot appear in {field}")
+
+
 def build_finalization_profiles(profiles: Sequence[dict]) -> FinalizationProfileSet:
     if not profiles:
         raise ValueError("case profiles are required")
@@ -112,7 +141,12 @@ def build_finalization_profiles(profiles: Sequence[dict]) -> FinalizationProfile
         dummy_payload = profile.get("dummy_finalization") or {}
         leaves = tuple(_dummy_leaf_from_payload(item) for item in (dummy_payload.get("dummy_leaves") or []))
         _validate_dummy_metadata_context(profile, leaves, super_nodes)
+        isolated_nodes = _isolated_dummy_nodes_from_payload(payload) if payload.get("defer_dummy_node_blocks") else ()
+        _validate_isolated_dummy_context(profile, isolated_nodes, super_nodes)
         dummy_nodes = [leaf.dummy_node for leaf in leaves]
+        for node in isolated_nodes:
+            if node not in dummy_nodes:
+                dummy_nodes.append(node)
         dummy_set = set(dummy_nodes)
         for leaf in leaves:
             if leaf.dummy_node not in super_nodes:
@@ -127,7 +161,7 @@ def build_finalization_profiles(profiles: Sequence[dict]) -> FinalizationProfile
             node: ("dummy_final" if node in dummy_set else "retained_physical")
             for node in super_nodes
         }
-        signature = _profile_signature(final_nodes, leaves)
+        signature = _profile_signature(final_nodes, leaves, isolated_nodes)
         case_signatures.append(signature)
         if signature in unique_by_signature:
             base = unique_by_signature[signature]
@@ -138,6 +172,7 @@ def build_finalization_profiles(profiles: Sequence[dict]) -> FinalizationProfile
                 final_node_order=base.final_node_order,
                 dummy_nodes=base.dummy_nodes,
                 dummy_leaf_specs=base.dummy_leaf_specs,
+                isolated_dummy_nodes=base.isolated_dummy_nodes,
                 final_dimension=base.final_dimension,
                 node_roles=base.node_roles,
             )
@@ -152,6 +187,7 @@ def build_finalization_profiles(profiles: Sequence[dict]) -> FinalizationProfile
             final_node_order=final_nodes,
             dummy_nodes=dummy_nodes,
             dummy_leaf_specs=leaves,
+            isolated_dummy_nodes=tuple(isolated_nodes),
             final_dimension=len(final_nodes),
             node_roles=node_roles,
         )
@@ -171,15 +207,27 @@ def finalize_profile_result(
     super_node_order: Sequence[str],
     profile: FinalizationProfile,
 ) -> DummyFinalizationResult:
-    if not profile.dummy_leaf_specs:
-        return DummyFinalizationResult(
-            G=sp.Matrix(G_super_red),
-            Ihis=sp.Matrix(Ihis_super_red),
-            nodes=[str(node) for node in super_node_order],
+    current_nodes = [str(node) for node in super_node_order]
+    current_G = sp.Matrix(G_super_red)
+    current_Ihis = sp.Matrix(Ihis_super_red)
+    if profile.dummy_leaf_specs:
+        leaf_result = finalize_dummy_leaves(
+            current_G,
+            current_Ihis,
+            current_nodes,
+            profile.dummy_leaf_specs,
         )
-    return finalize_dummy_leaves(
-        sp.Matrix(G_super_red),
-        sp.Matrix(Ihis_super_red),
-        [str(node) for node in super_node_order],
-        profile.dummy_leaf_specs,
+        current_G = sp.Matrix(leaf_result.G)
+        current_Ihis = sp.Matrix(leaf_result.Ihis)
+        current_nodes = list(leaf_result.nodes)
+    if profile.isolated_dummy_nodes:
+        drop = set(profile.isolated_dummy_nodes)
+        keep = [index for index, node in enumerate(current_nodes) if node not in drop]
+        current_G = current_G.extract(keep, keep)
+        current_Ihis = current_Ihis.extract(keep, [0])
+        current_nodes = [current_nodes[index] for index in keep]
+    return DummyFinalizationResult(
+        G=current_G,
+        Ihis=current_Ihis,
+        nodes=current_nodes,
     )

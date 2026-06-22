@@ -65,15 +65,43 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         result_source = source[start:end]
 
         self.assertIn("Effective Aliases / Owners", result_source)
-        self.assertIn("Template Reduction Summary", result_source)
         self.assertIn("case full value", result_source)
-        self.assertIn("codegen_mode", result_source)
-        self.assertIn("Topology validation", result_source)
         self.assertIn("按 case 条件启用的 GValue", result_source)
         self.assertIn("case_id is assumed fixed before simulation. Runtime case switching is not supported.", result_source)
         self.assertIn("启用条件", result_source)
         self.assertIn("gvalue_conditions", result_source)
         self.assertIn("uses_case_conditional_gvalue", result_source)
+        self.assertNotIn("Template Reduction Summary", result_source)
+        self.assertNotIn("Topology validation", result_source)
+
+    def test_multi_case_export_shows_template_visualization(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("function multiCaseCompactedEntryDefinitions")
+        end = source.index("function renderMultiCaseCExportResult")
+        visualization_source = source[start:end]
+
+        self.assertIn("Multi-Case Template Visualization", visualization_source)
+        self.assertIn("case-resolved aliases", visualization_source)
+        self.assertIn("Compacted entry definitions", visualization_source)
+        self.assertIn("template_blocks", visualization_source)
+        self.assertIn("Grr", visualization_source)
+        self.assertIn("Grk", visualization_source)
+        self.assertIn("Gkr", visualization_source)
+        self.assertIn("Gkk", visualization_source)
+        self.assertIn("renderMultiCaseBlockMatrix", visualization_source)
+        self.assertNotIn("renderMultiCaseAliasDefinitionLines", visualization_source)
+
+    def test_multi_case_display_filters_dependency_category_c_comments(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("function displayedMultiCaseCDraft")
+        end = source.index("function renderMultiCaseCExportResult")
+        filter_source = source[start:end]
+
+        self.assertIn("no dependency category", filter_source)
+        self.assertIn("displayedMultiCaseCDraft(result.multi_case?.c_draft)", source)
+        self.assertNotIn('escapeHtml(result.multi_case?.c_draft || "")', source)
 
     def test_optimized_direct_retained_matrices_render_with_tagged_sources(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -192,7 +220,9 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn('"拖动排序": "Drag to reorder"', source)
         self.assertIn('"切换外部/内部节点": "Toggle external/internal node"', source)
         self.assertIn('button.title = tr(active ? "退出全屏" : "全屏");', source)
-        self.assertIn('escapeHtml(tr("切换外部/内部节点"))', source)
+        self.assertIn('const rowInternalButtonTitle = group =>', source)
+        self.assertIn('return tr("切换外部/内部节点");', source)
+        self.assertIn('title="${escapeHtml(rowInternalButtonTitle(group))}"', source)
         self.assertIn('optText(`重命名 ${rowName(group)}`', source)
 
     def test_editor_group_titles_and_pack_alerts_are_language_aware(self):
@@ -277,6 +307,16 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("data-package-case-overlay-action=\"finish\"", source)
         self.assertIn("renderPackageCaseEditOverlay();", source)
 
+    def test_packaged_network_case_name_is_independently_editable(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('"Pack 工况名称": "Pack Case Name"', source)
+        self.assertIn('editableField("Pack 工况名称", "packageNetworkCaseName"', source)
+        self.assertIn('if (field === "packageNetworkCaseName")', source)
+        self.assertIn("pkg.networkCases[index].name = name;", source)
+        self.assertIn("branch.switchCases[index].name = name;", source)
+        self.assertIn('if (field === "packageNetworkCaseName") return', source)
+
     def test_dummy_dimension_branch_is_pack_edit_only_and_fixed(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
@@ -292,6 +332,68 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("dummyAdjusted.reductionPayload", source)
         self.assertIn("dummyAdjusted.finalSubsystem", source)
         self.assertIn("dummyAdjusted.trimmedResult", source)
+
+    def test_dummy_node_block_is_pack_edit_only_and_forwarded_to_multicase(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('"新增 N-Dummy 节点块": "Add N-Dummy Node Block"', source)
+        self.assertIn("dummy_node_block", source)
+        self.assertIn("function createDummyNodeBlock", source)
+        self.assertIn("function createDummyNodeBlock(x = state.viewCenter.x, y = state.viewCenter.y, count = 1)", source)
+        self.assertIn("N-Dummy 节点块只能在 Pack 工况编辑中新增。", source)
+        self.assertNotIn("window.prompt(tr(\"N-Dummy 节点数量\")", source)
+        self.assertIn("data-package-case-overlay-action=\"dummyNodeBlock\"", source)
+        self.assertIn("function dummyNodeBlocksForPackCase", source)
+        self.assertIn("function dummyNodeBlockPayloadForCase", source)
+        self.assertIn("dummy_node_blocks", source)
+        self.assertIn("isolated_dummy_internal", source)
+        self.assertIn("Forced elimination", source)
+        self.assertIn("Voltage recovery: No", source)
+
+    def test_dummy_node_block_keeps_canvas_port_role_until_reduced_payload(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function dummyNodeBlocksForReducedPayload", source)
+        self.assertIn("payload.dummy_node_blocks = dummyNodeBlocks", source)
+        self.assertNotIn("internal: isolatedDummyInternal || state.internalNodes.includes(globalNet)", source)
+        self.assertNotIn("isolatedDummyIds.has(group.id) || group.virtualInternal || state.internalNodes.includes(group.id)", source)
+        self.assertIn("const rowInternal = group => !rowGround(group) && !dummyProtectedIds.has(group.id) && (group.virtualInternal || state.internalNodes.includes(group.id));", source)
+
+    def test_dummy_node_block_never_generates_branch_current_observer(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('if (branch.kind === "dummy_node_block") return "";', source)
+        self.assertIn('if (branch.kind === "dummy_node_block") return [];', source)
+        self.assertIn('if (inner.kind === "dummy_node_block") return [];', source)
+
+    def test_packaged_dummy_node_block_g_constant_property_is_locked(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('function isFixedDummyGElement(branch)', source)
+        self.assertIn('if (isFixedDummyGElement(inner)) return false;', source)
+        self.assertIn('if (isFixedDummyGElement(inner)) {', source)
+        self.assertIn('inner.gIsConstant = true;', source)
+        self.assertIn('inner.constantGSymbols = "G_EPSILON";', source)
+
+    def test_packaged_n_dummy_ports_are_marked_and_payload_uses_current_groups(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('...dummyNodeBlocksForPackCase(sourceBranches).flatMap(item => terminalSides(item).map(side => terminalKey(item.id, side)))', source)
+        self.assertIn('const derivedBlocks = dummyNodeBlockPayloadForCase(sourceBranches, groups);', source)
+        self.assertIn('const sourceBranchId = block.source_branch_id || block.sourceBranchId || block.block_id || "";', source)
+        self.assertIn('const match = groupRefs.find(item => item.group.id === node.node_id)', source)
+        self.assertIn('display_name: nodeDisplayName(payloadNode) || group.display || node.display_name || payloadNode', source)
+        self.assertIn('dummyProtectedIds.has(group.id) || groupHasDummyTerminal(group)', source)
+
+    def test_pack_case_edit_restores_canvas_collection_after_save_or_cancel(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("returnCanvases: structuredClone(state.canvases)", source)
+        self.assertIn("returnActiveCanvasId: state.activeCanvasId", source)
+        self.assertIn("restorePackageCaseEditOuterCanvas(edit);", source)
+        self.assertIn("function restorePackageCaseEditOuterCanvas(edit)", source)
+        self.assertIn("state.canvases = structuredClone(edit.returnCanvases || state.canvases);", source)
+        self.assertIn("saveActiveCanvas();", source)
 
     def test_dummy_pack_case_preserves_super_stamp_and_separate_final_result(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -318,7 +420,8 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("function packagedDummyPortSides", source)
         self.assertIn("function packagedDummyAnchorPortSides", source)
         self.assertIn("function isPackagedDummyTerminal", source)
-        self.assertIn("return Boolean(branch && (isDummyTerminal(branch, parsed.side) || isPackagedDummyTerminal(branch, parsed.side)));", source)
+        self.assertIn("function isDummyNodeBlockTerminal", source)
+        self.assertIn("isDummyTerminal(branch, parsed.side) || isDummyNodeBlockTerminal(branch, parsed.side) || isPackagedDummyTerminal(branch, parsed.side)", source)
         self.assertIn("function dummyNetIds", source)
         self.assertIn("dummyNetIds().has(id)", source)
         self.assertIn("packagedDummyPortSides(branch).has(side)", source)
@@ -335,7 +438,9 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("const protectedIds = dummyProtectedNetIds();", source)
         self.assertIn("const dummyProtectedIds = dummyProtectedNetIds();", source)
         self.assertIn("!dummyProtectedIds.has(group.id)", source)
-        self.assertIn("dummyProtectedIds.has(group.id) ? \"disabled\" :", source)
+        self.assertIn("const rowInternalButtonAttr = group =>", source)
+        self.assertIn("dummyProtectedIds.has(group.id)) return \"disabled\";", source)
+        self.assertIn("rowInternalButtonAttr(group)", source)
         self.assertIn("dummyProtectedNetIds().has(id)", source)
 
     def test_pack_case_edit_overlay_shows_required_external_ports(self):
@@ -343,8 +448,12 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
 
         self.assertIn("function packageCasePortRows", source)
         self.assertIn("function packageCasePortMismatchMessage", source)
-        self.assertIn("Pack 外部端口必须保持", source)
-        self.assertIn("Required Pack external ports", source)
+        self.assertIn("Pack 外部节点必须保持", source)
+        self.assertIn("Required Pack external nodes", source)
+        self.assertIn("const netId = String(group.globalNet || group.id || `N${index + 1}`).trim() || `N${index + 1}`;", source)
+        self.assertIn("return `${netId}. ${name}`;", source)
+        self.assertNotIn("return `${index + 1}. ${name}`;", source)
+        self.assertNotIn("return `${index + 1}. ${name} -> ${port}`;", source)
         self.assertIn("Expected:", source)
         self.assertIn("Current:", source)
         self.assertIn("packageCasePortRows(shell.packageOriginal?.externalGroups || [])", source)
@@ -370,6 +479,14 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("normalizeSwitchCases(branch);", eligible_source)
         self.assertIn("branch.switchCases.length > 1", eligible_source)
 
+    def test_pack_case_edit_preserves_saved_node_order(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("nodeOrder: structuredClone(pkg.nodeOrder || [])", source)
+        self.assertIn("pkg.nodeOrder = structuredClone(active.nodeOrder || [])", source)
+        self.assertIn("nodeOrder: structuredClone(currentNodeOrder())", source)
+        self.assertIn("state.nodeOrder = structuredClone(caseData.nodeOrder || [])", source)
+
     def test_packaged_dummy_metadata_is_forwarded_to_multicase_export(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
@@ -388,6 +505,28 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("const dummy_finalization = dummyFinalizationForCaseProfile(activeDummyFinalizationProfile(), payload);", source)
         self.assertIn("function activeDummyFinalizationProfile()", source)
         self.assertIn("dummy_finalization: payload.dummy_finalization", source)
+
+    def test_optimized_dummy_pruning_notice_is_localized(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("function renderOptimizedWarningBox")
+        end = source.index("function localizedBackendWarning")
+        warning_source = source[start:end]
+
+        self.assertIn("dropped_before_schur", warning_source)
+        self.assertIn("N-Dummy isolated nodes were validated and pruned before Schur reduction / C export", warning_source)
+        self.assertIn("N-Dummy 孤立节点已验证，并在 Schur 消元 / C 导出前裁掉", warning_source)
+
+        block_start = source.index("function renderFormulaModeActualBlock")
+        block_end = source.index("function renderStructuredFormulaSummary")
+        block_source = source[block_start:block_end]
+        self.assertIn("dummy-pruned-cell", block_source)
+        self.assertIn("renderDummyPrunedNotice(result, displayNames)", block_source)
+        self.assertIn("这些 N-Dummy 行/列只用于验证原始矩阵", source)
+        self.assertIn("These N-Dummy rows/columns are shown for source-matrix validation", source)
+
+        self.assertIn(".actual-block-cell.dummy-pruned-cell", source)
+        self.assertIn(".actual-block-dummy-pruned-notice", source)
 
     def test_right_panel_has_resizable_width_controls(self):
         source = Path("index.html").read_text(encoding="utf-8")
