@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Sequence
 
 import sympy as sp
@@ -39,12 +40,42 @@ class FinalizationProfileSet:
     unique_profiles: list[FinalizationProfile]
 
 
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
+_SYMPY_FUNCTIONS = {
+    "Abs",
+    "acos",
+    "asin",
+    "atan",
+    "cos",
+    "cosh",
+    "exp",
+    "log",
+    "sin",
+    "sinh",
+    "sqrt",
+    "tan",
+    "tanh",
+}
+
+
+def _parse_expr(text: object) -> sp.Expr:
+    cleaned = str(text or "0").strip()
+    if not cleaned:
+        return sp.Integer(0)
+    locals_map = {
+        name: sp.Symbol(name)
+        for name in set(_IDENTIFIER_RE.findall(cleaned))
+        if name not in _SYMPY_FUNCTIONS
+    }
+    return sp.sympify(cleaned, locals=locals_map)
+
+
 def _dummy_leaf_from_payload(item: dict) -> DummyLeaf:
     return DummyLeaf(
         dummy_node=str(item["dummy_node"]),
         anchor_node=str(item["anchor_node"]),
         branch_id=str(item.get("branch_id") or item.get("id") or "DummyBranch"),
-        conductance=sp.sympify(str(item.get("conductance") or "0")),
+        conductance=_parse_expr(item.get("conductance") or "0"),
     )
 
 

@@ -1,12 +1,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Sequence
 
 import sympy as sp
 
 
 G_EPSILON = sp.Symbol("G_EPSILON")
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
+_SYMPY_FUNCTIONS = {
+    "Abs",
+    "acos",
+    "asin",
+    "atan",
+    "cos",
+    "cosh",
+    "exp",
+    "log",
+    "sin",
+    "sinh",
+    "sqrt",
+    "tan",
+    "tanh",
+}
+
+
+def _parse_expr(text: object) -> sp.Expr:
+    cleaned = str(text or "0").strip()
+    if not cleaned:
+        return sp.Integer(0)
+    locals_map = {
+        name: sp.Symbol(name)
+        for name in set(_IDENTIFIER_RE.findall(cleaned))
+        if name not in _SYMPY_FUNCTIONS
+    }
+    return sp.sympify(cleaned, locals=locals_map)
 
 
 @dataclass(frozen=True)
@@ -32,7 +61,7 @@ def dummy_node_block_from_payload(item: dict) -> DummyNodeBlock:
             str((node.get("node_id") or node.get("display_name") or node.get("name")) if isinstance(node, dict) else node)
             for node in nodes
         ),
-        fixed_conductance=sp.sympify(str(item.get("fixed_conductance") or "G_EPSILON")),
+        fixed_conductance=_parse_expr(item.get("fixed_conductance") or "G_EPSILON"),
     )
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import sympy as sp
 
 from elimination import eliminate_internal_nodes
+import optimized_elimination_api as optimized_api
 from optimized_elimination_api import (
     build_multi_case_response,
     _alias_assignment_lines,
@@ -100,6 +101,30 @@ def _request(profiles: list[dict], *, deps: dict | None = None, case_id: str = "
 
 
 class MultiCaseAliasTemplateTests(unittest.TestCase):
+    def test_cc_named_user_symbol_is_not_parsed_as_sympy_complex_field(self):
+        matrix = optimized_api._matrix_from_clean([["AA + CC", "BB + CC"]])
+        self.assertEqual(matrix[0, 0], sp.Symbol("AA") + sp.Symbol("CC"))
+        self.assertEqual(matrix[0, 1], sp.Symbol("BB") + sp.Symbol("CC"))
+
+    def test_direct_retained_stamp_cc_symbol_can_accumulate(self):
+        payload = {
+            "direct_retained_stamps": [
+                {
+                    "id": "box",
+                    "support_nodes": ["A", "B"],
+                    "G": [
+                        {"row": "A", "col": "A", "expr": "AA + CC"},
+                        {"row": "A", "col": "A", "expr": "BB"},
+                    ],
+                    "Ihis": [{"row": "A", "expr": "Ihis_CC"}],
+                }
+            ]
+        }
+        G, Ihis, accepted = optimized_api._direct_retained_matrices(payload, ["A", "B"], ["A", "B"])
+        self.assertEqual(accepted[0]["id"], "box")
+        self.assertEqual(G[0, 0], sp.Symbol("AA") + sp.Symbol("BB") + sp.Symbol("CC"))
+        self.assertEqual(Ihis[0, 0], sp.Symbol("Ihis_CC"))
+
     def test_single_branch_two_cases_use_full_value_effective_alias(self):
         response = build_multi_case_response(
             _request(

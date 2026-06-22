@@ -276,7 +276,7 @@ def _direct_retained_matrices(
             expr_text = entry.get("tagged") if tagged and entry.get("tagged") is not None else entry.get("expr")
             if expr_text is None:
                 continue
-            G_direct[row, col] += sp.sympify(str(expr_text))
+            G_direct[row, col] += _parse_expr(str(expr_text))
         for entry in stamp.get("Ihis") or []:
             row = node_index.get(entry.get("row"))
             if row is None:
@@ -284,7 +284,7 @@ def _direct_retained_matrices(
             expr_text = entry.get("tagged") if tagged and entry.get("tagged") is not None else entry.get("expr")
             if expr_text is None:
                 continue
-            Ihis_direct[row, 0] += sp.sympify(str(expr_text))
+            Ihis_direct[row, 0] += _parse_expr(str(expr_text))
     return G_direct, Ihis_direct, accepted
 
 
@@ -792,8 +792,8 @@ def _matrix_from_clean(value: object) -> sp.Matrix:
     if value is None:
         return sp.zeros(0, 0)
     if isinstance(value, list) and value and not isinstance(value[0], list):
-        return sp.Matrix([[sp.sympify(str(item))] for item in value])
-    return sp.Matrix([[sp.sympify(str(item)) for item in row] for row in (value or [])])
+        return sp.Matrix([[_parse_expr(str(item))] for item in value])
+    return sp.Matrix([[_parse_expr(str(item)) for item in row] for row in (value or [])])
 
 
 def _result_matrix(result: dict, key: str) -> sp.Matrix:
