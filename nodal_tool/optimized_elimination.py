@@ -2328,6 +2328,7 @@ def _c_emit_rtds_reduction_tail(
 
 def _join_c_draft_lines(lines: Sequence[str]) -> str:
     draft = "\n".join(lines)
+    draft = _ensure_static_blank_line(draft)
     include_lines: list[str] = []
     if "MATRIX_" in draft and "#include <matrixLIB.h>" not in draft:
         include_lines.append("#include <matrixLIB.h>")
@@ -2339,6 +2340,10 @@ def _join_c_draft_lines(lines: Sequence[str]) -> str:
     if include_lines:
         return "\n".join(include_lines) + "\n" + draft
     return draft
+
+
+def _ensure_static_blank_line(draft: str) -> str:
+    return re.sub(r"(?m)^STATIC:\n(?!\n)", "STATIC:\n\n", draft)
 
 
 def c_draft_for_structured_formula(

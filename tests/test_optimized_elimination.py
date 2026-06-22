@@ -174,6 +174,7 @@ class OptimizedEliminationTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
+        self.assertIn("STATIC:\n\n", draft)
         self.assertIn("RAM_PASS1:\n    int err = 0;", draft)
         self.assertNotIn("STATIC:\n    int err", draft)
 
@@ -212,6 +213,7 @@ class OptimizedEliminationTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
+        self.assertIn("STATIC:\n\n", draft)
         self.assertIn("RAM_PASS1:\n    int err = 0;", draft)
         self.assertNotIn("STATIC:\n    int err", draft)
 

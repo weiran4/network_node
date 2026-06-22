@@ -124,6 +124,10 @@ def _ccode(expr: object) -> str:
     return re.sub(r"(?<![eE][+-])(?<![\w.])(\d+)(?![\w.])", r"\1.0", code)
 
 
+def _ensure_static_blank_line(draft: str) -> str:
+    return re.sub(r"(?m)^STATIC:\n(?!\n)", "STATIC:\n\n", draft)
+
+
 def _reorder_rows(matrix: sp.Matrix, source_nodes: list[str], target_nodes: list[str]) -> sp.Matrix:
     matrix = sp.Matrix(matrix)
     if not target_nodes:
@@ -507,6 +511,7 @@ def build_optimized_response(payload: dict) -> dict:
             "T1_T2:\n    /* DummyNodeBlock isolated internal nodes are not recovered. */\n",
             1,
         )
+    c_draft = _ensure_static_blank_line(c_draft)
 
     return {
         "ok": True,
@@ -569,7 +574,7 @@ def build_optimized_response(payload: dict) -> dict:
                 if single_dummy_blocks
                 else {}
             ),
-            "c_draft": c_draft,
+            "c_draft": _ensure_static_blank_line(c_draft),
         },
     }
 
@@ -671,7 +676,7 @@ def _build_single_case_dummy_finalized_c_draft(item: dict) -> str:
         ])
     else:
         lines.append("    /* Dummy final nodes are removed from the solver dimension and are not recovered. */")
-    return "\n".join(lines)
+    return _ensure_static_blank_line("\n".join(lines))
 
 
 def _build_single_case_dummy_finalized_response(
@@ -1497,7 +1502,7 @@ def _try_build_payload_symbol_mux_response(payload: dict) -> dict | None:
             "effective_internal_nodes": result.get("effective_internal_nodes") or [],
             "block_type": (result.get("structured") or {}).get("block_type"),
             "profile_count": len(profiles),
-            "c_draft": draft,
+            "c_draft": _ensure_static_blank_line(draft),
             "fast_path": "payload_symbol_mux",
         },
     }
@@ -2687,7 +2692,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 ],
                 "Ihisred_shape": [len(result.get("external_nodes") or []), 1],
             },
-            "c_draft": draft,
+            "c_draft": _ensure_static_blank_line(draft),
             "fast_path": fast_path,
         },
     }
@@ -2696,7 +2701,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
 def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) -> str:
     scalar_mux = _try_build_scalar_mux_c_draft(profile_results)
     if scalar_mux:
-        return scalar_mux
+        return _ensure_static_blank_line(scalar_mux)
     base_result = profile_results[0]["result"]
     external_nodes = list(base_result.get("external_nodes") or [])
     internal_nodes = list(base_result.get("effective_internal_nodes") or [])
@@ -2837,7 +2842,7 @@ def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) 
             for index, node in enumerate(internal_nodes)
         ],
     ])
-    return "\n".join(lines)
+    return _ensure_static_blank_line("\n".join(lines))
 
 
 def _profiles_have_dummy_finalization(profiles: list[dict]) -> bool:
@@ -3376,7 +3381,7 @@ def _build_dummy_finalized_multi_case_c_draft(
         ])
     else:
         lines.append("    /* Dummy final nodes are removed from the solver dimension and are not recovered. */")
-    return "\n".join(lines)
+    return _ensure_static_blank_line("\n".join(lines))
 
 
 def _dummy_finalized_formula_cost(final_results: list[dict]) -> int:
@@ -3580,7 +3585,7 @@ def _build_dummy_finalized_matrix_dag_c_draft(
         **result,
         "retained_layout_profiles": retained_layout_profiles,
     }
-    return draft, gvalue_conditions, warnings, result
+    return _ensure_static_blank_line(draft), gvalue_conditions, warnings, result
 
 
 def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:

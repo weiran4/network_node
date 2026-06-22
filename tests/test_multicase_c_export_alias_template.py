@@ -138,6 +138,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
 
         draft = response["multi_case"]["c_draft"]
         self.assertEqual(response["multi_case"]["codegen_mode"], "case-agnostic alias template")
+        self.assertIn("STATIC:\n\n", draft)
         self.assertIn("cr_R1_G_eff", draft)
         self.assertIn("cr_R1_G_eff = X;", draft)
         self.assertIn("cr_R1_G_eff = X + Y;", draft)
