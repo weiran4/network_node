@@ -8673,6 +8673,14 @@
       }</span>`;
     }
 
+    function hasNonZeroMatrixValue(matrix) {
+      return (matrix || []).some(row => (row || []).some(value => String(value || "0") !== "0"));
+    }
+
+    function hasNonZeroVectorValue(vector) {
+      return (vector || []).some(value => String(value || "0") !== "0");
+    }
+
     function isZeroText(value) {
       return /^(?:0|0\.0+)$/.test(String(value ?? "").trim());
     }
@@ -9575,14 +9583,12 @@
 
     function renderStructuredFormulaSummary(result = null) {
       const direct = result?.structured?.direct_retained || {};
-      const hasMatrixValue = matrix => (matrix || []).some(row => (row || []).some(value => String(value || "0") !== "0"));
-      const hasVectorValue = vector => (vector || []).some(value => String(value || "0") !== "0");
-      const hasDirectG = hasMatrixValue(direct.Gred_direct);
-      const hasDirectGRam = hasMatrixValue(direct.Gred_direct_ram);
-      const hasDirectGCode = hasMatrixValue(direct.Gred_direct_code);
-      const hasDirectIhis = hasVectorValue(direct.Ihisred_direct);
-      const hasDirectIhisRam = hasVectorValue(direct.Ihisred_direct_ram);
-      const hasDirectIhisCode = hasVectorValue(direct.Ihisred_direct_code);
+      const hasDirectG = hasNonZeroMatrixValue(direct.Gred_direct);
+      const hasDirectGRam = hasNonZeroMatrixValue(direct.Gred_direct_ram);
+      const hasDirectGCode = hasNonZeroMatrixValue(direct.Gred_direct_code);
+      const hasDirectIhis = hasNonZeroVectorValue(direct.Ihisred_direct);
+      const hasDirectIhisRam = hasNonZeroVectorValue(direct.Ihisred_direct_ram);
+      const hasDirectIhisCode = hasNonZeroVectorValue(direct.Ihisred_direct_code);
       const directBlock = (hasDirectG || hasDirectIhis) ? `
         <div class="formula-line"><span class="formula-lhs">${formatMath("Gred_final")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Gred_schur + Gred_direct")}</span></div>
         <div class="formula-line"><span class="formula-lhs">${formatMath("Ihisred_final")}</span><span class="formula-eq">=</span><span class="formula-rhs">${formatMath("Ihisred_schur + Ihisred_direct")}</span></div>
@@ -9988,14 +9994,28 @@
 
     function renderMultiCaseTemplateVisualization(multiCase) {
       const blocks = multiCase.template_blocks || {};
+      const direct = multiCase.template_direct_retained || {};
       const blockNodes = multiCase.template_block_nodes || {};
       const retained = blockNodes.retained_order || (multiCase.template_summary || {}).retained_order || multiCase.external_nodes || [];
       const internal = blockNodes.internal_order || (multiCase.template_summary || {}).internal_order || multiCase.effective_internal_nodes || [];
+      const hasInternal = (internal || []).length > 0;
+      const hasDirectG = hasNonZeroMatrixValue(direct.Gred_direct);
+      const hasDirectGRam = hasNonZeroMatrixValue(direct.Gred_direct_ram);
+      const hasDirectGCode = hasNonZeroMatrixValue(direct.Gred_direct_code);
+      const hasDirectIhis = hasNonZeroVectorValue(direct.Ihisred_direct);
+      const directOnlyPath = !hasInternal && (hasDirectG || hasDirectGRam || hasDirectGCode || hasDirectIhis);
+      const directPreview = (hasDirectG || hasDirectGRam || hasDirectGCode || hasDirectIhis) ? `
+        <div class="actual-block-caption">${escapeHtml(optText("Direct-retained 预览", "Direct-retained preview"))}</div>
+        ${hasDirectG ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gdirect")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct, null, direct.Gred_direct_tagged)}</div>` : ""}
+        ${hasDirectGRam ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gdirect_RAM")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct_ram, null, direct.Gred_direct_ram_tagged)}</div>` : ""}
+        ${hasDirectGCode ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Gdirect_CODE")}</span><span class="formula-eq">=</span>${renderMatrix(direct.Gred_direct_code, null, direct.Gred_direct_code_tagged)}</div>` : ""}
+        ${hasDirectIhis ? `<div class="matrix-equation"><span class="formula-lhs">${formatMath("Ihisdirect")}</span><span class="formula-eq">=</span>${renderMatrix((direct.Ihisred_direct || []).map(value => [value]), null, (direct.Ihisred_direct_tagged || []).map(value => [value]))}</div>` : ""}
+      ` : "";
       const blockItems = [
-        ["Grr", "G_rr", "retained x retained"],
-        ["Grk", "G_ri", "retained x internal"],
-        ["Gkr", "G_ir", "internal x retained"],
-        ["Gkk", "G_ii", "internal x internal"],
+        ["Grr_core", "G_rr", "retained x retained"],
+        ["Grk_core", "G_ri", "retained x internal"],
+        ["Gkr_core", "G_ir", "internal x retained"],
+        ["Gkk_core", "G_ii", "internal x internal"],
       ].map(([label, key, shape]) => {
         const rows = blocks[key];
         const hasRows = Array.isArray(rows) && rows.length;
@@ -10013,22 +10033,89 @@
       }).join("");
       const hasAnyBlock = Object.values(blocks).some(rows => Array.isArray(rows) && rows.length);
       const nodeLine = `${optText("retained", "retained")}: ${(retained || []).join(", ") || "-"}; ${optText("internal", "internal")}: ${(internal || []).join(", ") || "-"}`;
+      const coreSplitSummary = "Grr_core, Grk_core / Gkr_core, Gkk_core";
+      const directSplitSummary = "Gdirect, 0 / 0, 0";
+      const coreSplitMatrix = [["Grr_core", "Grk_core"], ["Gkr_core", "Gkk_core"]];
+      const directSplitMatrix = [["Gdirect", "0"], ["0", "0"]];
+      const finalReducedExpr = "Grr_core - Grk_core*W*Gkr_core + Gdirect";
+      const flowHtml = directOnlyPath ? `
+        <div class="multi-case-template-flow">
+          <span>${escapeHtml(optText("case_id 解码", "case_id decode"))}</span>
+          <span>${escapeHtml(optText("case-resolved aliases", "case-resolved aliases"))}</span>
+          <span>Gdirect / Ihisdirect</span>
+          <span>Gred = Gdirect</span>
+          <span>Inj = Ihisdirect</span>
+        </div>
+      ` : `
+        <div class="multi-case-template-flow">
+          <span>${escapeHtml(optText("case_id 解码", "case_id decode"))}</span>
+          <span>${escapeHtml(optText("case-resolved aliases", "case-resolved aliases"))}</span>
+          <span>Grr_core / Grk_core / Gkr_core / Gkk_core</span>
+          <span>W = inv(Gkk)</span>
+          <span>Gred / Ihisred / Vk</span>
+        </div>
+      `;
+      const relationHtml = directOnlyPath ? `
+        <div class="actual-block-caption">${escapeHtml(optText("无内部节点 direct-only 路径", "No-internal-node direct-only path"))}</div>
+        <div class="formula-empty">${escapeHtml(optText(
+          "当前没有 internal 节点，也没有 Schur core/W/Gkk；retained-only 支路的 direct 矩阵就是最终约化结果。",
+          "There are no internal nodes and no Schur core/W/Gkk; the retained-only direct matrix is the final reduced result."
+        ))}</div>
+        <div class="matrix-equation">
+          <span class="formula-lhs">${formatMath("Gtotal")}</span>
+          <span class="formula-eq">=</span>
+          <span class="formula-rhs">${formatMath("Gdirect")}</span>
+        </div>
+        <div class="matrix-equation">
+          <span class="formula-lhs">${formatMath("Gred_final")}</span>
+          <span class="formula-eq">=</span>
+          <span class="formula-rhs">${formatMath("Gdirect")}</span>
+        </div>
+        <div class="matrix-equation">
+          <span class="formula-lhs">${formatMath("Ihisred_final")}</span>
+          <span class="formula-eq">=</span>
+          <span class="formula-rhs">${formatMath("Ihisdirect")}</span>
+        </div>
+      ` : `
+        <div class="actual-block-caption">${escapeHtml(optText("Schur core / direct-retained 分块关系", "Schur core / direct-retained block relation"))}</div>
+        <div class="formula-empty">
+          ${escapeHtml(optText("Schur core 块", "Schur core blocks"))}: ${escapeHtml(coreSplitSummary)}; ${escapeHtml(optText("direct-retained 块", "direct-retained block"))}: ${escapeHtml(directSplitSummary)}
+        </div>
+        <div class="matrix-equation">
+          <span class="formula-lhs">${formatMath("G_total")}</span>
+          <span class="formula-eq">=</span>
+          ${renderMatrix(coreSplitMatrix, 2)}
+          <span class="formula-eq">+</span>
+          ${renderMatrix(directSplitMatrix, 2)}
+        </div>
+        <div class="matrix-equation">
+          <span class="formula-lhs">${formatMath("Gfinal")}</span>
+          <span class="formula-eq">=</span>
+          <span class="formula-rhs">${formatMath(finalReducedExpr)}</span>
+        </div>
+        <div class="formula-empty">
+          ${formatMath("G_total = G_core + G_direct")}<br>
+          ${formatMath("Grr_core")} ${escapeHtml(optText(
+            "只包含参与 Schur 消元的 retained-retained core 块；retained-only 支路已剥离到 Gdirect，最终使用 Gfinal = Gschur + Gdirect。",
+            "contains only the retained-retained core block used by Schur reduction; retained-only branches are split into Gdirect, and the final assembly uses Gfinal = Gschur + Gdirect."
+          ))}
+        </div>
+      `;
+      const blockPreviewHtml = hasInternal ? `
+        <div class="actual-block-caption">${escapeHtml(optText("模板分块矩阵", "Template block matrices"))}</div>
+        ${hasAnyBlock ? `<div class="multi-case-template-grid">${blockItems}</div>` : `<div class="formula-empty">${escapeHtml(optText(
+          "当前后端结果没有返回模板分块预览；C 草稿仍按共享矩阵 DAG 生成。",
+          "The backend result did not return template block previews; the C draft is still generated from the shared matrix DAG."
+        ))}</div>`}
+      ` : "";
       return `
         <div class="formula-card">
           <div class="formula-name">${escapeHtml(optText("多Case 模板可视化", "Multi-Case Template Visualization"))}</div>
-          <div class="multi-case-template-flow">
-            <span>${escapeHtml(optText("case_id 解码", "case_id decode"))}</span>
-            <span>${escapeHtml(optText("case-resolved aliases", "case-resolved aliases"))}</span>
-            <span>Grr / Grk / Gkr / Gkk</span>
-            <span>W = inv(Gkk)</span>
-            <span>Gred / Ihisred / Vk</span>
-          </div>
+          ${flowHtml}
           <div class="formula-empty">${escapeHtml(nodeLine)}</div>
-          <div class="actual-block-caption">${escapeHtml(optText("模板分块矩阵", "Template block matrices"))}</div>
-          ${hasAnyBlock ? `<div class="multi-case-template-grid">${blockItems}</div>` : `<div class="formula-empty">${escapeHtml(optText(
-            "当前后端结果没有返回模板分块预览；C 草稿仍按共享矩阵 DAG 生成。",
-            "The backend result did not return template block previews; the C draft is still generated from the shared matrix DAG."
-          ))}</div>`}
+          ${relationHtml}
+          ${directPreview}
+          ${blockPreviewHtml}
         </div>
       `;
     }
@@ -10045,38 +10132,54 @@
       const branchById = new Map(multiCaseEligibleBranches().map(branch => [branch.id, branch]));
       const branchLabel = branch => branch?.name || branch?.id || "-";
       const aliases = multiCase.aliases || {};
-      const aliasRows = Object.entries(aliases).map(([alias, info]) => {
-        const caseValues = Object.entries(info.case_values || {})
-          .map(([caseIndex, expr]) => `case ${caseIndex}: ${expr}`)
-          .join("; ");
+      const aliasCards = Object.entries(aliases).map(([alias, info]) => {
+        const caseValues = info.case_values || {};
+        const caseOwners = info.case_owners || {};
+        const ownerList = Object.values(caseOwners).filter(Boolean);
+        const uniqueOwners = Array.from(new Set(ownerList));
+        const promotedOwner = info.owner || "-";
+        const caseRows = Object.entries(caseValues).map(([caseIndex, expr]) => `
+          <tr>
+            <td>case ${escapeHtml(caseIndex)}</td>
+            <td>${escapeHtml(expr || "0")}</td>
+            <td>${escapeHtml(caseOwners[caseIndex] || "-")}</td>
+          </tr>
+        `).join("");
+        const mixedOwnerWarning = uniqueOwners.length > 1 ? `
+          <div class="formula-empty">${escapeHtml(optText(
+            "存在混合 owner：RAM case 保持在 RAM；CODE case 只在对应 case 条件下启用。",
+            "Mixed owners: RAM cases stay in RAM; CODE cases are active only under their case condition."
+          ))}</div>
+        ` : "";
         const sourceLabel = info.selector === "global"
           ? optText("重叠输入项", "Overlapping input entry")
           : branchLabel(branchById.get(info.branch_id) || findBranch(info.branch_id) || { id: info.branch_id });
         return `
-          <tr>
-            <td>${escapeHtml(alias)}</td>
-            <td>${escapeHtml(sourceLabel)}</td>
-            <td>${escapeHtml(info.kind || "-")}</td>
-            <td>${escapeHtml(info.owner || "-")}</td>
-            <td>${escapeHtml(caseValues || "-")}</td>
-          </tr>
+          <div class="formula-empty">
+            <div class="formula-line">
+              <span class="formula-lhs">${escapeHtml(alias)}</span>
+              <span class="formula-eq">=</span>
+              <span class="formula-rhs">${escapeHtml(optText("由 case 选择的完整值", "full value selected by case"))}</span>
+            </div>
+            <div class="formula-empty">${escapeHtml(optText("来源", "Source"))}: ${escapeHtml(sourceLabel)}; ${escapeHtml(optText("类型", "Type"))}: ${escapeHtml(info.kind || "-")}; ${escapeHtml(optText("提升后 owner", "promoted owner"))} = ${escapeHtml(promotedOwner)}</div>
+            ${mixedOwnerWarning}
+            <table class="analysis-table stage-summary-table">
+              <thead>
+                <tr>
+                  <th>case</th>
+                  <th>${escapeHtml(optText("完整表达式", "Full Expression"))}</th>
+                  <th>owner</th>
+                </tr>
+              </thead>
+              <tbody>${caseRows || `<tr><td>-</td><td>-</td><td>-</td></tr>`}</tbody>
+            </table>
+          </div>
         `;
       }).join("");
-      const aliasHtml = aliasRows ? `
+      const aliasHtml = aliasCards ? `
         <div class="formula-card">
           <div class="formula-name">${escapeHtml(optText("effective alias / owner", "Effective Aliases / Owners"))}</div>
-          <table class="analysis-table stage-summary-table">
-            <thead>
-              <tr>
-                <th>alias</th>
-                <th>${escapeHtml(optText("支路", "Branch"))}</th>
-                <th>${escapeHtml(optText("类型", "Type"))}</th>
-                <th>owner</th>
-                <th>${escapeHtml(optText("case full value", "Case Full Values"))}</th>
-              </tr>
-            </thead>
-            <tbody>${aliasRows}</tbody>
-          </table>
+          ${aliasCards}
         </div>
       ` : "";
       const conditionRows = (multiCase.gvalue_conditions || []).map(item => `

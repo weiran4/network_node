@@ -125,6 +125,41 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(G[0, 0], sp.Symbol("AA") + sp.Symbol("BB") + sp.Symbol("CC"))
         self.assertEqual(Ihis[0, 0], sp.Symbol("Ihis_CC"))
 
+    def test_alias_template_rewrites_direct_retained_stamps(self):
+        def payload(value: str) -> dict:
+            data = _series_payload(value, internal=False)
+            data["direct_retained_stamps"] = [
+                {
+                    "id": "R1",
+                    "support_nodes": ["A", "B"],
+                    "G": [
+                        {"row": "A", "col": "A", "expr": value, "tagged": value},
+                        {"row": "A", "col": "B", "expr": f"-({value})", "tagged": f"-({value})"},
+                        {"row": "B", "col": "A", "expr": f"-({value})", "tagged": f"-({value})"},
+                        {"row": "B", "col": "B", "expr": value, "tagged": value},
+                    ],
+                    "Ihis": [],
+                }
+            ]
+            data["symbol_dependency_table"] = _deps("X", "Y")
+            data["symbol_dependency_table_tagged"] = _deps("X", "Y")
+            return data
+
+        alias_model = _build_multicase_alias_template_payload(
+            {
+                "case_profiles": [
+                    {"name": "case 0", "case_map": {"R1": 0}, "payload": payload("X")},
+                    {"name": "case 1", "case_map": {"R1": 1}, "payload": payload("X + Y")},
+                ]
+            }
+        )
+
+        stamp_entries = alias_model["template_payload"]["direct_retained_stamps"][0]["G"]
+        self.assertEqual(stamp_entries[0]["expr"], "cr_R1_G_eff")
+        self.assertEqual(stamp_entries[1]["expr"], "-cr_R1_G_eff")
+        self.assertEqual(stamp_entries[2]["tagged"], "-cr_R1_G_eff")
+        self.assertEqual(stamp_entries[3]["tagged"], "cr_R1_G_eff")
+
     def test_single_branch_two_cases_use_full_value_effective_alias(self):
         response = build_multi_case_response(
             _request(
@@ -205,8 +240,11 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertTrue(any("cr_R1_G_eff" in warning and "case_id is fixed before simulation" in warning for warning in response["warnings"]))
         draft = response["multi_case"]["c_draft"]
         self.assertIn("BEGIN_T0:", draft)
-        self.assertIn("cr_R1_G_eff = G_const;", draft)
-        self.assertIn("cr_R1_G_eff = G_dynamic;", draft)
+        self.assertIn("g_mat_over[0][1] = -G_const;", draft)
+        self.assertNotIn("cr_R1_G_eff = G_const;", draft)
+        self.assertNotIn("cr_R1_G_eff = G_dynamic;", draft)
+        self.assertIn("set_CODE(&G_code, 0, 0, G_dynamic);", draft)
+        self.assertIn("varG_A_B = get_CODE(&G_code, 0, 1);", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
 
     def test_step_history_case_promotes_alias_to_code_per_step(self):

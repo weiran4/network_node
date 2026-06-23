@@ -130,6 +130,7 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertNotIn("    x = get_CODE(&Vk_code", draft)
         self.assertNotIn("    y = get_CODE(&Vk_code", draft)
         self.assertNotIn("    z = get_CODE(&Vk_code", draft)
+        self.assertNotIn("G_EPSILON", draft)
         self.assertNotIn("One variable per eliminated node, in effective k order.", draft)
         self.assertNotIn("NR_FINAL_MAX", draft)
         self.assertNotIn("Piecewise", draft)

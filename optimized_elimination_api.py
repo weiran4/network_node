@@ -488,6 +488,7 @@ def build_optimized_response(payload: dict) -> dict:
     if direct_stamps:
         rtds_stage_plan["Gred_direct"] = direct_Grr
         rtds_stage_plan["Ihisred_direct"] = direct_Ihisr
+        rtds_stage_plan["add_ram_direct_to_ram_owned_gred"] = not bool(borrowed_dependency)
         if direct_Grr_tagged is not None and direct_Ihisr_tagged is not None:
             rtds_stage_plan["Gred_direct_tagged"] = direct_Grr_tagged
             rtds_stage_plan["Ihisred_direct_tagged"] = direct_Ihisr_tagged
@@ -884,6 +885,38 @@ def _expr_matrix_from_payload(payload: dict, key: str) -> sp.Matrix:
     return sp.Matrix([[_parse_expr(item) for item in row] for row in value])
 
 
+def _expr_matrix_for_alias_template_profile(payload: dict, key: str, common_dummy_internal_nodes: set[str]) -> sp.Matrix:
+    matrix = _expr_matrix_from_payload(payload, key)
+    if not common_dummy_internal_nodes:
+        return matrix
+    blocks = dummy_node_blocks_from_payload(payload)
+    if not blocks:
+        return matrix
+    node_index = {str(node): index for index, node in enumerate(payload.get("all_nodes") or [])}
+    dummy_nodes = {
+        str(node)
+        for block in blocks
+        for node in block.dummy_nodes
+        if str(node) in common_dummy_internal_nodes
+    }
+    if not dummy_nodes:
+        return matrix
+    matrix = sp.Matrix(matrix)
+    for node in dummy_nodes:
+        index = node_index.get(node)
+        if index is None:
+            continue
+        if key == "G_full":
+            for col in range(matrix.cols):
+                matrix[index, col] = sp.Integer(0)
+            for row in range(matrix.rows):
+                matrix[row, index] = sp.Integer(0)
+            matrix[index, index] = sp.Integer(1)
+        elif key == "Ihis_full" and index < matrix.rows:
+            matrix[index, 0] = sp.Integer(0)
+    return matrix
+
+
 def _matrices_equal_light(left: sp.Matrix, right: sp.Matrix) -> bool:
     left = sp.Matrix(left)
     right = sp.Matrix(right)
@@ -1190,6 +1223,44 @@ def _add_global_profile_alias(
     replacements[(key, row, col)] = sp.Symbol(alias)
 
 
+def _rewrite_direct_retained_stamps_with_aliases(
+    template_payload: dict,
+    replacements: Mapping[tuple[str, int, int], sp.Expr],
+) -> None:
+    node_index = {
+        str(node): index
+        for index, node in enumerate(template_payload.get("all_nodes") or [])
+    }
+    rewritten_stamps = []
+    for stamp in template_payload.get("direct_retained_stamps") or []:
+        next_stamp = json.loads(json.dumps(stamp))
+        for entry in next_stamp.get("G") or []:
+            row = node_index.get(str(entry.get("row")))
+            col = node_index.get(str(entry.get("col")))
+            if row is None or col is None:
+                continue
+            replacement = replacements.get(("G_full", row, col))
+            if replacement is None:
+                continue
+            text = _expr_to_payload_text(replacement)
+            entry["expr"] = text
+            if "tagged" in entry:
+                entry["tagged"] = text
+        for entry in next_stamp.get("Ihis") or []:
+            row = node_index.get(str(entry.get("row")))
+            if row is None:
+                continue
+            replacement = replacements.get(("Ihis_full", row, 0))
+            if replacement is None:
+                continue
+            text = _expr_to_payload_text(replacement)
+            entry["expr"] = text
+            if "tagged" in entry:
+                entry["tagged"] = text
+        rewritten_stamps.append(next_stamp)
+    template_payload["direct_retained_stamps"] = rewritten_stamps
+
+
 def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     profiles = payload.get("case_profiles") or []
     if len(profiles) < 2:
@@ -1206,9 +1277,16 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     for profile in profiles:
         symbol_table.update((profile.get("payload") or {}).get("symbol_dependency_table") or {})
 
+    common_dummy_internal_nodes = {str(node) for node in payload.get("common_dummy_internal_nodes") or []}
     matrices_by_key: dict[str, list[sp.Matrix]] = {
-        "G_full": [_expr_matrix_from_payload(profile["payload"], "G_full") for profile in profiles],
-        "Ihis_full": [_expr_matrix_from_payload(profile["payload"], "Ihis_full") for profile in profiles],
+        "G_full": [
+            _expr_matrix_for_alias_template_profile(profile["payload"], "G_full", common_dummy_internal_nodes)
+            for profile in profiles
+        ],
+        "Ihis_full": [
+            _expr_matrix_for_alias_template_profile(profile["payload"], "Ihis_full", common_dummy_internal_nodes)
+            for profile in profiles
+        ],
     }
     base_case_by_branch = {
         branch_id: _profile_case_index(profiles[0], branch_id, 0)
@@ -1337,6 +1415,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
         tagged_dep_table[alias] = _symbol_dependency_for_owner(info["owner"])
     template_payload["symbol_dependency_table"] = dep_table
     template_payload["symbol_dependency_table_tagged"] = tagged_dep_table
+    _rewrite_direct_retained_stamps_with_aliases(template_payload, replacements)
 
     return {
         "template_payload": template_payload,
@@ -2434,6 +2513,102 @@ def _case_switch_assignment_lines(case_id_symbol: str, case_indices: Sequence[in
     return lines
 
 
+def _final_g_code_case_lines(
+    *,
+    case_id_symbol: str,
+    entry_plans: list[dict],
+    matrix_name: str,
+) -> list[str]:
+    case_indices = sorted({
+        int(item["index"])
+        for plan in entry_plans
+        for item in plan["code_cases"]
+    })
+    if not case_indices:
+        return ["    /* No CODE-owned final G entries in any case. */"]
+
+    lines = [
+        "    /* Case-conditional CODE final-G writes.",
+        "       RAM-owned cases were stamped in RAM_PASS1; no base + delta is generated. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for case_index in case_indices:
+        lines.append(f"    case {case_index}:")
+        for plan in entry_plans:
+            code_case = next((item for item in plan["code_cases"] if int(item["index"]) == case_index), None)
+            if code_case is None:
+                continue
+            value = _ccode(code_case["expr"])
+            row = int(plan["row"])
+            col = int(plan["col"])
+            lines.append(f"        set_CODE(&{matrix_name}, {row}, {col}, {value});")
+            if row != col:
+                lines.append(f"        set_CODE(&{matrix_name}, {col}, {row}, {value});")
+        for plan in entry_plans:
+            if not any(int(item["index"]) == case_index for item in plan["code_cases"]):
+                continue
+            lines.append(f"        {plan['var']} = get_CODE(&{matrix_name}, {plan['row']}, {plan['col']});")
+        lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+    ])
+    return lines
+
+
+def _replace_code_g_setup_with_conditional_final_writes(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    entry_plans: list[dict],
+) -> str:
+    if not any(plan["code_cases"] for plan in entry_plans):
+        return draft
+    matrix_name = "G_code" if "MATRIX_ G_code" in draft else "Gred_code"
+    start_marker = "    /* ************************************************************************\n     * CODE-SIDE G MATRIX VALUE SETUP"
+    end_marker = "    /* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP"
+    start = draft.find(start_marker)
+    end = draft.find(end_marker, start)
+    if start < 0 or end < 0:
+        return draft
+    replacement_lines = [
+        "    /* ************************************************************************",
+        "     * CODE-SIDE G MATRIX VALUE SETUP",
+        "     * No-internal multi-case path: write only CODE-owned final G entries",
+        "     * under their active case condition. RAM-owned cases stay in RAM_PASS1.",
+        "     * ************************************************************************ */",
+        "",
+        *_final_g_code_case_lines(
+            case_id_symbol=case_id_symbol,
+            entry_plans=entry_plans,
+            matrix_name=matrix_name,
+        ),
+        "",
+        "",
+    ]
+    return draft[:start] + "\n".join(replacement_lines) + draft[end:]
+
+
+def _remove_code_g_alias_resolution_for_conditional_final_writes(draft: str, aliases: dict[str, dict]) -> str:
+    if not aliases:
+        return draft
+    if not all(str(info.get("kind") or "").upper().startswith("G") for info in aliases.values()):
+        return draft
+    marker = "    /* Resolve CODE multi-case effective aliases as full values, never deltas. */"
+    start = draft.find(marker)
+    if start < 0:
+        return draft
+    end = draft.find("    if (!rtds_matrix_code_ready) {", start)
+    if end < 0:
+        return draft
+    replacement = (
+        "    /* CODE final-G cases write full case values directly below;\n"
+        "       RAM-owned cases were stamped in RAM_PASS1. */\n"
+    )
+    return draft[:start] + replacement + draft[end:]
+
+
 def _apply_conditional_final_gvalues_to_structured_draft(
     draft: str,
     *,
@@ -2442,6 +2617,7 @@ def _apply_conditional_final_gvalues_to_structured_draft(
     aliases: dict[str, dict],
     template_gred: sp.Matrix,
     external_nodes: list[str],
+    prune_code_matrix_writes: bool = False,
 ) -> tuple[str, list[dict]]:
     entry_plans = _conditional_final_g_plans(
         case_id_symbol=case_id_symbol,
@@ -2503,6 +2679,13 @@ def _apply_conditional_final_gvalues_to_structured_draft(
             "\n".join(_case_switch_assignment_lines(case_id_symbol, case_indices, assignments)),
             1,
         )
+    if prune_code_matrix_writes:
+        draft = _replace_code_g_setup_with_conditional_final_writes(
+            draft,
+            case_id_symbol=case_id_symbol,
+            entry_plans=entry_plans,
+        )
+        draft = _remove_code_g_alias_resolution_for_conditional_final_writes(draft, aliases)
     return draft, gvalue_conditions
 
 
@@ -2625,6 +2808,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 aliases=aliases,
                 template_gred=template_reduced.G_red,
                 external_nodes=c_external_nodes,
+                prune_code_matrix_writes=not has_internal_recovery,
             )
             warnings.append(
                 "Warning: final G entries have mixed RAM/CODE ownership across cases. "
@@ -2678,6 +2862,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 ],
             },
             "template_blocks": _clean_value((result.get("structured") or {}).get("blocks") or {}),
+            "template_direct_retained": _clean_value((result.get("structured") or {}).get("direct_retained") or {}),
             "template_block_nodes": {
                 "retained_order": result.get("external_nodes") or template_payload.get("external_nodes") or [],
                 "internal_order": result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],

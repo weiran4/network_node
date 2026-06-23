@@ -31,11 +31,17 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn(
             "switch (case_id) {\n"
             "    case 1:\n"
+            "        set_CODE(&G_code, 0, 0, G_dynamic);\n"
+            "        set_CODE(&G_code, 0, 1, -G_dynamic);\n"
+            "        set_CODE(&G_code, 1, 0, -G_dynamic);\n"
+            "        set_CODE(&G_code, 1, 1, G_dynamic);\n"
             "        varG_A_A = get_CODE(&G_code, 0, 0);\n"
             "        varG_A_B = get_CODE(&G_code, 0, 1);\n"
             "        varG_B_B = get_CODE(&G_code, 1, 1);",
             draft,
         )
+        self.assertNotIn("cr_R1_G_eff = G_const;", draft)
+        self.assertNotIn("set_CODE(&G_code, 0, 0, cr_R1_G_eff);", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
         self.assertNotIn("varG_A_B = 0.0", draft)
         self.assertIn("case_id is fixed before simulation", warnings)
@@ -61,6 +67,30 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn("g_mat_over[0][1] = -G_const_3;", draft)
         self.assertIn("varG_A_B = get_CODE(&G_code, 0, 1);", draft)
         self.assertIn(
+            "switch (case_id) {\n"
+            "    case 1:\n"
+            "        set_CODE(&G_code, 0, 0, G_dynamic_1);\n"
+            "        set_CODE(&G_code, 0, 1, -G_dynamic_1);\n"
+            "        set_CODE(&G_code, 1, 0, -G_dynamic_1);\n"
+            "        set_CODE(&G_code, 1, 1, G_dynamic_1);\n"
+            "        varG_A_A = get_CODE(&G_code, 0, 0);\n"
+            "        varG_A_B = get_CODE(&G_code, 0, 1);\n"
+            "        varG_B_B = get_CODE(&G_code, 1, 1);\n"
+            "        break;\n"
+            "    case 2:\n"
+            "        set_CODE(&G_code, 0, 0, G_dynamic_2);\n"
+            "        set_CODE(&G_code, 0, 1, -G_dynamic_2);\n"
+            "        set_CODE(&G_code, 1, 0, -G_dynamic_2);\n"
+            "        set_CODE(&G_code, 1, 1, G_dynamic_2);\n"
+            "        varG_A_A = get_CODE(&G_code, 0, 0);\n"
+            "        varG_A_B = get_CODE(&G_code, 0, 1);\n"
+            "        varG_B_B = get_CODE(&G_code, 1, 1);",
+            draft,
+        )
+        self.assertNotIn("cr_R1_G_eff = G_const;", draft)
+        self.assertNotIn("cr_R1_G_eff = G_const_3;", draft)
+        self.assertNotIn("set_CODE(&G_code, 0, 0, cr_R1_G_eff);", draft)
+        self.assertNotIn(
             "switch (case_id) {\n"
             "    case 1:\n"
             "    case 2:\n"

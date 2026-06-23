@@ -54,7 +54,19 @@ class MultiCaseVarGFixtureTests(unittest.TestCase):
                     "Ihis3": "STEP_HISTORY",
                     "Ihis4": "STEP_HISTORY",
                 },
-                "direct_retained_stamps": [],
+                "direct_retained_stamps": [
+                    {
+                        "id": "B13",
+                        "support_nodes": ["n10a", "N6"],
+                        "G": [
+                            {"row": "n10a", "col": "n10a", "expr": "1/R", "tagged": "1/R_tag"},
+                            {"row": "n10a", "col": "N6", "expr": "-1/R", "tagged": "-1/R_tag"},
+                            {"row": "N6", "col": "n10a", "expr": "-1/R", "tagged": "-1/R_tag"},
+                            {"row": "N6", "col": "N6", "expr": "1/R", "tagged": "1/R_tag"},
+                        ],
+                        "Ihis": [],
+                    }
+                ],
             }
 
         request = {
@@ -84,6 +96,11 @@ class MultiCaseVarGFixtureTests(unittest.TestCase):
         )
         response = json.loads(completed.stdout)
         self.assertTrue(response["ok"], response)
+        direct_preview = response["multi_case"]["template_direct_retained"]
+        self.assertEqual(
+            direct_preview["Gred_direct"],
+            [["1/R", "0", "-1/R"], ["0", "0", "0"], ["-1/R", "0", "1/R"]],
+        )
         draft = response["multi_case"]["c_draft"]
         self.assertEqual(response["multi_case"]["fast_path"], "case_alias_template")
         self.assertIn("Multi-case alias-template C draft", draft)
@@ -92,6 +109,10 @@ class MultiCaseVarGFixtureTests(unittest.TestCase):
         self.assertIn("cr_B11_G_eff = G1;", draft)
         self.assertIn("cr_B11_G_eff = G2;", draft)
         self.assertIn("Grr_N4_N4 = cr_B11_G_eff;", draft)
+        self.assertIn("g_mat_over[0][1] = -1.0/R;", draft)
+        self.assertIn("g_mat_over[1][0] = -1.0/R;", draft)
+        self.assertIn("g_mat_over[1][1] = 2.0/R;", draft)
+        self.assertNotIn('varG_n10a_N6 = createGValue', draft)
         self.assertNotIn("G2 - G1", draft)
         self.assertNotIn("Not found", draft)
 

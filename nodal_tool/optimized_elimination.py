@@ -1522,10 +1522,11 @@ def _c_emit_rtds_stage_sections(
     symbol_table = analysis.get("symbol_table") or {}
     ram_Gred_direct, code_Gred_direct = _split_matrix_ram_and_code_terms(Gred_direct, symbol_table)
     ram_Gred = _stage_entries(Gred, Gred_stage, "RAM_INIT")
+    add_ram_direct_to_ram_owned_gred = bool(plan.get("add_ram_direct_to_ram_owned_gred"))
     for row in range(ram_Gred_direct.rows):
         for col in range(ram_Gred_direct.cols):
             stage = str(Gred_stage[row][col]) if row < len(Gred_stage) and col < len(Gred_stage[row]) else "UNKNOWN"
-            if stage != "RAM_INIT":
+            if stage != "RAM_INIT" or add_ram_direct_to_ram_owned_gred:
                 ram_Gred[row, col] += ram_Gred_direct[row, col]
     code_gred_entries = _find_code_owned_entries(Gred_stage)
     direct_code_entries = [
