@@ -9345,6 +9345,12 @@
       };
     }
 
+    function cachedReducedDependencyAnalysis(payload) {
+      const key = reducedCacheKey(payload);
+      const cachedEntry = cacheGet(reducedCache, key);
+      return reducedDependencyAnalysisFromResult(cachedEntry?.result);
+    }
+
     function optimizedEliminationPayload(options = {}) {
       const payload = {
         ...buildReducedPayload(options),
@@ -9738,18 +9744,14 @@
 
     async function precomputeReducedAndOptimized(token) {
       const basePayload = optimizedEliminationPayload();
-      if (reducedStaticMessage(basePayload) || optimizedStaticMessage(basePayload)) return;
-      const reducedResult = await ensureReducedResult(basePayload);
-      if (token !== mathPrecomputeToken) return;
-      const reducedDependency = reducedDependencyAnalysisFromResult(reducedResult);
-      if (!reducedDependency) return;
+      if (optimizedStaticMessage(basePayload)) return;
       const key = optimizedEliminationCacheKey(basePayload);
       const cachedEntry = cacheGet(optimizedEliminationCache, key);
       if (cachedEntry?.result || cachedEntry?.pending) return;
-      const optimizedPayload = {
-        ...basePayload,
-        reduced_dependency_analysis: reducedDependency
-      };
+      const reducedDependency = cachedReducedDependencyAnalysis(basePayload);
+      const optimizedPayload = reducedDependency
+        ? { ...basePayload, reduced_dependency_analysis: reducedDependency }
+        : basePayload;
       const pending = requestOptimizedElimination(optimizedPayload).then(result => {
         const current = optimizedEliminationCache.get(key);
         if (current?.pending === pending) cacheSet(optimizedEliminationCache, key, { result, pending: null });
@@ -10860,8 +10862,7 @@
 
       const basePayload = payload;
       const pending = (async () => {
-        const reducedResult = await ensureReducedResult(basePayload);
-        const reducedDependency = reducedDependencyAnalysisFromResult(reducedResult);
+        const reducedDependency = cachedReducedDependencyAnalysis(basePayload);
         const requestPayload = reducedDependency
           ? { ...basePayload, reduced_dependency_analysis: reducedDependency }
           : basePayload;
