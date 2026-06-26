@@ -363,6 +363,44 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(alias["selector"], "global")
         self.assertEqual(alias["case_values"]["3"], "Dabc + G22 + Grc + w2")
 
+    def test_identical_global_matrix_case_sequences_reuse_one_alias(self):
+        nodes = ["N1", "N2"]
+
+        def payload(value: str) -> dict:
+            return {
+                "all_nodes": nodes,
+                "external_nodes": nodes,
+                "internal_nodes": [],
+                "ground_nodes": [],
+                "node_display_names": {node: node for node in nodes},
+                "G_full": [[value, "0"], ["0", value]],
+                "G_full_tagged": [[value, "0"], ["0", value]],
+                "Ihis_full": ["0", "0"],
+                "Ihis_full_tagged": ["0", "0"],
+                "direct_retained_stamps": [],
+                "symbol_dependency_table": _deps("AA", "Dabc", "G22", "Grc", "w2"),
+                "symbol_dependency_table_tagged": _deps("AA", "Dabc", "G22", "Grc", "w2"),
+            }
+
+        profiles = [
+            {"name": "case 0", "case_map": {"C1": 0, "C2": 0}, "payload": payload("AA + 2*G22 + Grc + 2*w2")},
+            {"name": "case 1", "case_map": {"C1": 0, "C2": 1}, "payload": payload("Dabc + 2*G22 + Grc + 2*w2")},
+            {"name": "case 2", "case_map": {"C1": 1, "C2": 0}, "payload": payload("AA + G22 + Grc + w2")},
+            {"name": "case 3", "case_map": {"C1": 1, "C2": 1}, "payload": payload("Dabc + G22 + Grc + w2")},
+        ]
+
+        alias_model = _build_multicase_alias_template_payload({"case_profiles": profiles})
+
+        global_g_aliases = [
+            alias
+            for alias, info in alias_model["aliases"].items()
+            if info.get("selector") == "global" and info.get("kind") == "G"
+        ]
+        self.assertEqual(global_g_aliases, ["cr_G_0_0_eff"])
+        self.assertEqual(alias_model["template_payload"]["G_full"][0][0], "cr_G_0_0_eff")
+        self.assertEqual(alias_model["template_payload"]["G_full"][1][1], "cr_G_0_0_eff")
+        self.assertEqual(alias_model["aliases"]["cr_G_0_0_eff"]["used_by"], ["G_full[0][0]", "G_full[1][1]"])
+
     def test_general_symmetric_3x3_gkk_uses_fast_inverse(self):
         def payload(diagonal: str, offdiag: str) -> dict:
             deps = _deps("P", "Q", "D0", "D1", "C0", "C1", code=("P", "Q", "D0", "D1", "C0", "C1"))

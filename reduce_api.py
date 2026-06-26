@@ -45,6 +45,30 @@ def _clean_expr(expr: sp.Expr) -> str:
     return str(expr)
 
 
+def _final_display_expr(expr: sp.Expr, max_ops: int = 2000) -> sp.Expr:
+    try:
+        original_ops = int(sp.count_ops(expr, visual=False))
+        if original_ops > max_ops:
+            return expr
+        cancelled = sp.cancel(expr)
+        if cancelled == 0:
+            return cancelled
+        original_text = str(expr)
+        cancelled_ops = int(sp.count_ops(cancelled, visual=False))
+        cancelled_text = str(cancelled)
+        # sp.cancel is excellent for proving zeros, but for sums of simple
+        # fractions it may create a huge common denominator. Only use it for
+        # non-zero display when it is clearly more compact.
+        if (
+            cancelled_ops <= max(4, int(original_ops * 0.8))
+            and len(cancelled_text) <= max(16, int(len(original_text) * 0.8))
+        ):
+            return cancelled
+        return expr
+    except Exception:
+        return expr
+
+
 def _clean_observer_expr(expr: sp.Expr) -> str:
     return str(expr)
 
@@ -55,6 +79,41 @@ def _clean_matrix(matrix: sp.Matrix) -> list[list[str]]:
 
 def _clean_vector(matrix: sp.Matrix) -> list[str]:
     return [_clean_expr(matrix[r, 0]) for r in range(matrix.rows)]
+
+
+def _clean_display_matrix(matrix: sp.Matrix) -> list[list[str]]:
+    return [[_clean_expr(_final_display_expr(matrix[r, c])) for c in range(matrix.cols)] for r in range(matrix.rows)]
+
+
+def _clean_display_vector(matrix: sp.Matrix) -> list[str]:
+    return [_clean_expr(_final_display_expr(matrix[r, 0])) for r in range(matrix.rows)]
+
+
+def _display_matrix(matrix: sp.Matrix) -> sp.Matrix:
+    return sp.Matrix(
+        [
+            [_final_display_expr(matrix[r, c]) for c in range(matrix.cols)]
+            for r in range(matrix.rows)
+        ]
+    )
+
+
+def _latex_expr(expr: sp.Expr) -> str:
+    return sp.latex(expr)
+
+
+def _latex_matrix_cell(expr: sp.Expr) -> str:
+    return r"{\displaystyle " + _latex_expr(expr) + r"}"
+
+
+def _latex_bmatrix(matrix: sp.Matrix) -> str:
+    if matrix.rows == 0 or matrix.cols == 0:
+        return r"\begin{bmatrix}\end{bmatrix}"
+    rows = [
+        " & ".join(_latex_matrix_cell(matrix[r, c]) for c in range(matrix.cols))
+        for r in range(matrix.rows)
+    ]
+    return r"\begin{bmatrix}" + r" \\[0.9em] ".join(rows) + r"\end{bmatrix}"
 
 
 def _parse_matrix(rows: list[list[str]]) -> sp.Matrix:
@@ -166,11 +225,27 @@ def main() -> None:
         "ground_voltage_map": {node: _clean_expr(value) for node, value in ground_result.ground_voltage_map.items()},
         "warnings": validation.warnings,
         "G_red": _clean_matrix(result.G_red),
+        "G_red_simplified": _clean_display_matrix(result.G_red),
         "Ihis_red": _clean_vector(result.Ihis_red),
+        "Ihis_red_simplified": _clean_display_vector(result.Ihis_red),
         "K_v": _clean_matrix(result.K_v),
+        "K_v_simplified": _clean_display_matrix(result.K_v),
         "K_h": _clean_vector(result.K_h),
+        "K_h_simplified": _clean_display_vector(result.K_h),
         "reduced_observers": reduced_observers,
     }
+    display_G_red = _display_matrix(result.G_red)
+    display_Ihis_red = _display_matrix(result.Ihis_red)
+    display_K_v = _display_matrix(result.K_v)
+    display_K_h = _display_matrix(result.K_h)
+    response.update(
+        {
+            "G_red_latex": _latex_bmatrix(display_G_red),
+            "Ihis_red_latex": _latex_bmatrix(display_Ihis_red),
+            "K_v_latex": _latex_bmatrix(display_K_v),
+            "K_h_latex": _latex_bmatrix(display_K_h),
+        }
+    )
 
     if payload.get("G_full_tagged") is not None and payload.get("Ihis_full_tagged") is not None:
         tagged_ground = apply_ground_constraint(

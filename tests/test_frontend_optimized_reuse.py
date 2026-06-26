@@ -155,13 +155,35 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
     def test_multicase_profile_key_invalidates_old_single_profile_cache_without_active_case_dependency(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
-        self.assertIn("alias-template-cartesian-profiles-v1", source)
+        self.assertIn("alias-template-cartesian-profiles-runtime-v1", source)
         start = source.index("function ensureMultiCaseProfilesText")
         end = source.index("function parseMultiCaseProfiles")
         ensure_source = source[start:end]
-        self.assertIn("const generated = JSON.stringify(defaultMultiCaseProfiles(branches), null, 2);", ensure_source)
+        self.assertIn("const initBranches = initTimeMultiCaseBranches(branches);", ensure_source)
+        self.assertIn("const generated = JSON.stringify(defaultMultiCaseProfiles(initBranches), null, 2);", ensure_source)
         self.assertIn("state.multiCaseProfilesText = generated;", ensure_source)
         self.assertIn("state.multiCaseProfilesKey = key;", ensure_source)
+
+    def test_runtime_mutable_case_group_ui_and_payload_are_isolated_to_multicase_export(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-field="runtimeMutableCaseGroup"', source)
+        self.assertIn("function initTimeMultiCaseBranches", source)
+        self.assertIn("function runtimeMutableCaseBranches", source)
+        self.assertIn("runtime_case_groups", source)
+        self.assertIn("Runtime-mutable case 诊断", source)
+        self.assertIn("runtime case id 变量", source)
+
+    def test_runtime_mutable_case_ui_uses_status_card_and_locks_manual_g_constant_hint(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("runtime-case-card", source)
+        self.assertIn("运行时工况切换", source)
+        self.assertIn("只允许在 CODE 阶段切换数值表达式", source)
+        self.assertIn("runtimeMutableGConstantNotice", source)
+        self.assertIn("常数/变量归属由后端按所有 case 自动分析", source)
+        self.assertIn("data-field=\"gIsConstant\" disabled", source)
+        self.assertIn("data-field=\"constantGSymbols\" disabled", source)
 
     def test_multicase_payload_regenerates_profiles_before_parsing_saved_state(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -531,15 +553,35 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         end = source.index("function localizedBackendWarning")
         warning_source = source[start:end]
 
-        self.assertIn("dropped_before_schur", warning_source)
+        self.assertIn("optimizedDummyPrunedNodes(result, payload)", warning_source)
         self.assertIn("N-Dummy isolated nodes were validated and pruned before Schur reduction / C export", warning_source)
         self.assertIn("N-Dummy 孤立节点已验证，并在 Schur 消元 / C 导出前裁掉", warning_source)
+
+        helper_start = source.index("function optimizedDummyPrunedNodeInfo")
+        helper_end = source.index("function renderDummyPrunedNotice")
+        helper_source = source[helper_start:helper_end]
+        self.assertIn("payload?.node_display_names", helper_source)
+        self.assertIn("displayToNode", helper_source)
+        self.assertIn("dropped_before_schur", helper_source)
+        self.assertIn("dummyBlocks.common_internal_nodes", helper_source)
+        self.assertIn("structured.analysis?.dummy_nodes", helper_source)
+        self.assertIn("structured.details?.dummy_nodes", helper_source)
+        self.assertIn("structured.finalization_profiles", helper_source)
+        self.assertIn("multi.finalization_profiles", helper_source)
+        self.assertIn("multi.diagnostics?.mixed_physical_dummy_internal", helper_source)
+        self.assertIn("payload?.dummy_node_blocks", helper_source)
 
         block_start = source.index("function renderFormulaModeActualBlock")
         block_end = source.index("function renderStructuredFormulaSummary")
         block_source = source[block_start:block_end]
         self.assertIn("dummy-pruned-cell", block_source)
-        self.assertIn("renderDummyPrunedNotice(result, displayNames)", block_source)
+        self.assertIn("renderDummyPrunedNotice(result, displayNames, payload)", block_source)
+
+        structured_start = source.index("function renderStructuredBlocks")
+        structured_end = source.index("function renderPureDiagonalStructured")
+        structured_source = source[structured_start:structured_end]
+        self.assertIn("sourceInternalOrder.some(node => dummyPrunedSet.has(String(node)))", structured_source)
+        self.assertIn("internal_nodes: previewInternalOrder", structured_source)
         self.assertIn("这些 N-Dummy 行/列只用于验证原始矩阵", source)
         self.assertIn("These N-Dummy rows/columns are shown for source-matrix validation", source)
 
@@ -554,6 +596,75 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("function applyPanelWidth", source)
         self.assertIn("function startPanelResize", source)
         self.assertIn("panelResizeBar.addEventListener(\"pointerdown\", startPanelResize)", source)
+
+    def test_node_exposure_controls_use_unambiguous_labels(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('"取消暴露": "Unexpose"', source)
+        self.assertIn('"未暴露": "Unexposed"', source)
+        self.assertIn('tr("未暴露")', source)
+        self.assertIn('rowExposure(group).exposed ? "取消暴露" : "暴露"', source)
+
+    def test_output_modal_keeps_wide_optimized_blocks_locally_scrollable(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn(".modal-output-body .formula-list", source)
+        self.assertIn(".modal-output-body .formula-card", source)
+        self.assertIn(".modal-output-body .actual-block-preview", source)
+        self.assertIn("overflow-x: auto;", source[source.index(".modal-output-body .formula-card"):source.index(".output .formula-card > .formula-name:first-child")])
+        self.assertIn("width: 100%;", source[source.index(".modal-output-body .actual-block-preview"):source.index(".actual-block-column-labels")])
+
+    def test_drag_end_auto_glues_when_at_least_one_terminal_is_floating(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("const AUTO_GLUE_FLOATING_TERMINAL_DISTANCE = 20;", source)
+        self.assertIn("function terminalIsFloatingForAutoGlue", source)
+        self.assertIn("function terminalCanReceiveAutoGlue", source)
+        self.assertIn("function autoGlueConnectionForPair", source)
+        self.assertIn("if (terminalIsDummyNode(terminal)) return false;", source)
+        self.assertIn("if (state.wires.some(wire => wire.from === terminal || wire.to === terminal)) return false;", source)
+        self.assertIn("return group.length === 1;", source)
+        self.assertIn("function nearestFloatingTerminalToGlue", source)
+        self.assertIn("function nearestWireTerminalToGlue", source)
+        self.assertIn("function distancePointToSegment", source)
+        self.assertIn("const terminalFloating = terminalIsFloatingForAutoGlue(terminal, lookup, groups);", source)
+        self.assertIn("const candidateFloating = terminalIsFloatingForAutoGlue(candidate, lookup, groups);", source)
+        self.assertIn("if (!terminalFloating && !candidateFloating) return null;", source)
+        self.assertIn("if (!connection) return;", source)
+        self.assertIn("if (Math.abs(distance - best.distance) < 0.001) best.ambiguous = true;", source)
+        self.assertIn("function autoGlueDraggedFloatingTerminals", source)
+        self.assertIn("connectTerminals(match.connection.from, match.connection.to);", source)
+
+        pointerup_start = source.index('window.addEventListener("pointerup"')
+        pointerup_source = source[pointerup_start:source.index("state.drag = null;", pointerup_start)]
+        self.assertIn("autoGlueDraggedFloatingTerminals(Object.keys(state.drag.origins));", pointerup_source)
+
+    def test_auto_glue_can_target_existing_wire_segments(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function nearestWireTerminalToGlue", source)
+        self.assertIn("if (!terminalIsFloatingForAutoGlue(terminal, lookup, groups)) return null;", source)
+        self.assertIn("const mid = snappedWireMid(wire, wire.mid ||", source)
+        self.assertIn("distancePointToSegment(point, p1, mid)", source)
+        self.assertIn("distancePointToSegment(point, mid, p2)", source)
+        self.assertIn("return nearestWireTerminalToGlue(terminal, excludedBranchIds);", source)
+        self.assertIn("best = { terminal: target.terminal, connection: { from: terminal, to: target.terminal }, distance, ambiguous: false };", source)
+
+    def test_auto_glue_feedback_previews_and_confirms_connection(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn(".terminal.auto-glue-preview", source)
+        self.assertIn(".terminal.auto-glue-flash", source)
+        self.assertIn(".auto-glue-feedback-line", source)
+        self.assertIn("autoGluePreview: null", source)
+        self.assertIn("autoGlueFlash: null", source)
+        self.assertIn("function updateAutoGluePreview", source)
+        self.assertIn("function showAutoGlueFlash", source)
+        self.assertIn("已自动连接悬空端点", source)
+        self.assertIn("state.autoGlueFlashTimer = window.setTimeout", source)
+        self.assertIn("function renderAutoGlueFeedbackLines", source)
+        self.assertIn("function applyAutoGlueTerminalFeedback", source)
+        self.assertIn("updateAutoGluePreview(Object.keys(state.drag.origins));", source)
 
     def test_internal_node_changes_invalidate_math_caches(self):
         source = Path("index.html").read_text(encoding="utf-8")

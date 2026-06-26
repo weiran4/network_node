@@ -19,10 +19,22 @@ const context = {
   },
   wrapMathHighlight() {
     return "";
+  },
+  activeHighlightedBranches() {
+    return [];
+  },
+  branchHighlightSourceIds() {
+    return [];
+  },
+  sourceMarkerForBranch(id) {
+    return `__bbsrc_${id}`;
+  },
+  wrapMathSourceHighlight(_branch, html) {
+    return html;
   }
 };
 vm.createContext(context);
-vm.runInContext(`${formatterSource}\nglobalThis.formatMath = formatMath;`, context);
+vm.runInContext(`${formatterSource}\nglobalThis.formatMath = formatMath;\nglobalThis.formatMathWithTagged = formatMathWithTagged;`, context);
 
 const cases = [
   {
@@ -124,4 +136,94 @@ for (const testCase of cases) {
   }
 }
 
-console.log(`math formatter cases passed: ${cases.length}`);
+const taggedCases = [
+  {
+    name: "tagged negative fraction keeps parenthesized product numerator",
+    display: "-G12*(G*Vs10 + Ihis_p)/(G + G11) + Ihis_s",
+    tagged: "-G12__bbsrc_T1*(G__bbsrc_B10*Vs10 + Ihis_p__bbsrc_B10)/(G__bbsrc_B10 + G11__bbsrc_T1) + Ihis_s__bbsrc_B12",
+    mustContain: [
+      "G<sub>12</sub> · (G · Vs<sub>10</sub> <span class=\"math-op\">+</span> Ihis<sub>p</sub>)",
+      "<span class=\"math-op\">+</span> Ihis<sub>s</sub>"
+    ],
+    mustNotContain: [
+      "G<sub>12</sub> · G · Vs<sub>10</sub> <span class=\"math-op\">+</span> Ihis<sub>p</sub></span><span class=\"math-frac-den\">"
+    ]
+  },
+  {
+    name: "tagged positive fraction keeps parenthesized product numerator",
+    display: "G12*(G*Vs10 + Ihis_p)/(G + G11) - Ihis_s",
+    tagged: "G12__bbsrc_T1*(G__bbsrc_B10*Vs10 + Ihis_p__bbsrc_B10)/(G__bbsrc_B10 + G11__bbsrc_T1) - Ihis_s__bbsrc_B12",
+    mustContain: [
+      "G<sub>12</sub> · (G · Vs<sub>10</sub> <span class=\"math-op\">+</span> Ihis<sub>p</sub>)",
+      "<span class=\"math-op\">-</span> Ihis<sub>s</sub>"
+    ]
+  }
+];
+
+const dangerousTaggedCases = [
+  {
+    name: "tagged fraction does not flatten a leading negative grouped product",
+    display: "-a*(b + c)/(d + e) + h",
+    tagged: "-a__bbsrc_A*(b__bbsrc_B + c__bbsrc_C)/(d__bbsrc_D + e__bbsrc_E) + h__bbsrc_H",
+    mustContain: [
+      "a · (b <span class=\"math-op\">+</span> c)",
+      "<span class=\"math-op\">+</span> h"
+    ],
+    mustNotContain: [
+      "a · b <span class=\"math-op\">+</span> c</span><span class=\"math-frac-den\">"
+    ]
+  },
+  {
+    name: "tagged fraction does not flatten a grouped product with subtraction",
+    display: "a*(b - c)/(d + e) - h",
+    tagged: "a__bbsrc_A*(b__bbsrc_B - c__bbsrc_C)/(d__bbsrc_D + e__bbsrc_E) - h__bbsrc_H",
+    mustContain: [
+      "a · (b <span class=\"math-op\">-</span> c)",
+      "<span class=\"math-op\">-</span> h"
+    ],
+    mustNotContain: [
+      "a · b <span class=\"math-op\">-</span> c</span><span class=\"math-frac-den\">"
+    ]
+  },
+  {
+    name: "tagged fraction keeps a grouped first factor before another multiplier",
+    display: "-(a + b)*c/(d + e)",
+    tagged: "-(a__bbsrc_A + b__bbsrc_B)*c__bbsrc_C/(d__bbsrc_D + e__bbsrc_E)",
+    mustContain: [
+      "(a <span class=\"math-op\">+</span> b) · c"
+    ],
+    mustNotContain: [
+      "a <span class=\"math-op\">+</span> b · c</span><span class=\"math-frac-den\">"
+    ]
+  },
+  {
+    name: "tagged fraction keeps multiple grouped product factors",
+    display: "a*(b + c)*(d - e)/f",
+    tagged: "a__bbsrc_A*(b__bbsrc_B + c__bbsrc_C)*(d__bbsrc_D - e__bbsrc_E)/f__bbsrc_F",
+    mustContain: [
+      "a · (b <span class=\"math-op\">+</span> c) · (d <span class=\"math-op\">-</span> e)"
+    ],
+    mustNotContain: [
+      "a · b <span class=\"math-op\">+</span> c · d",
+      "c · d <span class=\"math-op\">-</span> e</span><span class=\"math-frac-den\">"
+    ]
+  }
+];
+
+for (const testCase of [...taggedCases, ...dangerousTaggedCases]) {
+  const rendered = context.formatMathWithTagged(testCase.display, testCase.tagged);
+  for (const expected of testCase.mustContain || []) {
+    assert.ok(
+      rendered.includes(expected),
+      `${testCase.name}: expected rendered HTML to include ${expected}\nRendered: ${rendered}`
+    );
+  }
+  for (const forbidden of testCase.mustNotContain || []) {
+    assert.ok(
+      !rendered.includes(forbidden),
+      `${testCase.name}: rendered HTML should not include ${forbidden}\nRendered: ${rendered}`
+    );
+  }
+}
+
+console.log(`math formatter cases passed: ${cases.length + taggedCases.length + dangerousTaggedCases.length}`);

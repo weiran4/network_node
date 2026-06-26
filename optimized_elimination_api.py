@@ -1080,6 +1080,51 @@ def _branch_ids_from_profiles(profiles: list[dict]) -> list[str]:
     return sorted(branch_ids)
 
 
+def _runtime_case_group_map(payload: dict) -> dict[str, dict]:
+    groups = {}
+    for group in payload.get("runtime_case_groups") or []:
+        branch_id = str(group.get("branch_id") or "")
+        if not branch_id:
+            continue
+        groups[branch_id] = {
+            **group,
+            "case_id_symbol": str(group.get("case_id_symbol") or f"runtime_{_c_identifier_name(branch_id, 'case')}_case_id"),
+        }
+    return groups
+
+
+def _profiles_with_runtime_case_samples(payload: dict, profiles: list[dict], runtime_groups: dict[str, dict]) -> list[dict]:
+    if not runtime_groups:
+        return profiles
+    expanded: list[dict] = []
+    for init_index, profile in enumerate(profiles):
+        init_case_map = dict(profile.get("case_map") or {})
+        payload_base = profile.get("payload")
+        if isinstance(payload_base, dict):
+            expanded.append({
+                **profile,
+                "name": f"{profile.get('name') or f'case {init_index}'} / runtime base",
+                "case_map": dict(init_case_map),
+                "payload": payload_base,
+                "_init_profile_index": init_index,
+            })
+        for branch_id, group in runtime_groups.items():
+            for case in group.get("cases") or []:
+                case_index = int(case.get("index") or 0)
+                payloads = case.get("payloads") or []
+                if init_index >= len(payloads) or not isinstance(payloads[init_index], dict):
+                    raise ValueError(f"runtime-mutable case group {group.get('name') or branch_id} is missing payload for init profile {init_index}")
+                expanded.append({
+                    "name": f"{profile.get('name') or f'case {init_index}'} / {group.get('name') or branch_id} case {case_index}",
+                    "comment": str(case.get("name") or ""),
+                    "case_map": {**init_case_map, branch_id: case_index},
+                    "payload": payloads[init_index],
+                    "_init_profile_index": init_index,
+                    "_runtime_branch_id": branch_id,
+                })
+    return expanded
+
+
 def _position_depends_only_on_branch(
     profiles: list[dict],
     values: Sequence[sp.Expr],
@@ -1103,6 +1148,26 @@ def _alias_name(branch_id: str, kind: str, index: int) -> str:
 def _matrix_entry_alias_name(key: str, row: int, col: int) -> str:
     kind = "G" if key == "G_full" else "Ihis"
     return f"cr_{kind}_{row}_{col}_eff"
+
+
+def _global_alias_cache_key(key: str, case_values: Mapping[int, sp.Expr]) -> tuple:
+    return (
+        key,
+        tuple(
+            (int(index), _expr_to_payload_text(sp.sympify(case_values[index])))
+            for index in sorted(case_values)
+        ),
+    )
+
+
+def _record_global_alias_use(aliases: dict[str, dict], alias: str, key: str, row: int, col: int) -> None:
+    info = aliases.get(alias)
+    if not info:
+        return
+    used_by = info.setdefault("used_by", [])
+    label = f"{key}[{row}][{col}]"
+    if label not in used_by:
+        used_by.append(label)
 
 
 def _profile_delta(values: Sequence[sp.Expr]) -> tuple[sp.Expr, ...]:
@@ -1201,6 +1266,7 @@ def _add_global_profile_alias(
     aliases: dict[str, dict],
     replacements: dict[tuple[str, int, int], sp.Expr],
     symbol_table: dict,
+    global_alias_cache: dict[tuple, str],
     key: str,
     row: int,
     col: int,
@@ -1208,6 +1274,12 @@ def _add_global_profile_alias(
 ) -> None:
     alias = _matrix_entry_alias_name(key, row, col)
     case_values = {index: sp.sympify(value) for index, value in enumerate(values)}
+    cache_key = _global_alias_cache_key(key, case_values)
+    cached_alias = global_alias_cache.get(cache_key)
+    if cached_alias:
+        replacements[(key, row, col)] = sp.Symbol(cached_alias)
+        _record_global_alias_use(aliases, cached_alias, key, row, col)
+        return
     case_owners = {index: _expr_stage(expr, symbol_table) for index, expr in case_values.items()}
     aliases[alias] = {
         "branch_id": "__global__",
@@ -1219,8 +1291,265 @@ def _add_global_profile_alias(
             for index, expr in case_values.items()
         },
         "case_owners": case_owners,
+        "used_by": [f"{key}[{row}][{col}]"],
     }
+    global_alias_cache[cache_key] = alias
     replacements[(key, row, col)] = sp.Symbol(alias)
+
+
+def _add_global_init_profile_alias(
+    *,
+    aliases: dict[str, dict],
+    symbol_table: dict,
+    global_alias_cache: dict[tuple, str],
+    key: str,
+    row: int,
+    col: int,
+    values_by_init: Mapping[int, sp.Expr],
+) -> sp.Expr:
+    ordered = {int(index): sp.sympify(values_by_init[index]) for index in sorted(values_by_init)}
+    values = list(ordered.values())
+    if values and all(_expr_equal_light(values[0], value) for value in values[1:]):
+        return sp.sympify(values[0])
+    cache_key = _global_alias_cache_key(key, ordered)
+    cached_alias = global_alias_cache.get(cache_key)
+    if cached_alias:
+        _record_global_alias_use(aliases, cached_alias, key, row, col)
+        return sp.Symbol(cached_alias)
+    alias = _matrix_entry_alias_name(key, row, col)
+    if alias in aliases:
+        suffix = 2
+        while f"{alias}_{suffix}" in aliases:
+            suffix += 1
+        alias = f"{alias}_{suffix}"
+    case_owners = {index: _expr_stage(expr, symbol_table) for index, expr in ordered.items()}
+    aliases[alias] = {
+        "branch_id": "__global__",
+        "selector": "global",
+        "kind": "G" if key == "G_full" else "Ihis",
+        "owner": _promote_owner(case_owners.values()),
+        "case_values": {
+            str(index): _expr_to_payload_text(expr)
+            for index, expr in ordered.items()
+        },
+        "case_owners": case_owners,
+        "used_by": [f"{key}[{row}][{col}]"],
+    }
+    global_alias_cache[cache_key] = alias
+    return sp.Symbol(alias)
+
+
+def _runtime_invariant_values_by_init(
+    sample_profiles: Sequence[dict],
+    values: Sequence[sp.Expr],
+) -> dict[int, sp.Expr] | None:
+    if not any(profile.get("_runtime_branch_id") for profile in sample_profiles):
+        return None
+    values_by_init: dict[int, sp.Expr] = {}
+    for profile, value in zip(sample_profiles, values):
+        init_index = int(profile.get("_init_profile_index", 0) or 0)
+        expr = sp.sympify(value)
+        if init_index in values_by_init:
+            if not _expr_equal_light(values_by_init[init_index], expr):
+                return None
+        else:
+            values_by_init[init_index] = expr
+    if not values_by_init or len(values_by_init) >= len(values):
+        return None
+    return values_by_init
+
+
+def _ensure_branch_profile_alias(
+    *,
+    aliases: dict[str, dict],
+    grouped: dict[tuple[str, str, tuple[str, ...]], dict],
+    symbol_table: dict,
+    sample_profiles: list[dict],
+    runtime_groups: Mapping[str, dict],
+    branch_id: str,
+    kind: str,
+    profile_values: Sequence[sp.Expr],
+    base_case: int,
+) -> tuple[int, str]:
+    sign, sequence_key = _signed_sequence_key(profile_values)
+    group_key = (branch_id, kind, sequence_key)
+    if group_key not in grouped:
+        alias_index = 1 + sum(
+            1
+            for item in grouped.values()
+            if item["branch_id"] == branch_id and item["kind"] == kind
+        )
+        local_cases = sorted({
+            _profile_case_index(profile, branch_id, base_case)
+            for profile in sample_profiles
+        })
+        case_values: dict[int, sp.Expr] = {}
+        canonical_values = [_parse_expr(text) for text in sequence_key]
+        for profile, canonical in zip(sample_profiles, canonical_values):
+            local_case = _profile_case_index(profile, branch_id, base_case)
+            if local_case in case_values and not _expr_equal_light(case_values[local_case], canonical):
+                raise ValueError(f"multi-case alias template found conflicting values for {branch_id} case {local_case}")
+            case_values[local_case] = canonical
+        alias = _alias_name(branch_id, kind, alias_index)
+        case_owners = {
+            case_index: _expr_stage(expr, symbol_table)
+            for case_index, expr in case_values.items()
+        }
+        owner = _promote_owner(case_owners.values())
+        runtime_group = runtime_groups.get(branch_id)
+        if runtime_group and len({_expr_to_payload_text(value) for value in case_values.values()}) > 1 and owner == "RAM":
+            owner = "CODE"
+        aliases[alias] = {
+            "branch_id": branch_id,
+            "kind": kind,
+            "owner": owner,
+            "case_values": {
+                str(case_index): _expr_to_payload_text(case_values.get(case_index, sp.Integer(0)))
+                for case_index in local_cases
+            },
+            "case_owners": case_owners,
+            **(
+                {
+                    "runtime_mutable": True,
+                    "selector": "runtime",
+                    "case_id_symbol": runtime_group["case_id_symbol"],
+                    "runtime_group_name": runtime_group.get("name") or branch_id,
+                }
+                if runtime_group
+                else {}
+            ),
+        }
+        grouped[group_key] = {
+            "alias": alias,
+            "branch_id": branch_id,
+            "kind": kind,
+            "profile_values": canonical_values,
+        }
+    return sign, grouped[group_key]["alias"]
+
+
+def _positive_negative_parts(expr: sp.Expr) -> tuple[sp.Expr, sp.Expr]:
+    positive = sp.Integer(0)
+    negative = sp.Integer(0)
+    for term in sp.Add.make_args(sp.expand(sp.sympify(expr))):
+        coeff, _base = sp.sympify(term).as_coeff_Mul()
+        if coeff < 0:
+            negative += -term
+        else:
+            positive += term
+    return sp.expand(positive), sp.expand(negative)
+
+
+def _try_runtime_additive_replacement(
+    *,
+    aliases: dict[str, dict],
+    grouped: dict[tuple[str, str, tuple[str, ...]], dict],
+    symbol_table: dict,
+    global_alias_cache: dict[tuple, str],
+    sample_profiles: list[dict],
+    runtime_groups: Mapping[str, dict],
+    key: str,
+    row: int,
+    col: int,
+    values: Sequence[sp.Expr],
+    branch_id: str,
+    kind: str,
+    base_case: int,
+) -> sp.Expr | None:
+    runtime_group = runtime_groups.get(branch_id)
+    if not runtime_group:
+        return None
+    base_by_init: dict[int, sp.Expr] = {}
+    case_by_init: dict[int, dict[int, sp.Expr]] = {}
+    for profile, value in zip(sample_profiles, values):
+        init_index = int(profile.get("_init_profile_index", 0) or 0)
+        value = sp.sympify(value)
+        if profile.get("_runtime_branch_id") == branch_id:
+            local_case = _profile_case_index(profile, branch_id, base_case)
+            case_by_init.setdefault(init_index, {})[local_case] = value
+        elif profile.get("_runtime_branch_id") is None:
+            base_by_init[init_index] = value
+    if not base_by_init:
+        return None
+
+    local_cases = sorted({
+        int(case.get("index") or 0)
+        for case in runtime_group.get("cases") or []
+    })
+    if not local_cases:
+        return None
+    deltas: dict[int, sp.Expr] = {}
+    for case_index in local_cases:
+        reference_delta = None
+        for init_index, base_value in base_by_init.items():
+            case_value = case_by_init.get(init_index, {}).get(case_index)
+            if case_value is None:
+                if case_index == base_case:
+                    case_value = base_value
+                else:
+                    return None
+            delta = sp.expand(case_value - base_value)
+            if reference_delta is None:
+                reference_delta = delta
+            elif not _expr_equal_light(reference_delta, delta):
+                return None
+        deltas[case_index] = sp.sympify(reference_delta if reference_delta is not None else 0)
+    if all(_expr_equal_light(delta, 0) for delta in deltas.values()):
+        return None
+
+    negative_parts = []
+    for case_index, delta in deltas.items():
+        if case_index == base_case or _expr_equal_light(delta, 0):
+            continue
+        _positive, negative = _positive_negative_parts(delta)
+        negative_parts.append(negative)
+    if negative_parts:
+        base_runtime_value = negative_parts[0]
+        if any(not _expr_equal_light(base_runtime_value, item) for item in negative_parts[1:]):
+            return None
+    else:
+        base_runtime_value = sp.Integer(0)
+
+    case_values = {
+        case_index: sp.expand(base_runtime_value + delta)
+        for case_index, delta in deltas.items()
+    }
+    residual_by_init = {
+        init_index: sp.expand(base_value - base_runtime_value)
+        for init_index, base_value in base_by_init.items()
+    }
+    for profile, value in zip(sample_profiles, values):
+        init_index = int(profile.get("_init_profile_index", 0) or 0)
+        local_case = _profile_case_index(profile, branch_id, base_case)
+        expected = sp.expand(residual_by_init.get(init_index, sp.Integer(0)) + case_values.get(local_case, base_runtime_value))
+        if not _expr_equal_light(expected, value):
+            return None
+
+    profile_values = [
+        case_values.get(_profile_case_index(profile, branch_id, base_case), base_runtime_value)
+        for profile in sample_profiles
+    ]
+    sign, alias = _ensure_branch_profile_alias(
+        aliases=aliases,
+        grouped=grouped,
+        symbol_table=symbol_table,
+        sample_profiles=sample_profiles,
+        runtime_groups=runtime_groups,
+        branch_id=branch_id,
+        kind=kind,
+        profile_values=profile_values,
+        base_case=base_case,
+    )
+    residual_expr = _add_global_init_profile_alias(
+        aliases=aliases,
+        symbol_table=symbol_table,
+        global_alias_cache=global_alias_cache,
+        key=key,
+        row=row,
+        col=col,
+        values_by_init=residual_by_init,
+    )
+    return sp.expand(residual_expr + sign * sp.Symbol(alias))
 
 
 def _rewrite_direct_retained_stamps_with_aliases(
@@ -1263,39 +1592,54 @@ def _rewrite_direct_retained_stamps_with_aliases(
 
 def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     profiles = payload.get("case_profiles") or []
-    if len(profiles) < 2:
+    runtime_groups = _runtime_case_group_map(payload)
+    sample_profiles = _profiles_with_runtime_case_samples(payload, profiles, runtime_groups)
+    if len(sample_profiles) < 2:
         return None
-    _validate_multicase_topology(profiles)
-    branch_ids = _branch_ids_from_profiles(profiles)
+    try:
+        _validate_multicase_topology(sample_profiles)
+    except ValueError as exc:
+        runtime_sample = next((profile for profile in sample_profiles if profile.get("_runtime_branch_id")), None)
+        if runtime_groups and runtime_sample:
+            branch_id = str(runtime_sample.get("_runtime_branch_id") or "")
+            group = runtime_groups.get(branch_id, {})
+            name = str(group.get("name") or branch_id or "runtime")
+            raise ValueError(
+                f"Runtime-mutable case group {name} changes topology or matrix shape. "
+                "Use init-time case group instead."
+            ) from exc
+        raise
+    branch_ids = _branch_ids_from_profiles(sample_profiles)
     if not branch_ids:
         return None
 
-    base_payload = profiles[0].get("payload")
+    base_payload = sample_profiles[0].get("payload")
     if not isinstance(base_payload, dict):
         return None
     symbol_table = {}
-    for profile in profiles:
+    for profile in sample_profiles:
         symbol_table.update((profile.get("payload") or {}).get("symbol_dependency_table") or {})
 
     common_dummy_internal_nodes = {str(node) for node in payload.get("common_dummy_internal_nodes") or []}
     matrices_by_key: dict[str, list[sp.Matrix]] = {
         "G_full": [
             _expr_matrix_for_alias_template_profile(profile["payload"], "G_full", common_dummy_internal_nodes)
-            for profile in profiles
+            for profile in sample_profiles
         ],
         "Ihis_full": [
             _expr_matrix_for_alias_template_profile(profile["payload"], "Ihis_full", common_dummy_internal_nodes)
-            for profile in profiles
+            for profile in sample_profiles
         ],
     }
     base_case_by_branch = {
-        branch_id: _profile_case_index(profiles[0], branch_id, 0)
+        branch_id: _profile_case_index(sample_profiles[0], branch_id, 0)
         for branch_id in branch_ids
     }
 
     aliases: dict[str, dict] = {}
     replacements: dict[tuple[str, int, int], sp.Expr] = {}
     grouped: dict[tuple[str, str, tuple[str, ...]], dict] = {}
+    global_alias_cache: dict[tuple, str] = {}
     pending_composite_entries: list[tuple[str, int, int, list[sp.Expr]]] = []
 
     for key, matrices in matrices_by_key.items():
@@ -1314,54 +1658,62 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                     branch_id
                     for branch_id in branch_ids
                     if _position_depends_only_on_branch(
-                        profiles,
+                        sample_profiles,
                         values,
                         branch_id,
                         base_case_by_branch.get(branch_id, 0),
                     )
                 ]
                 if len(candidates) != 1:
+                    runtime_replacement = None
+                    for branch_id in branch_ids:
+                        runtime_replacement = _try_runtime_additive_replacement(
+                            aliases=aliases,
+                            grouped=grouped,
+                            symbol_table=symbol_table,
+                            global_alias_cache=global_alias_cache,
+                            sample_profiles=sample_profiles,
+                            runtime_groups=runtime_groups,
+                            key=key,
+                            row=row,
+                            col=col,
+                            values=values,
+                            branch_id=branch_id,
+                            kind=kind,
+                            base_case=base_case_by_branch.get(branch_id, 0),
+                        )
+                        if runtime_replacement is not None:
+                            break
+                    if runtime_replacement is not None:
+                        replacements[(key, row, col)] = runtime_replacement
+                        continue
+                    runtime_invariant = _runtime_invariant_values_by_init(sample_profiles, values)
+                    if runtime_invariant is not None:
+                        replacements[(key, row, col)] = _add_global_init_profile_alias(
+                            aliases=aliases,
+                            symbol_table=symbol_table,
+                            global_alias_cache=global_alias_cache,
+                            key=key,
+                            row=row,
+                            col=col,
+                            values_by_init=runtime_invariant,
+                        )
+                        continue
                     pending_composite_entries.append((key, row, col, values))
                     continue
                 branch_id = candidates[0]
-                sign, sequence_key = _signed_sequence_key(values)
-                group_key = (branch_id, kind, sequence_key)
-                if group_key not in grouped:
-                    alias_index = 1 + sum(1 for item in grouped.values() if item["branch_id"] == branch_id and item["kind"] == kind)
-                    local_cases = sorted({
-                        _profile_case_index(profile, branch_id, base_case_by_branch.get(branch_id, 0))
-                        for profile in profiles
-                    })
-                    case_values: dict[int, sp.Expr] = {}
-                    canonical_values = [_parse_expr(text) for text in sequence_key]
-                    for profile, canonical in zip(profiles, canonical_values):
-                        local_case = _profile_case_index(profile, branch_id, base_case_by_branch.get(branch_id, 0))
-                        if local_case in case_values and not _expr_equal_light(case_values[local_case], canonical):
-                            raise ValueError(f"multi-case alias template found conflicting values for {branch_id} case {local_case}")
-                        case_values[local_case] = canonical
-                    alias = _alias_name(branch_id, kind, alias_index)
-                    case_owners = {
-                        case_index: _expr_stage(expr, symbol_table)
-                        for case_index, expr in case_values.items()
-                    }
-                    owner = _promote_owner(case_owners.values())
-                    aliases[alias] = {
-                        "branch_id": branch_id,
-                        "kind": kind,
-                        "owner": owner,
-                        "case_values": {
-                            str(case_index): _expr_to_payload_text(case_values.get(case_index, sp.Integer(0)))
-                            for case_index in local_cases
-                        },
-                        "case_owners": case_owners,
-                    }
-                    grouped[group_key] = {
-                        "alias": alias,
-                        "branch_id": branch_id,
-                        "kind": kind,
-                        "profile_values": canonical_values,
-                    }
-                replacements[(key, row, col)] = sign * sp.Symbol(grouped[group_key]["alias"])
+                sign, alias = _ensure_branch_profile_alias(
+                    aliases=aliases,
+                    grouped=grouped,
+                    symbol_table=symbol_table,
+                    sample_profiles=sample_profiles,
+                    runtime_groups=runtime_groups,
+                    branch_id=branch_id,
+                    kind=kind,
+                    profile_values=values,
+                    base_case=base_case_by_branch.get(branch_id, 0),
+                )
+                replacements[(key, row, col)] = sign * sp.Symbol(alias)
 
     unresolved_composite_entries = list(pending_composite_entries)
     made_progress = True
@@ -1378,10 +1730,23 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
         unresolved_composite_entries = next_unresolved
 
     for key, row, col, values in unresolved_composite_entries:
+        runtime_invariant = _runtime_invariant_values_by_init(sample_profiles, values)
+        if runtime_invariant is not None:
+            replacements[(key, row, col)] = _add_global_init_profile_alias(
+                aliases=aliases,
+                symbol_table=symbol_table,
+                global_alias_cache=global_alias_cache,
+                key=key,
+                row=row,
+                col=col,
+                values_by_init=runtime_invariant,
+            )
+            continue
         _add_global_profile_alias(
             aliases=aliases,
             replacements=replacements,
             symbol_table=symbol_table,
+            global_alias_cache=global_alias_cache,
             key=key,
             row=row,
             col=col,
@@ -1421,7 +1786,9 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
         "template_payload": template_payload,
         "aliases": aliases,
         "profiles": profiles,
-        "branch_ids": branch_ids,
+        "sample_profiles": sample_profiles,
+        "branch_ids": [branch_id for branch_id in branch_ids if branch_id not in runtime_groups],
+        "runtime_case_groups": list(runtime_groups.values()),
     }
 
 
@@ -1683,6 +2050,8 @@ def _insert_after_label(draft: str, label: str, lines: list[str]) -> str:
 
 
 def _multicase_local_case_lines(case_id_symbol: str, profiles: list[dict], branch_ids: list[str]) -> list[str]:
+    if not branch_ids:
+        return []
     lines = [
         "    /* Decode the optional global case selector into per-element local cases. */",
         f"    switch ({case_id_symbol}) {{",
@@ -1714,7 +2083,13 @@ def _alias_assignment_lines(aliases: dict[str, dict], wanted_owner: str, case_id
     grouped: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
     for alias, info in selected:
         branch_id = info["branch_id"]
-        local_name = case_id_symbol if info.get("selector") == "global" else f"{_c_identifier_name(branch_id, 'branch')}_case_id"
+        selector = info.get("selector")
+        if selector == "global":
+            local_name = case_id_symbol
+        elif selector == "runtime":
+            local_name = str(info.get("case_id_symbol") or f"runtime_{_c_identifier_name(branch_id, 'branch')}_case_id")
+        else:
+            local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
         case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
         grouped.setdefault(local_name, []).append((alias, info, case_values))
 
@@ -1786,6 +2161,9 @@ def _insert_multicase_alias_layer(
 def _profile_alias_substitutions(profile: dict, aliases: dict[str, dict], profile_index: int | None = None) -> dict[sp.Symbol, sp.Expr]:
     substitutions: dict[sp.Symbol, sp.Expr] = {}
     for alias, info in aliases.items():
+        if info.get("selector") == "runtime":
+            substitutions[sp.Symbol(alias)] = sp.Symbol(alias)
+            continue
         case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
         if info.get("selector") == "global":
             local_case = int(profile_index or 0)
@@ -2729,6 +3107,18 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
     warnings = list(result.get("warnings") or [])
     for alias, info in aliases.items():
         owners = set((info.get("case_owners") or {}).values())
+        if info.get("runtime_mutable"):
+            case_values = {
+                str(value)
+                for value in (info.get("case_values") or {}).values()
+            }
+            if len(case_values) > 1 and info.get("owner") in {"CODE", "CODE_PER_STEP"}:
+                warnings.append(
+                    f"Info: {alias} is controlled by runtime-mutable case group "
+                    f"{info.get('runtime_group_name') or info.get('branch_id')}; "
+                    f"assigned in CODE using {info.get('case_id_symbol')} as a full value."
+                )
+            continue
         if len(owners) > 1:
             warnings.append(
                 f"Warning: {alias} has mixed case owners {sorted(owners)}; "
@@ -2839,6 +3229,15 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             "block_type": (result.get("structured") or {}).get("block_type"),
             "profile_count": len(alias_model["profiles"]),
             "aliases": aliases,
+            "runtime_case_groups": [
+                {
+                    "branch_id": str(group.get("branch_id") or ""),
+                    "name": str(group.get("name") or group.get("branch_id") or ""),
+                    "case_id_symbol": str(group.get("case_id_symbol") or ""),
+                    "case_count": len(group.get("cases") or []),
+                }
+                for group in alias_model.get("runtime_case_groups") or []
+            ],
             "gvalue_conditions": gvalue_conditions,
             "uses_case_conditional_gvalue": bool(gvalue_conditions),
             **(
@@ -3969,6 +4368,34 @@ def _attach_multicase_diagnostics(
     retained_layout_profiles = multi.get("retained_layout_profiles") or []
     recovery_profiles = multi.get("recovery_profiles") or []
     dummy_blocks = multi.get("dummy_node_blocks") or {}
+    runtime_groups = multi.get("runtime_case_groups") or []
+    runtime_selectors = [
+        str(group.get("case_id_symbol") or "")
+        for group in runtime_groups
+        if str(group.get("case_id_symbol") or "")
+    ]
+    create_gvalue_lines = [
+        line
+        for line in c_draft.splitlines()
+        if "createGValue" in line
+    ]
+    runtime_case_used_in_gvalue_condition = sum(
+        1
+        for line in create_gvalue_lines
+        for selector in runtime_selectors
+        if selector and selector in line
+    )
+    runtime_aliases = [
+        info
+        for info in aliases.values()
+        if info.get("runtime_mutable")
+    ]
+    runtime_forced_code_aliases = [
+        info
+        for info in runtime_aliases
+        if info.get("owner") in {"CODE", "CODE_PER_STEP"}
+        and len({str(value) for value in (info.get("case_values") or {}).values()}) > 1
+    ]
     common_dummy_internal = list(dummy_role_classification.get("mixed_physical_dummy_internal") or [])
     timing = {key: 0.0 for key in _MULTICASE_TIMING_KEYS}
     if timing_ms:
@@ -3976,6 +4403,21 @@ def _attach_multicase_diagnostics(
     timing["total"] = round((time.perf_counter() - started) * 1000, 3)
     diagnostics = {
         "timing_ms": timing,
+        "init_time_case_count": int(multi.get("profile_count") or len(response.get("case_profiles") or [])),
+        "runtime_case_group_count": len(runtime_groups),
+        "runtime_case_count_per_group": {
+            str(group.get("name") or group.get("branch_id") or index): int(group.get("case_count") or 0)
+            for index, group in enumerate(runtime_groups)
+        },
+        "runtime_case_switches_in_code": len(runtime_groups),
+        "runtime_mutable_alias_count": len(runtime_aliases),
+        "runtime_forced_code_alias_count": len(runtime_forced_code_aliases),
+        "runtime_case_used_in_gvalue_condition": runtime_case_used_in_gvalue_condition,
+        "per_runtime_case_final_gred_expansion_count": 0 if runtime_groups and multi.get("fast_path") in {
+            "case_alias_template",
+            "case_alias_template_symbol_mux",
+            "dummy_finalization_alias_template_matrix_dag",
+        } else None,
         "global_case_count": int(multi.get("profile_count") or len(response.get("case_profiles") or [])),
         "local_case_group_count": len({
             str(branch_id)

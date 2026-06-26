@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Two-Port Branch Builder</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <script defer src="vendor/katex/katex.min.js"></script>
   <style>
     :root {
       --bg: #f4f6f8;
@@ -832,6 +834,42 @@
       filter: drop-shadow(0 0 5px rgba(245, 158, 11, 0.45));
     }
 
+    .terminal.auto-glue-preview {
+      stroke: #0ea5e9;
+      stroke-width: 4;
+      fill: #ecfeff;
+      filter: drop-shadow(0 0 7px rgba(14, 165, 233, 0.5));
+    }
+
+    .terminal.auto-glue-flash {
+      stroke: #22c55e;
+      stroke-width: 5;
+      fill: #ecfdf5;
+      filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.55));
+      animation: autoGluePulse 0.85s ease-out 1;
+    }
+
+    .auto-glue-feedback-line {
+      fill: none;
+      stroke: #22c55e;
+      stroke-width: 4;
+      stroke-dasharray: 7 6;
+      stroke-linecap: round;
+      pointer-events: none;
+      filter: drop-shadow(0 0 7px rgba(34, 197, 94, 0.45));
+    }
+
+    .auto-glue-feedback-line.preview {
+      stroke: #0ea5e9;
+      filter: drop-shadow(0 0 7px rgba(14, 165, 233, 0.45));
+    }
+
+    @keyframes autoGluePulse {
+      0% { r: 8; opacity: 0.55; }
+      45% { r: 13; opacity: 1; }
+      100% { r: 8; opacity: 1; }
+    }
+
     .net-badge-bg.net-hover-highlight {
       stroke: #f59e0b;
       stroke-width: 3;
@@ -928,6 +966,80 @@
       font-size: 12px;
       color: var(--muted);
       font-weight: 750;
+    }
+
+    .runtime-case-card {
+      margin: 8px 0 12px;
+      padding: 9px 10px;
+      border: 1px solid #d4e2f4;
+      border-radius: 8px;
+      background: #f8fbff;
+      box-shadow: inset 3px 0 0 #94a3b8;
+    }
+
+    .runtime-case-card.active {
+      border-color: #9ec5fe;
+      background: #eff6ff;
+      box-shadow: inset 3px 0 0 #2563eb;
+    }
+
+    .runtime-case-card-toggle {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 10px;
+      color: var(--ink);
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .runtime-case-card-toggle input {
+      margin: 0;
+      margin-top: 2px;
+    }
+
+    .runtime-case-card-copy {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .runtime-case-card-heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .runtime-case-card-title {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .runtime-case-card-pill {
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #dbeafe;
+      color: #1d4ed8;
+      font-size: 11px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .runtime-case-card-help,
+    .runtime-gconst-notice {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .runtime-gconst-notice {
+      margin: 8px 0 12px;
+      padding: 10px 12px;
+      border: 1px solid #c7d2fe;
+      border-radius: 8px;
+      background: #f5f8ff;
+      color: #475569;
     }
 
     .editor-groups {
@@ -1333,9 +1445,14 @@
       min-width: 0;
     }
 
+    .modal-output-body .formula-list {
+      width: 100%;
+      min-width: 0;
+    }
+
     .formula-card {
       display: grid;
-      gap: 10px;
+      gap: 16px;
       padding: 12px 14px 14px;
       border: 1px solid rgba(71, 96, 116, 0.92);
       border-radius: 8px;
@@ -1352,6 +1469,41 @@
       min-width: 0;
       align-content: start;
       padding: 10px 12px 12px;
+    }
+
+    .modal-output-body .formula-card {
+      width: auto;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: auto;
+    }
+
+    .latex-equation {
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 22px 0;
+      font-size: 1.28rem;
+      line-height: 1.85;
+    }
+
+    .latex-equation .katex-display {
+      margin: 0;
+      padding: 12px 2px;
+    }
+
+    .latex-equation .mord.mtable {
+      margin-top: 0.12em;
+      margin-bottom: 0.12em;
+    }
+
+    .latex-equation .mord.mtable .arraycolsep {
+      width: 0.58em;
+    }
+
+    .modal-output-body .latex-equation {
+      font-size: 1.2rem;
     }
 
     .output .formula-card > .formula-name:first-child,
@@ -1666,8 +1818,16 @@
       color: #f7fbff;
       width: max-content;
       max-width: 100%;
+      min-width: 0;
       overflow-x: auto;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    }
+
+    .modal-output-body .actual-block-preview {
+      display: grid;
+      width: 100%;
+      min-width: 0;
+      overflow-x: auto;
     }
 
     .actual-block-column-labels,
@@ -2886,6 +3046,9 @@
       panelWidth: null,
       hoverCurrent: null,
       hoverNetId: null,
+      autoGluePreview: null,
+      autoGlueFlash: null,
+      autoGlueFlashTimer: null,
       showLocalLabels: false,
       showReducedBranchCurrents: false,
       panDrag: null,
@@ -2926,6 +3089,7 @@
     let mathPrecomputeToken = 0;
     let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
+    const REDUCED_CACHE_VERSION = "reduced-katex-displaystyle-v3";
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
     const pythonDraftCache = new Map();
@@ -2950,7 +3114,7 @@
     }
 
     function reducedCacheKey(payload) {
-      return JSON.stringify({ language: state.language, payload });
+      return JSON.stringify({ version: REDUCED_CACHE_VERSION, language: state.language, payload });
     }
 
     function invalidateMathCaches() {
@@ -3061,6 +3225,8 @@
       state.panDrag = null;
       state.marquee = null;
       state.canvasTabDrag = null;
+      state.autoGluePreview = null;
+      state.autoGlueFlash = null;
       invalidateMathCaches();
     }
 
@@ -3374,10 +3540,27 @@
       "公式高亮只改变匹配 G/Ihis 片段的字体颜色；画布高亮只标记画布里的元件。": "Formula highlight only changes the text color of matching G/Ihis fragments; canvas highlight only marks the component on the canvas.",
       "高亮来源提示": "Highlight Provenance Note",
       "开启公式高亮时，消去版本会优先使用带隐藏来源标签的表达式来保证同名 symbol 不串色；因此部分合并项可能比普通显示更展开。": "When formula highlight is enabled, the reduced view prefers expressions with hidden provenance tags so same-name symbols do not cross-highlight; some merged terms may therefore appear more expanded than the normal display.",
+      "来源高亮版本": "Source Highlighted Version",
+      "用于追踪支路来源；主数学结果以上方普通排版为准。": "Use this view to trace branch provenance; the normal formatted result above is the primary mathematical display.",
       "基本信息": "Name & Geometry",
       "名称配置": "Name Configuration",
       "工况": "Multi-Case Options",
       "工况 / 数学模型": "Cases / Admittance Model",
+      "case id 可在 CODE 阶段改变": "case id can change in CODE stage",
+      "该 case group 不参与初始化全局工况枚举，只能在运行时改变数值表达式。不能改变拓扑、节点顺序、节点划分、观测器或矩阵维度。": "This case group does not participate in init-time global case enumeration. It may only change numeric expressions at runtime and must not change topology, node order, node partition, observers, or matrix dimensions.",
+      "运行时工况切换": "Runtime Case Switching",
+      "已启用": "Enabled",
+      "未启用": "Off",
+      "只允许在 CODE 阶段切换数值表达式；拓扑、节点顺序、节点划分和矩阵维度必须保持不变。": "Only numeric expressions may switch in CODE; topology, node order, node partition, and matrix dimensions must remain unchanged.",
+      "运行时工况切换时，常数/变量归属由后端按所有 case 自动分析；这里的手动常数设置不会用于该导出路径。": "When runtime case switching is enabled, constant/variable ownership is analyzed across all cases by the backend; these manual constant settings are not used by that export path.",
+      "Init-time case groups": "Init-time case groups",
+      "Runtime-mutable case groups": "Runtime-mutable case groups",
+      "Init-time case count": "Init-time case count",
+      "Runtime case switches in CODE": "Runtime case switches in CODE",
+      "Runtime mutable aliases": "Runtime mutable aliases",
+      "Aliases forced CODE by runtime case": "Aliases forced CODE by runtime case",
+      "Runtime case used in GValue condition": "Runtime case used in GValue condition",
+      "Per-runtime-case final Gred expansions": "Per-runtime-case final Gred expansions",
       "数学模型": "Admittance Model",
       "占位模型": "Placeholder Model",
       "观测电流": "Current Observers",
@@ -3502,6 +3685,8 @@
       "隐藏节点会强制作为内部节点参与消元。": "Hidden nodes are forced to participate as internal nodes in reduction.",
       "隐藏外部节点会强制将它作为内部节点参与消元，可能导致支路电流观测不完整或方向理解发生变化。是否继续？": "Hiding an external node forces it to participate as an internal node in reduction. Branch-current observers may become incomplete or harder to interpret. Continue?",
       "暴露": "Expose",
+      "取消暴露": "Unexpose",
+      "未暴露": "Unexposed",
       "隐藏": "Hide",
       "新建画布": "New Canvas",
       "+ 新建画布": "+ New Canvas",
@@ -4589,6 +4774,7 @@
 
     const WIRE_SNAP_DISTANCE = 12;
     const BRANCH_LEAD_SNAP_DISTANCE = 18;
+    const AUTO_GLUE_FLOATING_TERMINAL_DISTANCE = 20;
 
     function wireEndpointPosition(terminal) {
       const parsed = parseTerminal(terminal);
@@ -4729,6 +4915,169 @@
         if (bestDx !== null) branch.x += bestDx;
         if (bestDy !== null) branch.y += bestDy;
       });
+    }
+
+    function terminalIsFloatingForAutoGlue(terminal, lookup = netLookup(), groups = orderedNetGroups()) {
+      if (terminalIsDummyNode(terminal)) return false;
+      if (state.wires.some(wire => wire.from === terminal || wire.to === terminal)) return false;
+      const netId = lookup.get(terminal);
+      const group = (groups.find(item => item.id === netId)?.members || [terminal]);
+      return group.length === 1;
+    }
+
+    function terminalCanReceiveAutoGlue(terminal) {
+      return !terminalIsDummyNode(terminal);
+    }
+
+    function autoGlueConnectionForPair(terminal, candidate, lookup, groups) {
+      if (!terminalCanReceiveAutoGlue(terminal) || !terminalCanReceiveAutoGlue(candidate)) return null;
+      const terminalFloating = terminalIsFloatingForAutoGlue(terminal, lookup, groups);
+      const candidateFloating = terminalIsFloatingForAutoGlue(candidate, lookup, groups);
+      if (!terminalFloating && !candidateFloating) return null;
+      return terminalFloating
+        ? { from: terminal, to: candidate }
+        : { from: candidate, to: terminal };
+    }
+
+    function distancePointToSegment(point, a, b) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq <= 0.0001) return Math.hypot(point.x - a.x, point.y - a.y);
+      const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lenSq));
+      const x = a.x + t * dx;
+      const y = a.y + t * dy;
+      return Math.hypot(point.x - x, point.y - y);
+    }
+
+    function nearestWireTerminalToGlue(terminal, excludedBranchIds = new Set()) {
+      const lookup = netLookup();
+      const groups = orderedNetGroups();
+      if (!terminalCanReceiveAutoGlue(terminal)) return null;
+      if (!terminalIsFloatingForAutoGlue(terminal, lookup, groups)) return null;
+      const point = wireEndpointPosition(terminal);
+      if (!point) return null;
+      let best = null;
+      state.wires.forEach(wire => {
+        const p1 = wireEndpointPosition(wire.from);
+        const p2 = wireEndpointPosition(wire.to);
+        if (!p1 || !p2) return;
+        const fromParsed = parseTerminal(wire.from);
+        const toParsed = parseTerminal(wire.to);
+        const candidates = [wire.from, wire.to].filter(candidate => {
+          const parsed = parseTerminal(candidate);
+          return !excludedBranchIds.has(parsed.branchId) && terminalCanReceiveAutoGlue(candidate);
+        });
+        if (!candidates.length) return;
+        if (excludedBranchIds.has(fromParsed.branchId) && excludedBranchIds.has(toParsed.branchId)) return;
+        const mid = snappedWireMid(wire, wire.mid || { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 });
+        const distance = Math.min(distancePointToSegment(point, p1, mid), distancePointToSegment(point, mid, p2));
+        if (distance > AUTO_GLUE_FLOATING_TERMINAL_DISTANCE) return;
+        const target = candidates
+          .map(candidate => ({ terminal: candidate, point: wireEndpointPosition(candidate) }))
+          .filter(item => item.point)
+          .sort((a, b) => Math.hypot(a.point.x - point.x, a.point.y - point.y) - Math.hypot(b.point.x - point.x, b.point.y - point.y))[0];
+        if (!target) return;
+        if (!best || distance < best.distance) {
+          best = { terminal: target.terminal, connection: { from: terminal, to: target.terminal }, distance, ambiguous: false };
+        } else if (Math.abs(distance - best.distance) < 0.001 && best.terminal !== target.terminal) best.ambiguous = true;
+      });
+      return best && !best.ambiguous ? best : null;
+    }
+
+    function nearestFloatingTerminalToGlue(terminal, excludedBranchIds = new Set()) {
+      const lookup = netLookup();
+      const groups = orderedNetGroups();
+      if (!terminalCanReceiveAutoGlue(terminal)) return null;
+      const point = wireEndpointPosition(terminal);
+      if (!point) return null;
+      let best = null;
+      state.branches.forEach(branch => {
+        if (excludedBranchIds.has(branch.id)) return;
+        visibleTerminalSides(branch).forEach(side => {
+          const candidate = terminalKey(branch.id, side);
+          if (candidate === terminal) return;
+          const connection = autoGlueConnectionForPair(terminal, candidate, lookup, groups);
+          if (!connection) return;
+          const candidatePoint = wireEndpointPosition(candidate);
+          if (!candidatePoint) return;
+          const distance = Math.hypot(candidatePoint.x - point.x, candidatePoint.y - point.y);
+          if (distance > AUTO_GLUE_FLOATING_TERMINAL_DISTANCE) return;
+          if (!best || distance < best.distance) {
+            best = { terminal: candidate, connection, distance, ambiguous: false };
+          } else if (Math.abs(distance - best.distance) < 0.001) best.ambiguous = true;
+        });
+      });
+      if (best) return best.ambiguous ? null : best;
+      return nearestWireTerminalToGlue(terminal, excludedBranchIds);
+    }
+
+    function updateAutoGluePreview(branchIds) {
+      const moved = new Set(branchIds);
+      let nextPreview = null;
+      branchIds.some(id => {
+        const branch = findBranch(id);
+        if (!branch) return false;
+        return visibleTerminalSides(branch).some(side => {
+          const terminal = terminalKey(branch.id, side);
+          const match = nearestFloatingTerminalToGlue(terminal, moved);
+          if (!match) return false;
+          nextPreview = { terminal: match.connection.from, match: match.connection.to };
+          return true;
+        });
+      });
+      state.autoGluePreview = nextPreview;
+    }
+
+    function clearAutoGluePreview() {
+      state.autoGluePreview = null;
+    }
+
+    function showAutoGlueFlash(pairs) {
+      if (!pairs.length) return;
+      state.autoGlueFlash = { pairs };
+      statusEl.textContent = pairs.length === 1
+        ? optText("已自动连接悬空端点", "Floating terminals auto-connected")
+        : optText(`已自动连接 ${pairs.length} 组悬空端点`, `${pairs.length} floating terminal pairs auto-connected`);
+      if (state.autoGlueFlashTimer) window.clearTimeout(state.autoGlueFlashTimer);
+      state.autoGlueFlashTimer = window.setTimeout(() => {
+        state.autoGlueFlash = null;
+        state.autoGlueFlashTimer = null;
+        render();
+      }, 900);
+      render();
+    }
+
+    function autoGlueDraggedFloatingTerminals(branchIds) {
+      const moved = new Set(branchIds);
+      const glued = new Set();
+      const pairs = [];
+      branchIds.forEach(id => {
+        const branch = findBranch(id);
+        if (!branch) return;
+        visibleTerminalSides(branch).forEach(side => {
+          const terminal = terminalKey(branch.id, side);
+          if (glued.has(terminal)) return;
+          const match = nearestFloatingTerminalToGlue(terminal, moved);
+          if (!match || glued.has(match.connection.from) || glued.has(match.connection.to)) return;
+          glued.add(match.connection.from);
+          glued.add(match.connection.to);
+          connectTerminals(match.connection.from, match.connection.to);
+          pairs.push({ from: match.connection.from, to: match.connection.to });
+        });
+      });
+      clearAutoGluePreview();
+      showAutoGlueFlash(pairs);
+      return pairs.length;
+    }
+
+    function autoGlueFeedbackPairs() {
+      const pairs = [];
+      if (state.autoGluePreview) {
+        pairs.push({ from: state.autoGluePreview.terminal, to: state.autoGluePreview.match, kind: "preview" });
+      }
+      (state.autoGlueFlash?.pairs || []).forEach(pair => pairs.push({ ...pair, kind: "flash" }));
+      return pairs;
     }
 
     function snappedWireMid(wire, fallbackMid) {
@@ -5129,12 +5478,36 @@
       return symbols;
     }
 
+    function runtimeMutableGConstantNotice() {
+      return `
+        <div class="runtime-gconst-notice">
+          ${escapeHtml(tr("运行时工况切换时，常数/变量归属由后端按所有 case 自动分析；这里的手动常数设置不会用于该导出路径。"))}
+        </div>
+      `;
+    }
+
     function constantGEditor(branch, compact = false) {
       const checked = branchGIsConstant(branch);
       const inferred = [...branchConstantGSymbols(branch)].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
       const help = compact
         ? "勾选时会把当前 G 表达式中的符号默认视为常数；下方可补充常数符号。"
         : "按变量名判断常数。若 G[0][0] = X + Y + Z 且只填 Z，则只有 Z 可进入 RAM；X/Y 留在 CODE。";
+      if (isRuntimeMutableCaseGroup(branch)) {
+        return `
+          ${runtimeMutableGConstantNotice()}
+          <div class="field">
+            <label class="compact-check">
+              <input data-field="gIsConstant" disabled type="checkbox" ${checked ? "checked" : ""}>
+              <span>${escapeHtml(tr("G 是否为常数？"))}</span>
+            </label>
+          </div>
+          <div class="field">
+            <label>${escapeHtml(tr("常数 G 符号"))}</label>
+            <input data-field="constantGSymbols" disabled value="${escapeHtml(branchConstantGSymbolsText(branch))}">
+          </div>
+          <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(inferred.join(", ") || tr("无"))}</div>
+        `;
+      }
       return `
         ${checkboxField("G 是否为常数？", "gIsConstant", checked, help)}
         ${editableField("常数 G 符号", "constantGSymbols", branchConstantGSymbolsText(branch), false)}
@@ -6021,11 +6394,17 @@
       branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(value) || 0));
     }
 
+    function isRuntimeMutableCaseGroup(branch) {
+      normalizeSwitchCases(branch);
+      return Boolean(branch?.runtimeMutableCaseGroup && Array.isArray(branch.switchCases) && branch.switchCases.length > 1);
+    }
+
     function switchCaseEditor(branch, showCaption = true) {
       normalizeSwitchCases(branch);
       const count = branch.switchCases?.length || 1;
       const activeIndex = branch.activeSwitchCase || 0;
       const activeCase = activeSwitchCase(branch);
+      const runtimeMutable = isRuntimeMutableCaseGroup(branch);
       return `
         ${showCaption ? `<div class="field-caption">${escapeHtml(tr("开关工况"))}</div>` : ""}
         <div class="row">
@@ -6043,6 +6422,24 @@
           </div>
         </div>
         ${activeCase ? editableField("工况名称", "switchCaseName", activeCase.name || `Case ${activeIndex + 1}`) : ""}
+        ${count > 1 ? `
+          <div class="runtime-case-card ${runtimeMutable ? "active" : ""}">
+            <label class="runtime-case-card-toggle">
+              <span class="runtime-case-card-copy">
+                <span class="runtime-case-card-heading">
+                  <span class="runtime-case-card-title">${escapeHtml(tr("运行时工况切换"))}</span>
+                  <span class="runtime-case-card-pill">${escapeHtml(tr(runtimeMutable ? "已启用" : "未启用"))}</span>
+                </span>
+                <span class="runtime-case-card-help">
+                  ${escapeHtml(tr(runtimeMutable
+                    ? "只允许在 CODE 阶段切换数值表达式；拓扑、节点顺序、节点划分和矩阵维度必须保持不变。"
+                    : "case id 可在 CODE 阶段改变"))}
+                </span>
+              </span>
+              <input data-field="runtimeMutableCaseGroup" type="checkbox" ${runtimeMutable ? "checked" : ""}>
+            </label>
+          </div>
+        ` : ""}
       `;
     }
 
@@ -6122,6 +6519,12 @@
 
     function packagedGConstEditor(branch, showCaption = true) {
       const items = packagedGBranches(branch);
+      if (isRuntimeMutableCaseGroup(branch)) {
+        return `
+          ${showCaption ? `<div class="field-caption">${escapeHtml(tr("内部 G 常数属性"))}</div>` : ""}
+          ${runtimeMutableGConstantNotice()}
+        `;
+      }
       return `
         ${showCaption ? `<div class="field-caption">${escapeHtml(tr("内部 G 常数属性"))}</div>` : ""}
         ${items.length ? `
@@ -6598,6 +7001,8 @@
       state.wireDrag = null;
       state.resizeDrag = null;
       state.marquee = null;
+      state.autoGluePreview = null;
+      state.autoGlueFlash = null;
       state.zoom = data.zoom || state.zoom || 1;
       state.viewCenter = structuredClone(data.viewCenter || state.viewCenter || { x: WORLD.width / 2, y: WORLD.height / 2 });
       restoreReducedCacheSnapshot(data.reducedEquationCache || []);
@@ -6778,6 +7183,8 @@
       state.wireDrag = null;
       state.resizeDrag = null;
       state.marquee = null;
+      state.autoGluePreview = null;
+      state.autoGlueFlash = null;
       render();
       return { branches: importedBranches.length, wires: importedWires.length, groups: importedGroups.length };
     }
@@ -6957,6 +7364,11 @@
 
     function escapeRegExp(text) {
       return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function cIdentifier(text) {
+      const clean = String(text || "case").replace(/[^A-Za-z0-9_]/g, "_");
+      return /^[A-Za-z_]/.test(clean) ? clean : `case_${clean}`;
     }
 
     function nextIdForKind(kind) {
@@ -8273,7 +8685,7 @@
         return formatTaggedBySymbol(display, sourceTagged, depth + 1);
       }
       if (hasTopLevelAddSub(display)) {
-        return formatTaggedBySymbol(display, sourceTagged, depth + 1);
+        return `(${formatTaggedBySymbol(display, sourceTagged, depth + 1)})`;
       }
       if (display.startsWith("-")) {
         const nextTagged = tagged.startsWith("-") ? tagged.slice(1) : tagged;
@@ -8307,7 +8719,7 @@
         return formatTaggedBySymbol(display, sourceTagged, depth + 1);
       }
       if (hasTopLevelAddSub(display)) {
-        return formatTaggedBySymbol(display, sourceTagged, depth + 1);
+        return `(${formatTaggedBySymbol(display, sourceTagged, depth + 1)})`;
       }
       const displayPower = findTopLevelPower(display);
       const taggedPower = findTopLevelPower(tagged);
@@ -8816,7 +9228,7 @@
       const payload = buildReducedPayload();
       const staticHtml = reducedStaticMessage(payload);
       if (staticHtml) return staticHtml;
-      const key = JSON.stringify({ language: state.language, payload });
+      const key = reducedCacheKey(payload);
       const cached = cacheGet(reducedCache, key);
       if (cached?.result) return renderReducedEquationsResult(cached.result, payload.node_display_names || {});
       return cached?.html || null;
@@ -9034,8 +9446,20 @@
       });
     }
 
-    function defaultMultiCaseProfiles(branches = multiCaseEligibleBranches()) {
-      if (!branches.length) return [];
+    function initTimeMultiCaseBranches(branches = multiCaseEligibleBranches()) {
+      return branches.filter(branch => !isRuntimeMutableCaseGroup(branch));
+    }
+
+    function runtimeMutableCaseBranches(branches = multiCaseEligibleBranches()) {
+      return branches.filter(branch => isRuntimeMutableCaseGroup(branch));
+    }
+
+    function defaultMultiCaseProfiles(branches = initTimeMultiCaseBranches()) {
+      if (!branches.length) return multiCaseEligibleBranches().length ? [{
+        name: "case 0",
+        comment: "init-time base profile",
+        case_map: {}
+      }] : [];
       const profiles = [];
       const caseName = (branch, index) => branch.switchCases?.[index]?.name || `Case ${index + 1}`;
       const buildProfile = (branchIndex, caseMap, labels) => {
@@ -9063,19 +9487,21 @@
 
     function multiCaseProfilesKey(branches = multiCaseEligibleBranches()) {
       return JSON.stringify({
-        version: "alias-template-cartesian-profiles-v1",
+        version: "alias-template-cartesian-profiles-runtime-v1",
         branches: branches.map(branch => ({
           id: branch.id,
           name: branch.name,
           caseCount: branch.switchCases?.length || 0,
-          caseNames: (branch.switchCases || []).map(item => item.name || "")
+          caseNames: (branch.switchCases || []).map(item => item.name || ""),
+          runtimeMutableCaseGroup: isRuntimeMutableCaseGroup(branch)
         }))
       });
     }
 
     function ensureMultiCaseProfilesText(branches = multiCaseEligibleBranches()) {
+      const initBranches = initTimeMultiCaseBranches(branches);
       const key = multiCaseProfilesKey(branches);
-      const generated = JSON.stringify(defaultMultiCaseProfiles(branches), null, 2);
+      const generated = JSON.stringify(defaultMultiCaseProfiles(initBranches), null, 2);
       if (state.multiCaseProfilesText !== generated || state.multiCaseProfilesKey !== key) {
         state.multiCaseProfilesText = generated;
         state.multiCaseProfilesKey = key;
@@ -9094,10 +9520,10 @@
       }));
     }
 
-    function payloadForCaseProfile(profile) {
+    function payloadForCaseProfile(profile, runtimeCaseMap = {}) {
       const originals = state.branches.map(branch => [branch, Number(branch.activeSwitchCase) || 0, Number(branch.packageOriginal?.activeNetworkCase) || 0]);
       try {
-        Object.entries(profile.case_map || {}).forEach(([branchId, caseIndex]) => {
+        Object.entries({ ...(profile.case_map || {}), ...(runtimeCaseMap || {}) }).forEach(([branchId, caseIndex]) => {
           const branch = findBranch(branchId);
           if (!branch) return;
           normalizeSwitchCases(branch);
@@ -9254,9 +9680,11 @@
     function multiCaseExportPayload() {
       const branches = multiCaseEligibleBranches();
       ensureMultiCaseProfilesText(branches);
+      const runtimeBranches = runtimeMutableCaseBranches(branches);
+      const runtimeBaseCaseMap = Object.fromEntries(runtimeBranches.map(branch => [branch.id, 0]));
       const profiles = parseMultiCaseProfiles();
       const case_profiles = profiles.map((profile, index) => {
-        const payload = payloadForCaseProfile(profile);
+        const payload = payloadForCaseProfile(profile, runtimeBaseCaseMap);
         const dummy_finalization = dummyFinalizationForCaseProfile(profile, payload);
         return {
           name: profile.name || `Case ${index + 1}`,
@@ -9266,6 +9694,17 @@
           ...(dummy_finalization ? { dummy_finalization } : {})
         };
       });
+      const runtime_case_groups = runtimeBranches.map(branch => ({
+        branch_id: branch.id,
+        name: branch.name || branch.id,
+        kind: branch.kind,
+        case_id_symbol: `runtime_${cIdentifier(branch.name || branch.id || "case")}_case_id`,
+        cases: (branch.switchCases || []).map((item, index) => ({
+          index,
+          name: item.name || `Case ${index + 1}`,
+          payloads: profiles.map(profile => payloadForCaseProfile(profile, { [branch.id]: index }))
+        }))
+      }));
       const common_dummy_internal_nodes = [...new Set(case_profiles.flatMap(profile =>
         (profile.payload?.dummy_node_blocks || []).flatMap(block =>
           (block.dummy_nodes || []).map(node => node.node_id).filter(Boolean)
@@ -9274,6 +9713,7 @@
       return {
         mode: "multi_case_c_export",
         case_id_symbol: state.multiCaseIdSymbol || "case_id",
+        runtime_case_groups,
         display_mode: state.optimizedEliminationDisplay || "compact",
         simplify_level: state.optimizedEliminationSimplify || "light",
         assume_spd: state.optimizedEliminationAssumeSpd !== false,
@@ -9396,7 +9836,7 @@
       `;
     }
 
-    function renderOptimizedWarningBox(result = null) {
+    function renderOptimizedWarningBox(result = null, payload = null) {
       const warnings = state.language === "en"
         ? [
             "This tab assumes the eliminated block is symmetric positive definite, or at least suitable for symmetric Schur-style reduction. Treat results with controlled current sources or asymmetric black-box stamps as reference.",
@@ -9406,9 +9846,9 @@
             "该优化消元页面假设待消元矩阵为对称正定，或至少适合对称舒尔消元；如果包含受控电流源、非对称黑盒等非对称元件贡献，请只作为参考。",
             "结构化公式默认显示矩阵、向量和块矩阵形式，不默认展开巨大的标量表达式。"
           ];
-      const dummyBlocks = result?.structured?.dummy_node_blocks || {};
-      if (dummyBlocks.dropped_before_schur) {
-        const nodes = (dummyBlocks.nodes || []).join(", ") || "-";
+      const dummyNodes = optimizedDummyPrunedNodes(result, payload);
+      if (dummyNodes.length) {
+        const nodes = displayNodeList(dummyNodes, payload?.node_display_names || {}) || "-";
         warnings.push(optText(
           `N-Dummy 孤立节点已验证，并在 Schur 消元 / C 导出前裁掉：${nodes}。这些节点不会进入求解矩阵，也不会恢复电压。`,
           `N-Dummy isolated nodes were validated and pruned before Schur reduction / C export: ${nodes}. These nodes are not solver nodes and their voltages are not recovered.`
@@ -9444,13 +9884,69 @@
       return (nodes || []).map(node => displayNames[node] || nodeDisplayName(node)).join(", ");
     }
 
-    function optimizedDummyPrunedNodes(result = null) {
+    function optimizedDummyPrunedNodeInfo(result = null, payload = null) {
+      const displayNames = payload?.node_display_names || {};
+      const displayToNode = new Map(
+        Object.entries(displayNames).map(([node, name]) => [String(name), String(node)])
+      );
+      const aliases = new Set();
+      const pushAlias = value => {
+        if (value === undefined || value === null || value === "") return;
+        aliases.add(String(value));
+      };
+      const pushNode = (nodes, seen, value) => {
+        if (value === undefined || value === null || value === "") return;
+        const raw = String(value);
+        const node = displayToNode.get(raw) || raw;
+        pushAlias(raw);
+        pushAlias(node);
+        pushAlias(displayNames[node]);
+        if (seen.has(node)) return;
+        seen.add(node);
+        nodes.push(node);
+      };
+      const nodes = [];
+      const seen = new Set();
       const dummyBlocks = result?.structured?.dummy_node_blocks || {};
-      return dummyBlocks.dropped_before_schur ? (dummyBlocks.nodes || []).map(String) : [];
+      if (dummyBlocks.dropped_before_schur) {
+        (dummyBlocks.nodes || []).forEach(node => pushNode(nodes, seen, node));
+      }
+      (dummyBlocks.common_internal_nodes || []).forEach(node => pushNode(nodes, seen, node));
+      const structured = result?.structured || {};
+      (structured.analysis?.dummy_nodes || []).forEach(node => pushNode(nodes, seen, node));
+      (structured.details?.dummy_nodes || []).forEach(node => pushNode(nodes, seen, node));
+      (structured.finalization_profiles || []).forEach(profile => {
+        (profile?.dummy_nodes || []).forEach(node => pushNode(nodes, seen, node));
+        (profile?.isolated_dummy_nodes || []).forEach(node => pushNode(nodes, seen, node));
+      });
+      const multi = result?.multi_case || {};
+      (multi.dummy_node_blocks?.common_internal_nodes || []).forEach(node => pushNode(nodes, seen, node));
+      (multi.finalization_profiles || []).forEach(profile => {
+        (profile?.dummy_nodes || []).forEach(node => pushNode(nodes, seen, node));
+        (profile?.isolated_dummy_nodes || []).forEach(node => pushNode(nodes, seen, node));
+      });
+      (multi.diagnostics?.mixed_physical_dummy_internal || []).forEach(node => pushNode(nodes, seen, node));
+      const payloadBlocks = Array.isArray(payload?.dummy_node_blocks) ? payload.dummy_node_blocks : [];
+      payloadBlocks.forEach(block => {
+        (block?.dummy_nodes || []).forEach(node => {
+          if (node && typeof node === "object") {
+            pushNode(nodes, seen, node.node_id || node.display_name);
+            pushAlias(node.display_name);
+            pushAlias(node.node_id);
+          } else {
+            pushNode(nodes, seen, node);
+          }
+        });
+      });
+      return { nodes, matchSet: aliases };
     }
 
-    function renderDummyPrunedNotice(result = null, displayNames = {}) {
-      const nodes = optimizedDummyPrunedNodes(result);
+    function optimizedDummyPrunedNodes(result = null, payload = null) {
+      return optimizedDummyPrunedNodeInfo(result, payload).nodes;
+    }
+
+    function renderDummyPrunedNotice(result = null, displayNames = {}, payload = null) {
+      const nodes = optimizedDummyPrunedNodes(result, payload);
       if (!nodes.length) return "";
       const names = displayNodeList(nodes, displayNames) || "-";
       return `
@@ -9508,7 +10004,8 @@
       const external = payload.external_nodes || [];
       const internal = payload.internal_nodes || [];
       if (!internal.length) return "";
-      const dummyPrunedSet = new Set(optimizedDummyPrunedNodes(result));
+      const dummyPrunedInfo = optimizedDummyPrunedNodeInfo(result, payload);
+      const dummyPrunedSet = dummyPrunedInfo.matchSet;
       const orderTitle = optText("当前 G 矩阵节点顺序", "Current G Matrix Node Order");
       const orderNodeStack = nodes => (nodes || []).length
         ? nodes.map(node => `<span class="actual-block-order-node">${escapeHtml(displayNames[node] || nodeDisplayName(node))}</span>`).join("")
@@ -9544,7 +10041,7 @@
 
       return `
         <div class="actual-block-preview" aria-label="${escapeHtml(optText("G 矩阵分块预览", "G matrix block preview"))}">
-          ${renderDummyPrunedNotice(result, displayNames)}
+          ${renderDummyPrunedNotice(result, displayNames, payload)}
           <div class="actual-block-column-labels" style="grid-template-columns: ${gridColumns};">
             <span class="actual-block-label" style="grid-column: 1 / span ${externalColSpan};">Grr</span>
             <span class="actual-block-label" style="grid-column: ${internalColStart} / span ${internalColSpan};">Grk</span>
@@ -9684,7 +10181,7 @@
       if (result.structured?.block_type === "no_elimination") {
         const displayNames = payload.node_display_names || {};
         const externalNames = (payload.external_nodes || []).map(node => displayNames[node] || nodeDisplayName(node));
-        const dummyPrunedSet = new Set(optimizedDummyPrunedNodes(result));
+        const dummyPrunedSet = optimizedDummyPrunedNodeInfo(result, payload).matchSet;
         const nodeOrder = payload.all_nodes || payload.external_nodes || [];
         const dummyPrunedIndexes = new Set(
           nodeOrder
@@ -9698,7 +10195,7 @@
           <div class="formula-card">
             <div class="formula-name">${optText("原始 G/Ihis 预览", "Original G/Ihis Preview")}</div>
             <div class="formula-empty">${optText("当前没有内部节点，C 导出直接使用原始节点顺序生成导纳写入和注入。", "No internal nodes are selected, so C export uses the original retained-node order for stamping and injection.")}</div>
-            ${renderDummyPrunedNotice(result, displayNames)}
+            ${renderDummyPrunedNotice(result, displayNames, payload)}
             <div class="formula-line"><span class="formula-lhs">${optText("节点顺序", "Node order")}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(externalNames.join(", ") || "-")}</span></div>
             <div class="matrix-equation">
               <span class="formula-lhs">${formatMath("G")}</span><span class="formula-eq">=</span>${renderMatrix(payload.G_full || [], null, null, dummyCellClass)}
@@ -9707,9 +10204,14 @@
           </div>
         `;
       }
-      const blockPayload = { ...payload, internal_nodes: result.effective_internal_nodes || payload.internal_nodes || [] };
+      const dummyPrunedSet = optimizedDummyPrunedNodeInfo(result, payload).matchSet;
       const userOrder = result.internal_nodes || payload.internal_nodes || [];
       const effectiveOrder = result.effective_internal_nodes || userOrder;
+      const sourceInternalOrder = payload.internal_nodes || [];
+      const previewInternalOrder = sourceInternalOrder.some(node => dummyPrunedSet.has(String(node)))
+        ? sourceInternalOrder
+        : effectiveOrder;
+      const blockPayload = { ...payload, internal_nodes: previewInternalOrder };
       const isReordered = JSON.stringify(userOrder) !== JSON.stringify(effectiveOrder);
       const orderNotice = isReordered
         ? `<div class="formula-empty">${optText("提示：优化消元会自动按结构重排内部 k 节点；下方 G 矩阵和 C 草稿使用右侧显示的重排顺序。", "Note: optimized elimination automatically reorders internal k nodes by structure; the G matrix below and the C draft use the reordered sequence shown on the right.")}</div>`
@@ -9909,7 +10411,7 @@
     function renderOptimizedEliminationResult(result, payload) {
       return `
         <div class="formula-list">
-          ${renderOptimizedWarningBox(result)}
+          ${renderOptimizedWarningBox(result, payload)}
           ${renderOptimizedFormulaResult(result, payload)}
         </div>
       `;
@@ -9929,12 +10431,15 @@
         return branch?.switchCases?.[index]?.name || `Case ${index + 1}`;
       };
       const branchLabel = branch => branch?.name || branch?.id || "-";
+      const initBranches = initTimeMultiCaseBranches(branches);
+      const runtimeBranches = runtimeMutableCaseBranches(branches);
       const branchList = branches.map(branch => {
         const cases = (branch.switchCases || [])
           .map((item, index) => `${index}: ${item.name || `Case ${index + 1}`}`)
           .join(" / ");
         return `<div class="formula-line"><span class="formula-rhs">${escapeHtml(branchLabel(branch))}: ${escapeHtml(cases)}</span></div>`;
       }).join("");
+      const groupList = list => list.map(branch => escapeHtml(branchLabel(branch))).join(", ") || "-";
       const profileRows = profiles.map((profile, index) => {
         const entries = Object.entries(profile.case_map || {}).map(([branchId, caseIndex]) => {
           const branch = branchById.get(branchId) || findBranch(branchId);
@@ -9946,6 +10451,11 @@
         <div class="formula-card">
           <div class="formula-name">${escapeHtml(optText("多 case 元件摘要", "Multi-case Element Summary"))}</div>
           ${branchList || `<div class="formula-empty">${escapeHtml(optText("当前电路没有可导出的多 case 支路或黑盒。", "The current circuit has no multi-case branches or black boxes to export."))}</div>`}
+          ${branches.length ? `
+            <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Init-time case groups", "Init-time case groups"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${groupList(initBranches)}</span></div>
+            <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Runtime-mutable case groups", "Runtime-mutable case groups"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${groupList(runtimeBranches)}</span></div>
+            <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Init-time case count", "Init-time case count"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${profiles.length}</span></div>
+          ` : ""}
         </div>
         <div class="formula-card">
           <div class="formula-name">${escapeHtml(optText("case_id 映射", "case_id Mapping"))}</div>
@@ -10132,19 +10642,84 @@
       const branchById = new Map(multiCaseEligibleBranches().map(branch => [branch.id, branch]));
       const branchLabel = branch => branch?.name || branch?.id || "-";
       const aliases = multiCase.aliases || {};
+      const runtimeGroups = Array.isArray(multiCase.runtime_case_groups) ? multiCase.runtime_case_groups : [];
+      const diagnostics = multiCase.diagnostics || {};
+      const runtimeSampleLabel = (caseIndex) => {
+        const initCount = Number(diagnostics.init_time_case_count ?? multiCase.profile_count ?? 0);
+        if (!initCount || runtimeGroups.length !== 1) return `case ${caseIndex}`;
+        const group = runtimeGroups[0] || {};
+        const runtimeCount = Number(group.case_count ?? 0);
+        const stride = runtimeCount + 1;
+        if (!runtimeCount || stride <= 1) return `case ${caseIndex}`;
+        const numericIndex = Number(caseIndex);
+        if (!Number.isInteger(numericIndex) || numericIndex < 0 || numericIndex >= initCount * stride) return `case ${caseIndex}`;
+        const initIndex = Math.floor(numericIndex / stride);
+        const sampleOffset = numericIndex % stride;
+        if (sampleOffset === 0) {
+          return `${optText("init case", "init case")} ${initIndex} / ${optText("runtime 默认 case 0", "runtime default case 0")}`;
+        }
+        return `${optText("init case", "init case")} ${initIndex} / ${group.name || group.branch_id || optText("runtime group", "runtime group")} ${optText("case", "case")} ${sampleOffset - 1}`;
+      };
+      const shouldHideRuntimeDefaultRow = (caseValues, caseOwners, caseIndex) => {
+        const initCount = Number(diagnostics.init_time_case_count ?? multiCase.profile_count ?? 0);
+        if (!initCount || runtimeGroups.length !== 1) return false;
+        const group = runtimeGroups[0] || {};
+        const runtimeCount = Number(group.case_count ?? 0);
+        const stride = runtimeCount + 1;
+        const numericIndex = Number(caseIndex);
+        if (!runtimeCount || !Number.isInteger(numericIndex) || numericIndex % stride !== 0) return false;
+        const nextIndex = String(numericIndex + 1);
+        return Object.prototype.hasOwnProperty.call(caseValues, nextIndex)
+          && String(caseValues[caseIndex] || "") === String(caseValues[nextIndex] || "")
+          && String(caseOwners[caseIndex] || "") === String(caseOwners[nextIndex] || "");
+      };
+      const runtimeGroupRows = runtimeGroups.map(group => `
+        <tr>
+          <td>${escapeHtml(group.name || group.branch_id || "-")}</td>
+          <td>${escapeHtml(group.case_id_symbol || "-")}</td>
+          <td>${escapeHtml(String(group.case_count ?? "-"))}</td>
+        </tr>
+      `).join("");
+      const runtimeDiagnosticsHtml = runtimeGroups.length ? `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("Runtime-mutable case 诊断", "Runtime-Mutable Case Diagnostics"))}</div>
+          <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Init-time case count", "Init-time case count"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(String(diagnostics.init_time_case_count ?? multiCase.profile_count ?? "-"))}</span></div>
+          <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Runtime case switches in CODE", "Runtime case switches in CODE"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(String(diagnostics.runtime_case_switches_in_code ?? runtimeGroups.length))}</span></div>
+          <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Runtime mutable aliases", "Runtime mutable aliases"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(String(diagnostics.runtime_mutable_alias_count ?? "-"))}</span></div>
+          <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Aliases forced CODE by runtime case", "Aliases forced CODE by runtime case"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(String(diagnostics.runtime_forced_code_alias_count ?? "-"))}</span></div>
+          <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Runtime case used in GValue condition", "Runtime case used in GValue condition"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(String(diagnostics.runtime_case_used_in_gvalue_condition ?? "-"))}</span></div>
+          <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("Per-runtime-case final Gred expansions", "Per-runtime-case final Gred expansions"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(String(diagnostics.per_runtime_case_final_gred_expansion_count ?? 0))}</span></div>
+          <table class="analysis-table stage-summary-table">
+            <thead>
+              <tr>
+                <th>${escapeHtml(optText("case group", "case group"))}</th>
+                <th>${escapeHtml(optText("runtime case id 变量", "runtime case id variable"))}</th>
+                <th>${escapeHtml(optText("case 数量", "case count"))}</th>
+              </tr>
+            </thead>
+            <tbody>${runtimeGroupRows}</tbody>
+          </table>
+        </div>
+      ` : "";
       const aliasCards = Object.entries(aliases).map(([alias, info]) => {
         const caseValues = info.case_values || {};
         const caseOwners = info.case_owners || {};
         const ownerList = Object.values(caseOwners).filter(Boolean);
         const uniqueOwners = Array.from(new Set(ownerList));
         const promotedOwner = info.owner || "-";
-        const caseRows = Object.entries(caseValues).map(([caseIndex, expr]) => `
-          <tr>
-            <td>case ${escapeHtml(caseIndex)}</td>
-            <td>${escapeHtml(expr || "0")}</td>
-            <td>${escapeHtml(caseOwners[caseIndex] || "-")}</td>
-          </tr>
-        `).join("");
+        const isRuntimeSampleTable = runtimeGroups.length === 1
+          && info.selector === "global"
+          && Number(diagnostics.init_time_case_count ?? multiCase.profile_count ?? 0) > 0
+          && Object.keys(caseValues).length > Number(diagnostics.init_time_case_count ?? multiCase.profile_count ?? 0);
+        const caseRows = Object.entries(caseValues)
+          .filter(([caseIndex]) => !shouldHideRuntimeDefaultRow(caseValues, caseOwners, caseIndex))
+          .map(([caseIndex, expr]) => `
+            <tr>
+              <td>${escapeHtml(isRuntimeSampleTable ? runtimeSampleLabel(caseIndex) : `case ${caseIndex}`)}</td>
+              <td>${escapeHtml(expr || "0")}</td>
+              <td>${escapeHtml(caseOwners[caseIndex] || "-")}</td>
+            </tr>
+          `).join("");
         const mixedOwnerWarning = uniqueOwners.length > 1 ? `
           <div class="formula-empty">${escapeHtml(optText(
             "存在混合 owner：RAM case 保持在 RAM；CODE case 只在对应 case 条件下启用。",
@@ -10154,6 +10729,19 @@
         const sourceLabel = info.selector === "global"
           ? optText("重叠输入项", "Overlapping input entry")
           : branchLabel(branchById.get(info.branch_id) || findBranch(info.branch_id) || { id: info.branch_id });
+        const runtimeBadge = info.runtime_mutable ? `
+          <div class="formula-empty">${escapeHtml(optText("Runtime-mutable group", "Runtime-mutable group"))}: ${escapeHtml(info.runtime_group_name || info.branch_id || "-")}; ${escapeHtml(optText("runtime case id 变量", "runtime case id variable"))}: ${escapeHtml(info.case_id_symbol || "-")}</div>
+        ` : "";
+        const usedBy = Array.isArray(info.used_by) ? info.used_by.filter(Boolean) : [];
+        const usedByHtml = usedBy.length > 1 ? `
+          <div class="formula-empty">${escapeHtml(optText("复用位置", "Reused by"))}: ${escapeHtml(usedBy.join(", "))}</div>
+        ` : "";
+        const runtimeSampleNote = isRuntimeSampleTable ? `
+          <div class="formula-empty">${escapeHtml(optText(
+            "下表是 init-time case 与 runtime-mutable case 的采样组合，不代表全局 case_id 数量；重复的 runtime 默认行已隐藏。",
+            "The table below shows sampled combinations of init-time cases and runtime-mutable cases, not the number of global case_id values. Repeated runtime-default rows are hidden."
+          ))}</div>
+        ` : "";
         return `
           <div class="formula-empty">
             <div class="formula-line">
@@ -10162,11 +10750,14 @@
               <span class="formula-rhs">${escapeHtml(optText("由 case 选择的完整值", "full value selected by case"))}</span>
             </div>
             <div class="formula-empty">${escapeHtml(optText("来源", "Source"))}: ${escapeHtml(sourceLabel)}; ${escapeHtml(optText("类型", "Type"))}: ${escapeHtml(info.kind || "-")}; ${escapeHtml(optText("提升后 owner", "promoted owner"))} = ${escapeHtml(promotedOwner)}</div>
+            ${runtimeBadge}
+            ${usedByHtml}
+            ${runtimeSampleNote}
             ${mixedOwnerWarning}
             <table class="analysis-table stage-summary-table">
               <thead>
                 <tr>
-                  <th>case</th>
+                  <th>${escapeHtml(isRuntimeSampleTable ? optText("适用情况", "Condition") : "case")}</th>
                   <th>${escapeHtml(optText("完整表达式", "Full Expression"))}</th>
                   <th>owner</th>
                 </tr>
@@ -10189,8 +10780,12 @@
         <div class="formula-card">
           <div class="formula-name">${escapeHtml(optText("按 case 条件启用的 GValue", "Case-Conditional GValue"))}</div>
           <div class="formula-empty">${escapeHtml(optText(
-            "case_id 假定在仿真开始前固定；不支持运行时切换 case_id。",
-            "case_id is assumed fixed before simulation. Runtime case switching is not supported."
+            runtimeGroups.length
+              ? "init-time case_id 仍假定在仿真开始前固定；runtime-mutable case id 只允许影响 CODE 阶段 alias 的完整值，不能进入 GValue 条件。"
+              : "case_id 假定在仿真开始前固定；不支持运行时切换 case_id。",
+            runtimeGroups.length
+              ? "init-time case_id is still fixed before simulation. Runtime-mutable case ids may only select full-value aliases in CODE and must not enter GValue conditions."
+              : "case_id is assumed fixed before simulation. Runtime case switching is not supported."
           ))}</div>
           <div class="formula-line"><span class="formula-lhs">${escapeHtml(optText("使用 case 条件 GValue", "Uses case-conditional GValue"))}</span><span class="formula-eq">=</span><span class="formula-rhs">${escapeHtml(multiCase.uses_case_conditional_gvalue ? optText("是", "yes") : optText("否", "no"))}</span></div>
           ${conditionRows || `<div class="formula-empty">${escapeHtml(optText("没有 case 条件 GValue。", "No case-conditional GValue entries."))}</div>`}
@@ -10198,6 +10793,7 @@
       `;
       return `
         ${renderMultiCaseTemplateVisualization(multiCase)}
+        ${runtimeDiagnosticsHtml}
         ${conditionalGValueHtml}
         ${aliasHtml}
         <div class="formula-card" data-c-draft-card>
@@ -10212,9 +10808,19 @@
 
     function multiCaseExportCacheKey(payload) {
       return JSON.stringify({
-        version: "multi-case-template-visualization-v1",
+        version: "multi-case-runtime-mutable-v1",
         case_id_symbol: payload.case_id_symbol,
         eligible_branches: payload.eligible_branches,
+        runtime_case_groups: payload.runtime_case_groups?.map(group => ({
+          branch_id: group.branch_id,
+          name: group.name,
+          case_id_symbol: group.case_id_symbol,
+          cases: (group.cases || []).map(item => ({
+            index: item.index,
+            name: item.name,
+            payloads: item.payloads
+          }))
+        })),
         case_profiles: payload.case_profiles?.map(profile => ({
           name: profile.name,
           comment: profile.comment,
@@ -11069,7 +11675,17 @@
       const externalNames = result.external_nodes.map(node => displayNames[node] || nodeDisplayName(node));
       const internalNames = result.internal_nodes.map(node => displayNames[node] || nodeDisplayName(node));
       const groundNames = (result.ground_nodes || []).map(node => displayNames[node] || nodeDisplayName(node));
-      const highlightWarning = reducedHighlightWarning(result);
+      const displayResult = {
+        ...result,
+        G_red: result.G_red_simplified || result.G_red,
+        Ihis_red: result.Ihis_red_simplified || result.Ihis_red,
+        K_v: result.K_v_simplified || result.K_v,
+        K_h: result.K_h_simplified || result.K_h,
+        G_red_tagged: null,
+        Ihis_red_tagged: null,
+        K_v_tagged: null,
+        K_h_tagged: null,
+      };
 
       return `
         <div class="formula-list">
@@ -11081,28 +11697,114 @@
           </div>
           <div class="formula-card">
             <div class="formula-name">${escapeHtml(tr("节点方程消去版本"))}</div>
-            ${highlightWarning}
-            <div class="matrix-equation">
-              ${renderVectorMatrix(externalNames.map(name => `I_${name}`))}
-              <span class="formula-eq">=</span>
-              ${renderMatrix(result.G_red, null, result.G_red_tagged)}
-              ${renderVectorMatrix(externalNames.map(name => `V_${name}`))}
-              <span class="formula-eq">+</span>
-              ${renderVectorMatrix(result.Ihis_red, result.Ihis_red_tagged)}
-            </div>
+            ${renderReducedEquationDisplay(displayResult, externalNames)}
           </div>
           <div class="formula-card">
             <div class="formula-name">${escapeHtml(tr("内部节点电压恢复公式"))}</div>
-            <div class="matrix-equation">
-              ${renderVectorMatrix(internalNames.map(name => `V_${name}`))}
-              <span class="formula-eq">=</span>
-              ${renderMatrix(result.K_v, null, result.K_v_tagged)}
-              ${renderVectorMatrix(externalNames.map(name => `V_${name}`))}
-              <span class="formula-eq">+</span>
-              ${renderVectorMatrix(result.K_h, result.K_h_tagged)}
-            </div>
+            ${renderRecoveryEquationDisplay(displayResult, externalNames, internalNames)}
           </div>
-          ${result.internal_nodes.length === 1 ? renderSingleInternalFormula(result, externalNames, internalNames[0]) : ""}
+          ${result.internal_nodes.length === 1 ? renderSingleInternalFormula(displayResult, externalNames, internalNames[0]) : ""}
+          ${renderReducedSourceHighlightVersion(result, externalNames, internalNames)}
+        </div>
+      `;
+    }
+
+    function latexText(value) {
+      return String(value ?? "")
+        .replace(/\\/g, "\\backslash{}")
+        .replace(/_/g, "\\_")
+        .replace(/([{}$&#%])/g, "\\$1");
+    }
+
+    function latexColumnVector(items) {
+      return `\\begin{bmatrix}${items.join(" \\\\ ")}\\end{bmatrix}`;
+    }
+
+    function latexNodeSymbol(prefix, name) {
+      return `${prefix}_{${latexText(name)}}`;
+    }
+
+    function renderLatexOrFallback(latex, fallbackFactory) {
+      const fallback = () => (typeof fallbackFactory === "function" ? fallbackFactory() : "");
+      if (!latex) return fallback();
+      try {
+        if (typeof katex !== "undefined" && katex && typeof katex.renderToString === "function") {
+          return `<div class="latex-equation">${katex.renderToString(latex, { displayMode: true, throwOnError: false })}</div>`;
+        }
+      } catch (_error) {
+        return fallback();
+      }
+      return fallback();
+    }
+
+    function renderReducedEquationFallback(result, externalNames) {
+      return `
+        <div class="matrix-equation">
+          ${renderVectorMatrix(externalNames.map(name => `I_${name}`))}
+          <span class="formula-eq">=</span>
+          ${renderMatrix(result.G_red)}
+          ${renderVectorMatrix(externalNames.map(name => `V_${name}`))}
+          <span class="formula-eq">+</span>
+          ${renderVectorMatrix(result.Ihis_red)}
+        </div>
+      `;
+    }
+
+    function renderReducedEquationDisplay(result, externalNames) {
+      const latex = result.G_red_latex && result.Ihis_red_latex
+        ? `${latexColumnVector(externalNames.map(name => latexNodeSymbol("I", name)))} = ${result.G_red_latex}${latexColumnVector(externalNames.map(name => latexNodeSymbol("V", name)))} + ${result.Ihis_red_latex}`
+        : "";
+      return renderLatexOrFallback(latex, () => renderReducedEquationFallback(result, externalNames));
+    }
+
+    function renderRecoveryEquationFallback(result, externalNames, internalNames) {
+      return `
+        <div class="matrix-equation">
+          ${renderVectorMatrix(internalNames.map(name => `V_${name}`))}
+          <span class="formula-eq">=</span>
+          ${renderMatrix(result.K_v)}
+          ${renderVectorMatrix(externalNames.map(name => `V_${name}`))}
+          <span class="formula-eq">+</span>
+          ${renderVectorMatrix(result.K_h)}
+        </div>
+      `;
+    }
+
+    function renderRecoveryEquationDisplay(result, externalNames, internalNames) {
+      const latex = result.K_v_latex && result.K_h_latex
+        ? `${latexColumnVector(internalNames.map(name => latexNodeSymbol("V", name)))} = ${result.K_v_latex}${latexColumnVector(externalNames.map(name => latexNodeSymbol("V", name)))} + ${result.K_h_latex}`
+        : "";
+      return renderLatexOrFallback(latex, () => renderRecoveryEquationFallback(result, externalNames, internalNames));
+    }
+
+    function hasReducedTaggedResult(result) {
+      return Boolean(
+        result?.G_red_tagged || result?.Ihis_red_tagged || result?.K_v_tagged || result?.K_h_tagged
+      );
+    }
+
+    function renderReducedSourceHighlightVersion(result, externalNames, internalNames) {
+      if (!hasReducedTaggedResult(result) || !activeHighlightedBranches().length) return "";
+      return `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(tr("来源高亮版本"))}</div>
+          ${reducedHighlightWarning(result)}
+          <div class="matrix-equation">
+            ${renderVectorMatrix(externalNames.map(name => `I_${name}`))}
+            <span class="formula-eq">=</span>
+            ${renderMatrix(result.G_red, null, result.G_red_tagged)}
+            ${renderVectorMatrix(externalNames.map(name => `V_${name}`))}
+            <span class="formula-eq">+</span>
+            ${renderVectorMatrix(result.Ihis_red, result.Ihis_red_tagged)}
+          </div>
+          <div class="matrix-equation">
+            ${renderVectorMatrix(internalNames.map(name => `V_${name}`))}
+            <span class="formula-eq">=</span>
+            ${renderMatrix(result.K_v, null, result.K_v_tagged)}
+            ${renderVectorMatrix(externalNames.map(name => `V_${name}`))}
+            <span class="formula-eq">+</span>
+            ${renderVectorMatrix(result.K_h, result.K_h_tagged)}
+          </div>
         </div>
       `;
     }
@@ -11115,7 +11817,7 @@
       return `
         <div class="formula-empty">
           <strong>${escapeHtml(tr("高亮来源提示"))}:</strong>
-          ${escapeHtml(tr("开启公式高亮时，消去版本会优先使用带隐藏来源标签的表达式来保证同名 symbol 不串色；因此部分合并项可能比普通显示更展开。"))}
+          ${escapeHtml(tr("用于追踪支路来源；主数学结果以上方普通排版为准。"))}
         </div>
       `;
     }
@@ -11212,25 +11914,18 @@
     function renderSingleInternalFormula(reduced, externalNames, internalName) {
       const K_v = reduced.K_v || reduced.ViA;
       const K_h = reduced.K_h || (reduced.VibNeg || []).map(exprNeg);
-      const K_v_tagged = reduced.K_v_tagged;
-      const K_h_tagged = reduced.K_h_tagged;
       const voltageSum = K_v[0]
         .map((g, index) => isZero(g) ? "" : `(${g})*V_${externalNames[index]}`)
         .filter(Boolean);
       const rhsTerms = voltageSum.concat(isZero(K_h[0]) ? [] : [K_h[0]]);
       const rhs = rhsTerms.length ? rhsTerms.join(" + ") : "0";
-      const taggedVoltageSum = K_v_tagged?.[0]
-        ? K_v_tagged[0].map((g, index) => isZero(g) ? "" : `(${g})*V_${externalNames[index]}`).filter(Boolean)
-        : [];
-      const taggedRhsTerms = taggedVoltageSum.concat(K_h_tagged?.[0] && !isZero(K_h_tagged[0]) ? [K_h_tagged[0]] : []);
-      const taggedRhs = taggedRhsTerms.length ? taggedRhsTerms.join(" + ") : null;
       return `
         <div class="formula-card">
           <div class="formula-name">${escapeHtml(tr("单内部节点展开式"))}</div>
           <div class="formula-line">
             <span class="formula-lhs">V<sub>${escapeHtml(internalName)}</sub></span>
             <span class="formula-eq">=</span>
-            <span class="formula-rhs">${formatMathWithTagged(rhs, taggedRhs)}</span>
+            <span class="formula-rhs">${formatMath(rhs)}</span>
           </div>
         </div>
       `;
@@ -12135,6 +12830,13 @@
       if (field === "switchCaseName") {
         const activeCase = activeSwitchCase(branch);
         if (activeCase) activeCase.name = value.trim() || `Case ${(branch.activeSwitchCase || 0) + 1}`;
+        render();
+        return;
+      }
+      if (field === "runtimeMutableCaseGroup") {
+        normalizeSwitchCases(branch);
+        branch.runtimeMutableCaseGroup = Boolean(value) && Array.isArray(branch.switchCases) && branch.switchCases.length > 1;
+        invalidateMathCaches();
         render();
         return;
       }
@@ -13978,7 +14680,7 @@
       };
       const terminalMappingHtml = groups.map(group => {
         if (group.virtualInternal) {
-          return `<div class="field"><label>${escapeHtml(rowName(group))}</label><input readonly value="${escapeHtml(`${tr("隐藏")} - ${group.branchName}`)}"></div>`;
+          return `<div class="field"><label>${escapeHtml(rowName(group))}</label><input readonly value="${escapeHtml(`${tr("未暴露")} - ${group.branchName}`)}"></div>`;
         }
         const names = group.members.map(key => {
           const parsed = parseTerminal(key);
@@ -14004,8 +14706,8 @@
                   ${tr(rowGround(group) ? "Ground / V=0" : (rowInternal(group) ? "内部" : "外部"))}
                 </button>
                 ${rowExposure(group) ? (rowExposure(group).custom
-                  ? `<button class="node-internal-button" data-custom-node-expose="${rowExposure(group).branchId}:${rowExposure(group).port}:${rowExposure(group).exposed ? "hide" : "show"}" type="button" draggable="false">${escapeHtml(tr(rowExposure(group).exposed ? "隐藏" : "暴露"))}</button>`
-                  : `<button class="node-internal-button" data-packaged-node-expose="${rowExposure(group).branchId}:${rowExposure(group).kind}:${rowExposure(group).index}:${rowExposure(group).exposed ? "hide" : "show"}" type="button" draggable="false">${escapeHtml(tr(rowExposure(group).exposed ? "隐藏" : "暴露"))}</button>`) : ""}
+                  ? `<button class="node-internal-button" data-custom-node-expose="${rowExposure(group).branchId}:${rowExposure(group).port}:${rowExposure(group).exposed ? "hide" : "show"}" type="button" draggable="false">${escapeHtml(tr(rowExposure(group).exposed ? "取消暴露" : "暴露"))}</button>`
+                  : `<button class="node-internal-button" data-packaged-node-expose="${rowExposure(group).branchId}:${rowExposure(group).kind}:${rowExposure(group).index}:${rowExposure(group).exposed ? "hide" : "show"}" type="button" draggable="false">${escapeHtml(tr(rowExposure(group).exposed ? "取消暴露" : "暴露"))}</button>`) : ""}
                 <button class="node-edit-button" ${group.virtualInternal ? "disabled" : `data-rename-node="${group.id}"`} type="button" draggable="false" title="${escapeHtml(optText(`重命名 ${rowName(group)}`, `Rename ${rowName(group)}`))}" aria-label="${escapeHtml(optText(`重命名 ${rowName(group)}`, `Rename ${rowName(group)}`))}">
                   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
@@ -15221,6 +15923,18 @@ function startResizeDrag(branch, handle, event) {
       render();
     }
 
+    function renderAutoGlueFeedbackLines() {
+      autoGlueFeedbackPairs().forEach(pair => {
+        const p1 = wireEndpointPosition(pair.from);
+        const p2 = wireEndpointPosition(pair.to);
+        if (!p1 || !p2) return;
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("class", `auto-glue-feedback-line ${pair.kind === "preview" ? "preview" : "flash"}`);
+        path.setAttribute("d", `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`);
+        wireLayer.appendChild(path);
+      });
+    }
+
     function renderWires() {
       wireLayer.innerHTML = "";
       state.wires.forEach(wire => {
@@ -15267,6 +15981,19 @@ function startResizeDrag(branch, handle, event) {
           wireLayer.appendChild(handle);
         }
       });
+      renderAutoGlueFeedbackLines();
+    }
+
+    function applyAutoGlueTerminalFeedback() {
+      branchLayer.querySelectorAll(".terminal.auto-glue-preview, .terminal.auto-glue-flash").forEach(item => {
+        item.classList.remove("auto-glue-preview", "auto-glue-flash");
+      });
+      autoGlueFeedbackPairs().forEach(pair => {
+        [pair.from, pair.to].forEach(terminal => {
+          const node = branchLayer.querySelector(`[data-terminal="${terminal}"]`);
+          if (node) node.classList.add(pair.kind === "preview" ? "auto-glue-preview" : "auto-glue-flash");
+        });
+      });
     }
 
     function render() {
@@ -15275,6 +16002,7 @@ function startResizeDrag(branch, handle, event) {
       applyCanvasView();
       renderWires();
       renderBranches();
+      applyAutoGlueTerminalFeedback();
       renderPackageCaseEditOverlay();
       renderEditor();
       renderNetList();
@@ -15669,6 +16397,7 @@ function startResizeDrag(branch, handle, event) {
         clampComponent(branch);
       });
       autoSnapDraggedBranches(Object.keys(state.drag.origins));
+      updateAutoGluePreview(Object.keys(state.drag.origins));
       render();
     });
 
@@ -15709,6 +16438,9 @@ function startResizeDrag(branch, handle, event) {
         if (moved) {
           state.history.push(state.drag.before);
           state.future = [];
+          autoGlueDraggedFloatingTerminals(Object.keys(state.drag.origins));
+        } else {
+          clearAutoGluePreview();
         }
       }
       if (state.wireDrag) {
@@ -16103,6 +16835,8 @@ function startResizeDrag(branch, handle, event) {
       state.portDrag = null;
       state.leadAnchorDrag = null;
       state.resizeDrag = null;
+      state.autoGluePreview = null;
+      state.autoGlueFlash = null;
       state.nextBranch = data.nextBranch;
       state.nextTransformer = data.nextTransformer;
       state.nextCustom = data.nextCustom || inferNextNumber(state.branches, "C");
