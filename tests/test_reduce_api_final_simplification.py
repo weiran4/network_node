@@ -53,15 +53,10 @@ class ReduceApiFinalSimplificationTests(unittest.TestCase):
             ],
         )
         self.assertEqual("0", result["Ihis_red_simplified"][0])
-        self.assertIn("G_red_latex", result)
-        self.assertIn("Ihis_red_latex", result)
-        self.assertIn("K_v_latex", result)
-        self.assertIn("K_h_latex", result)
-        self.assertIn(r"\begin{bmatrix}", result["G_red_latex"])
-        self.assertIn(r"{\displaystyle 0} & {\displaystyle 0} & {\displaystyle 0}", result["G_red_latex"])
-        self.assertIn(r"{\displaystyle \frac", result["G_red_latex"])
-        self.assertIn(r"\\[0.9em]", result["G_red_latex"])
-        self.assertIn(r"\begin{bmatrix}{\displaystyle 0}", result["Ihis_red_latex"])
+        self.assertNotIn("G_red_latex", result)
+        self.assertNotIn("Ihis_red_latex", result)
+        self.assertNotIn("K_v_latex", result)
+        self.assertNotIn("K_h_latex", result)
 
     def test_display_simplification_keeps_readable_fraction_sums(self) -> None:
         G11, G12, AA, CC, G22, G_rc, w1, w2 = sp.symbols("G11 G12 AA CC G22 G_rc w1 w2")

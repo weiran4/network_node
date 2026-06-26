@@ -63,10 +63,6 @@ function renderReducedForTest(activeBranches = ["B1"], overrides = {}, options =
       Ihis_red_tagged: ["h1__bbsrc_B1", "h2__bbsrc_B1"],
       K_v_tagged: [["kv1__bbsrc_B1", "kv2__bbsrc_B1"], ["kv3__bbsrc_B1", "kv4__bbsrc_B1"]],
       K_h_tagged: ["kh1__bbsrc_B1", "kh2__bbsrc_B1"],
-      G_red_latex: "\\begin{bmatrix}0 & 0 \\\\ 0 & d\\end{bmatrix}",
-      Ihis_red_latex: "\\begin{bmatrix}0 \\\\ h2\\end{bmatrix}",
-      K_v_latex: "\\begin{bmatrix}1 & 0 \\\\ 0 & 1\\end{bmatrix}",
-      K_h_latex: "\\begin{bmatrix}0 \\\\ kh2\\end{bmatrix}",
       ...overrides,
     },
     {}
@@ -75,15 +71,18 @@ function renderReducedForTest(activeBranches = ["B1"], overrides = {}, options =
 }
 
 {
-  const { output, katexCalls } = renderReducedForTest([], {
+  const { output, matrixCalls, vectorCalls, katexCalls } = renderReducedForTest([], {
     G_red_simplified: [["0", "0"], ["0", "d"]],
     Ihis_red_simplified: ["0", "h2"],
     K_v_simplified: [["1", "0"], ["0", "1"]],
     K_h_simplified: ["0", "kh2"],
   });
-  assert.ok(output.includes("<katex>"), "default reduced view should prefer local KaTeX rendering when LaTeX is available");
-  assert.ok(katexCalls.some(call => call.latex.includes("\\begin{bmatrix}0 & 0")), "Gred LaTeX should be rendered through KaTeX");
-  assert.ok(katexCalls.some(call => call.latex.includes("\\begin{bmatrix}0 \\\\ h2")), "Ihisred LaTeX should be rendered through KaTeX");
+  assert.ok(!output.includes("<katex>"), "default reduced view should not depend on KaTeX rendering");
+  assert.equal(katexCalls.length, 0, "KaTeX should not be called by the default reduced view");
+  assert.deepEqual(matrixCalls[0].rows, [["0", "0"], ["0", "d"]], "default Gred should use simplified backend matrix");
+  assert.deepEqual(vectorCalls[2].items, ["0", "h2"], "default Ihisred should use simplified backend vector");
+  assert.deepEqual(matrixCalls[1].rows, [["1", "0"], ["0", "1"]], "default Kv should use simplified backend matrix");
+  assert.deepEqual(vectorCalls[5].items, ["0", "kh2"], "default Kh should use simplified backend vector");
 }
 
 {
@@ -103,7 +102,7 @@ function renderReducedForTest(activeBranches = ["B1"], overrides = {}, options =
 {
   const { output, matrixCalls, vectorCalls, katexCalls } = renderReducedForTest(["B1"]);
   assert.ok(output.includes("来源高亮版本"), "highlight-enabled output should add a separate source-highlighted section");
-  assert.ok(katexCalls.length >= 2, "default reduced/recovery display should use KaTeX when available");
+  assert.equal(katexCalls.length, 0, "highlight mode should not re-enable KaTeX for the default reduced view");
   assert.ok(matrixCalls.some(call => call.tagged), "highlight section should use tagged matrix expressions");
   assert.ok(vectorCalls.some(call => call.tagged), "highlight section should use tagged vector expressions");
 }
@@ -113,20 +112,6 @@ function renderReducedForTest(activeBranches = ["B1"], overrides = {}, options =
   assert.ok(!output.includes("来源高亮版本"), "without active formula highlighting, no highlighted section should be rendered");
   assert.ok(matrixCalls.every(call => !call.tagged), "without active highlighting, matrix rendering should stay untagged");
   assert.ok(vectorCalls.every(call => !call.tagged), "without active highlighting, vector rendering should stay untagged");
-}
-
-{
-  const katexCode = fs.readFileSync(new URL("../vendor/katex/katex.min.js", import.meta.url), "utf8");
-  const context = {};
-  vm.createContext(context);
-  vm.runInContext(katexCode, context);
-  const rendered = context.katex.renderToString(
-    "I_{N1}=\\begin{bmatrix}0 & \\frac{a+b}{c}\\\\ d & 1\\end{bmatrix}",
-    { displayMode: true }
-  );
-  assert.ok(rendered.includes("mtable"), "bundled local KaTeX should render bmatrix markup");
-  assert.ok(rendered.includes("mfrac"), "bundled local KaTeX should render fraction markup");
-  assert.ok(rendered.includes("msub"), "bundled local KaTeX should render simple subscripts");
 }
 
 console.log("reduced render cases passed");

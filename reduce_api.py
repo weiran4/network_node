@@ -98,24 +98,6 @@ def _display_matrix(matrix: sp.Matrix) -> sp.Matrix:
     )
 
 
-def _latex_expr(expr: sp.Expr) -> str:
-    return sp.latex(expr)
-
-
-def _latex_matrix_cell(expr: sp.Expr) -> str:
-    return r"{\displaystyle " + _latex_expr(expr) + r"}"
-
-
-def _latex_bmatrix(matrix: sp.Matrix) -> str:
-    if matrix.rows == 0 or matrix.cols == 0:
-        return r"\begin{bmatrix}\end{bmatrix}"
-    rows = [
-        " & ".join(_latex_matrix_cell(matrix[r, c]) for c in range(matrix.cols))
-        for r in range(matrix.rows)
-    ]
-    return r"\begin{bmatrix}" + r" \\[0.9em] ".join(rows) + r"\end{bmatrix}"
-
-
 def _parse_matrix(rows: list[list[str]]) -> sp.Matrix:
     return sp.Matrix([[_parse_expr(item) for item in row] for row in rows])
 
@@ -234,19 +216,6 @@ def main() -> None:
         "K_h_simplified": _clean_display_vector(result.K_h),
         "reduced_observers": reduced_observers,
     }
-    display_G_red = _display_matrix(result.G_red)
-    display_Ihis_red = _display_matrix(result.Ihis_red)
-    display_K_v = _display_matrix(result.K_v)
-    display_K_h = _display_matrix(result.K_h)
-    response.update(
-        {
-            "G_red_latex": _latex_bmatrix(display_G_red),
-            "Ihis_red_latex": _latex_bmatrix(display_Ihis_red),
-            "K_v_latex": _latex_bmatrix(display_K_v),
-            "K_h_latex": _latex_bmatrix(display_K_h),
-        }
-    )
-
     if payload.get("G_full_tagged") is not None and payload.get("Ihis_full_tagged") is not None:
         tagged_ground = apply_ground_constraint(
             _parse_matrix(payload["G_full_tagged"]),

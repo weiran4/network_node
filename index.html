@@ -4,8 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Two-Port Branch Builder</title>
-  <link rel="stylesheet" href="vendor/katex/katex.min.css">
-  <script defer src="vendor/katex/katex.min.js"></script>
   <style>
     :root {
       --bg: #f4f6f8;
@@ -1476,34 +1474,6 @@
       min-width: 0;
       max-width: 100%;
       overflow-x: auto;
-    }
-
-    .latex-equation {
-      max-width: 100%;
-      min-width: 0;
-      overflow-x: auto;
-      overflow-y: hidden;
-      padding: 22px 0;
-      font-size: 1.28rem;
-      line-height: 1.85;
-    }
-
-    .latex-equation .katex-display {
-      margin: 0;
-      padding: 12px 2px;
-    }
-
-    .latex-equation .mord.mtable {
-      margin-top: 0.12em;
-      margin-bottom: 0.12em;
-    }
-
-    .latex-equation .mord.mtable .arraycolsep {
-      width: 0.58em;
-    }
-
-    .modal-output-body .latex-equation {
-      font-size: 1.2rem;
     }
 
     .output .formula-card > .formula-name:first-child,
@@ -3089,7 +3059,7 @@
     let mathPrecomputeToken = 0;
     let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
-    const REDUCED_CACHE_VERSION = "reduced-katex-displaystyle-v3";
+    const REDUCED_CACHE_VERSION = "reduced-safe-simplified-v1";
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
     const pythonDraftCache = new Map();
@@ -11717,35 +11687,7 @@
       `;
     }
 
-    function latexText(value) {
-      return String(value ?? "")
-        .replace(/\\/g, "\\backslash{}")
-        .replace(/_/g, "\\_")
-        .replace(/([{}$&#%])/g, "\\$1");
-    }
-
-    function latexColumnVector(items) {
-      return `\\begin{bmatrix}${items.join(" \\\\ ")}\\end{bmatrix}`;
-    }
-
-    function latexNodeSymbol(prefix, name) {
-      return `${prefix}_{${latexText(name)}}`;
-    }
-
-    function renderLatexOrFallback(latex, fallbackFactory) {
-      const fallback = () => (typeof fallbackFactory === "function" ? fallbackFactory() : "");
-      if (!latex) return fallback();
-      try {
-        if (typeof katex !== "undefined" && katex && typeof katex.renderToString === "function") {
-          return `<div class="latex-equation">${katex.renderToString(latex, { displayMode: true, throwOnError: false })}</div>`;
-        }
-      } catch (_error) {
-        return fallback();
-      }
-      return fallback();
-    }
-
-    function renderReducedEquationFallback(result, externalNames) {
+    function renderReducedEquationDisplay(result, externalNames) {
       return `
         <div class="matrix-equation">
           ${renderVectorMatrix(externalNames.map(name => `I_${name}`))}
@@ -11758,14 +11700,7 @@
       `;
     }
 
-    function renderReducedEquationDisplay(result, externalNames) {
-      const latex = result.G_red_latex && result.Ihis_red_latex
-        ? `${latexColumnVector(externalNames.map(name => latexNodeSymbol("I", name)))} = ${result.G_red_latex}${latexColumnVector(externalNames.map(name => latexNodeSymbol("V", name)))} + ${result.Ihis_red_latex}`
-        : "";
-      return renderLatexOrFallback(latex, () => renderReducedEquationFallback(result, externalNames));
-    }
-
-    function renderRecoveryEquationFallback(result, externalNames, internalNames) {
+    function renderRecoveryEquationDisplay(result, externalNames, internalNames) {
       return `
         <div class="matrix-equation">
           ${renderVectorMatrix(internalNames.map(name => `V_${name}`))}
@@ -11776,13 +11711,6 @@
           ${renderVectorMatrix(result.K_h)}
         </div>
       `;
-    }
-
-    function renderRecoveryEquationDisplay(result, externalNames, internalNames) {
-      const latex = result.K_v_latex && result.K_h_latex
-        ? `${latexColumnVector(internalNames.map(name => latexNodeSymbol("V", name)))} = ${result.K_v_latex}${latexColumnVector(externalNames.map(name => latexNodeSymbol("V", name)))} + ${result.K_h_latex}`
-        : "";
-      return renderLatexOrFallback(latex, () => renderRecoveryEquationFallback(result, externalNames, internalNames));
     }
 
     function hasReducedTaggedResult(result) {
