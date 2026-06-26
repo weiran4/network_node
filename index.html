@@ -9999,6 +9999,13 @@
       return payload.G_full?.[row]?.[col] ?? "0";
     }
 
+    function blockMatrixCellTaggedValue(payload, rowEntry, colEntry, nodeIndex) {
+      if (rowEntry.type === "ellipsis" || colEntry.type === "ellipsis") return null;
+      const row = nodeIndex.get(rowEntry.node);
+      const col = nodeIndex.get(colEntry.node);
+      return payload.G_full_tagged?.[row]?.[col] ?? null;
+    }
+
     function renderFormulaModeActualBlock(payload, result = null) {
       const displayNames = payload.node_display_names || {};
       const external = payload.external_nodes || [];
@@ -10029,6 +10036,7 @@
         const isInternalBoundaryRow = rowIndex === externalEntries.length;
         const isInternalBoundaryCol = colIndex === externalEntries.length;
         const value = blockMatrixCellValue(payload, rowEntry, colEntry, nodeIndex);
+        const taggedValue = blockMatrixCellTaggedValue(payload, rowEntry, colEntry, nodeIndex);
         const classes = [
           "actual-block-cell",
           isInternalBoundaryCol ? "split-left" : "",
@@ -10036,7 +10044,7 @@
           (dummyPrunedSet.has(String(rowEntry.node)) || dummyPrunedSet.has(String(colEntry.node))) ? "dummy-pruned-cell" : "",
           rowEntry.type === "ellipsis" || colEntry.type === "ellipsis" ? "block-ellipsis" : ""
         ].filter(Boolean).join(" ");
-        return `<span class="${classes}" title="${escapeHtml(blockEntryLabel(rowEntry, displayNames))}, ${escapeHtml(blockEntryLabel(colEntry, displayNames))}">${formatMath(value)}</span>`;
+        return `<span class="${classes}" title="${escapeHtml(blockEntryLabel(rowEntry, displayNames))}, ${escapeHtml(blockEntryLabel(colEntry, displayNames))}">${formatMathWithTagged(value, taggedValue)}</span>`;
       })).join("");
 
       return `

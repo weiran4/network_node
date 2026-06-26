@@ -128,6 +128,18 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("renderMatrix(direct.Gred_direct_ram, null, direct.Gred_direct_ram_tagged)", source)
         self.assertIn("renderMatrix(direct.Gred_direct_code, null, direct.Gred_direct_code_tagged)", source)
 
+    def test_optimized_actual_block_uses_tagged_g_full_for_highlighting(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function blockMatrixCellTaggedValue", source)
+        self.assertIn("return payload.G_full_tagged?.[row]?.[col] ?? null;", source)
+        block_start = source.index("function renderFormulaModeActualBlock")
+        block_end = source.index("function renderStructuredFormulaSummary")
+        block_source = source[block_start:block_end]
+        self.assertIn("const taggedValue = blockMatrixCellTaggedValue(payload, rowEntry, colEntry, nodeIndex);", block_source)
+        self.assertIn("formatMathWithTagged(value, taggedValue)", block_source)
+        self.assertNotIn(">${formatMath(value)}</span>", block_source)
+
     def test_single_multicase_branch_defaults_to_all_cases(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
