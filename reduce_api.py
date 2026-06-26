@@ -45,15 +45,15 @@ def _clean_expr(expr: sp.Expr) -> str:
     return str(expr)
 
 
-def _final_display_expr(expr: sp.Expr, max_ops: int = 2000) -> sp.Expr:
+def _final_display_expr(expr: sp.Expr, max_ops: int = 50, max_chars: int = 250) -> sp.Expr:
     try:
         original_ops = int(sp.count_ops(expr, visual=False))
-        if original_ops > max_ops:
+        original_text = str(expr)
+        if original_ops > max_ops or len(original_text) > max_chars:
             return expr
         cancelled = sp.cancel(expr)
         if cancelled == 0:
             return cancelled
-        original_text = str(expr)
         cancelled_ops = int(sp.count_ops(cancelled, visual=False))
         cancelled_text = str(cancelled)
         # sp.cancel is excellent for proving zeros, but for sums of simple

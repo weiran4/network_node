@@ -72,6 +72,18 @@ class ReduceApiFinalSimplificationTests(unittest.TestCase):
         self.assertEqual(str(expr), str(display_expr))
         self.assertGreater(len(str(sp.cancel(expr))), len(str(display_expr)))
 
+    def test_large_display_expression_skips_cancel(self) -> None:
+        symbols = sp.symbols("x0:90")
+        expr = sum(symbols)
+        original_cancel = sp.cancel
+        try:
+            sp.cancel = lambda value: (_ for _ in ()).throw(AssertionError("cancel should be skipped"))
+            display_expr = _final_display_expr(expr)
+        finally:
+            sp.cancel = original_cancel
+
+        self.assertEqual(expr, display_expr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,8 +9,10 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
 
         self.assertIn("async function ensureReducedResult", source)
         self.assertIn("function reducedDependencyAnalysisFromResult", source)
+        self.assertIn("function cachedReducedDependencyAnalysis", source)
         self.assertIn("reduced_dependency_analysis", source)
-        self.assertIn("await ensureReducedResult(basePayload)", source)
+        self.assertIn("const reducedDependency = cachedReducedDependencyAnalysis(basePayload)", source)
+        self.assertNotIn("await ensureReducedResult(basePayload)", source)
 
     def test_optimized_payload_includes_direct_retained_stamps(self):
         source = Path("index.html").read_text(encoding="utf-8")
