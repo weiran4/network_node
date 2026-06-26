@@ -11668,6 +11668,7 @@
 
       return `
         <div class="formula-list">
+          ${renderReducedBackendWarnings(result)}
           <div class="formula-card">
             <div class="formula-name">${escapeHtml(tr("节点划分"))}</div>
             <div class="formula-line">
@@ -11684,6 +11685,17 @@
           </div>
           ${result.internal_nodes.length === 1 ? renderSingleInternalFormula(displayResult, externalNames, internalNames[0]) : ""}
           ${renderReducedSourceHighlightVersion(result, externalNames, internalNames)}
+        </div>
+      `;
+    }
+
+    function renderReducedBackendWarnings(result) {
+      const warnings = result?.warnings || [];
+      if (!warnings.length) return "";
+      return `
+        <div class="formula-card validation-warning">
+          <div class="formula-name">${escapeHtml(tr("提示"))}</div>
+          <div class="formula-empty">${warnings.map(escapeHtml).join("<br>")}</div>
         </div>
       `;
     }

@@ -98,6 +98,90 @@ def _display_matrix(matrix: sp.Matrix) -> sp.Matrix:
     )
 
 
+def _is_zero_for_display(expr: sp.Expr) -> bool:
+    try:
+        return _final_display_expr(expr) == 0
+    except Exception:
+        return False
+
+
+def _has_invalid_value(matrix: sp.Matrix) -> bool:
+    invalid = {sp.nan, sp.zoo, sp.oo, -sp.oo}
+    for item in matrix:
+        if item in invalid:
+            return True
+        try:
+            if any(item.has(value) for value in invalid):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _small_internal_det(G_ii: sp.Matrix) -> sp.Expr | None:
+    rows, cols = G_ii.shape
+    if rows != cols or rows == 0 or rows > 3:
+        return None
+    try:
+        if rows == 1:
+            return G_ii[0, 0]
+        if rows == 2:
+            return G_ii[0, 0] * G_ii[1, 1] - G_ii[0, 1] * G_ii[1, 0]
+        entry_cost = sum(int(sp.count_ops(item, visual=False)) for item in G_ii)
+        if entry_cost > 80:
+            return None
+        return G_ii.det()
+    except Exception:
+        return None
+
+
+def _singular_internal_block_warning(G_ng: sp.Matrix, nodes: list[str], external_nodes: list[str]) -> str | None:
+    internal_nodes = [node for node in nodes if node not in set(external_nodes)]
+    if not internal_nodes:
+        return None
+    ordered = external_nodes + internal_nodes
+    permutation = [nodes.index(node) for node in ordered]
+    n_e = len(external_nodes)
+    n_i = len(internal_nodes)
+    G_ordered = G_ng.extract(permutation, permutation)
+    G_ii = G_ordered.extract(range(n_e, n_e + n_i), range(n_e, n_e + n_i))
+    det = _small_internal_det(G_ii)
+    if det is None:
+        return None
+    try:
+        if _final_display_expr(det, max_ops=80, max_chars=400) != 0:
+            return None
+    except Exception:
+        return None
+    internal_label = ", ".join(internal_nodes)
+    return (
+        f"内部消元块 Gkk 对节点 {internal_label} 是奇异的，不能直接求逆消去。"
+        "这通常表示内部子网络存在浮空公共模、理想约束/电压源环路，或缺少对地/外部参考。"
+        "解决办法：保留其中一个节点作为外部参考，增加接地/对地导纳/参考路径，"
+        "或改用支持约束方程的 MNA/受控源消元流程。"
+        f" / Singular internal Gkk for nodes {internal_label}; keep a reference node or add a ground/reference path."
+    )
+
+
+def _reduced_zero_row_warnings(result) -> list[str]:
+    warnings: list[str] = []
+    G_display = _display_matrix(result.G_red)
+    Ihis_display = sp.Matrix([[_final_display_expr(result.Ihis_red[row, 0])] for row in range(result.Ihis_red.rows)])
+    for index, node in enumerate(result.external_nodes):
+        row_zero = all(_is_zero_for_display(G_display[index, col]) for col in range(G_display.cols))
+        col_zero = all(_is_zero_for_display(G_display[row, index]) for row in range(G_display.rows))
+        ihis_zero = _is_zero_for_display(Ihis_display[index, 0])
+        if row_zero and col_zero and ihis_zero:
+            warnings.append(
+                f"约化提示：保留节点 {node} 的 Gred 行/列和 Ihisred 都化简为 0。"
+                "这表示该节点在约化后的网络中与其它保留节点电气解耦/浮空，"
+                "它的电压不会由当前约化方程决定。若该节点需要参与外部求解，"
+                "请保留相邻参考节点、增加接地/对地导纳/外部约束，或调整 internal/external 划分；"
+                "若它只是观察节点或刻意保留的空端口，可以忽略。"
+            )
+    return warnings
+
+
 def _parse_matrix(rows: list[list[str]]) -> sp.Matrix:
     return sp.Matrix([[_parse_expr(item) for item in row] for row in rows])
 
@@ -175,8 +259,24 @@ def main() -> None:
         ground_nodes,
     )
     external_nodes = [node for node in validation.external_nodes if node in ground_result.remaining_nodes]
+    warnings = list(validation.warnings)
+
+    singular_warning = _singular_internal_block_warning(
+        ground_result.G_ng,
+        ground_result.remaining_nodes,
+        external_nodes,
+    )
+    if singular_warning:
+        raise ValueError(singular_warning)
 
     result = eliminate_internal_nodes(ground_result.G_ng, ground_result.Ihis_ng, ground_result.remaining_nodes, external_nodes)
+    if any(_has_invalid_value(matrix) for matrix in (result.G_red, result.Ihis_red, result.K_v, result.K_h)):
+        raise ValueError(
+            "节点消去产生 nan/inf，通常是内部消元块奇异或缺少参考路径。"
+            "请保留一个参考节点、增加接地/对地导纳，或调整 internal/external 划分。"
+            " / Reduction produced nan/inf; check for a singular internal block or floating common mode."
+        )
+    warnings.extend(_reduced_zero_row_warnings(result))
     voltage_by_node = {node: all_voltage_by_node.get(node, node) for node in ground_result.remaining_nodes}
     V_e = sp.Matrix([[_voltage_symbol(voltage_by_node[node])] for node in result.external_nodes])
     recovered = result.K_v * V_e + result.K_h
@@ -205,7 +305,7 @@ def main() -> None:
         "internal_nodes": result.internal_nodes,
         "ground_nodes": validation.ground_nodes,
         "ground_voltage_map": {node: _clean_expr(value) for node, value in ground_result.ground_voltage_map.items()},
-        "warnings": validation.warnings,
+        "warnings": warnings,
         "G_red": _clean_matrix(result.G_red),
         "G_red_simplified": _clean_display_matrix(result.G_red),
         "Ihis_red": _clean_vector(result.Ihis_red),

@@ -26,6 +26,17 @@ class ReduceApiFinalSimplificationTests(unittest.TestCase):
         )
         return json.loads(completed.stdout)
 
+    def _run_reduce_api_allow_error(self, payload: dict) -> dict:
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "reduce_api.py")],
+            input=json.dumps(payload),
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return json.loads(completed.stdout)
+
     def test_reduced_display_simplifies_cancelled_row_and_column_to_zero(self) -> None:
         payload = {
             "all_nodes": ["v10n", "v10p", "N5", "N6"],
@@ -53,10 +64,32 @@ class ReduceApiFinalSimplificationTests(unittest.TestCase):
             ],
         )
         self.assertEqual("0", result["Ihis_red_simplified"][0])
+        self.assertTrue(any("v10p" in warning and "Gred 行/列" in warning for warning in result["warnings"]))
         self.assertNotIn("G_red_latex", result)
         self.assertNotIn("Ihis_red_latex", result)
         self.assertNotIn("K_v_latex", result)
         self.assertNotIn("K_h_latex", result)
+
+    def test_singular_internal_voltage_source_pair_returns_clear_warning(self) -> None:
+        payload = {
+            "all_nodes": ["v10p", "v10n", "N5", "N6"],
+            "external_nodes": ["N5", "N6"],
+            "G_full": [
+                ["G + G11", "-G - G11", "-G12", "G12"],
+                ["-G - G11", "G + G11", "G12", "-G12"],
+                ["-G12", "G12", "G22", "-G22"],
+                ["G12", "-G12", "-G22", "G22"],
+            ],
+            "Ihis_full": ["-G*Vs10 - Ihisp", "G*Vs10 + Ihisp", "Ihis_s", "-Ihis_s"],
+            "ground_nodes": [],
+        }
+
+        result = self._run_reduce_api_allow_error(payload)
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("Gkk", result["error"])
+        self.assertIn("奇异", result["error"])
+        self.assertIn("浮空", result["error"])
 
     def test_display_simplification_keeps_readable_fraction_sums(self) -> None:
         G11, G12, AA, CC, G22, G_rc, w1, w2 = sp.symbols("G11 G12 AA CC G22 G_rc w1 w2")
