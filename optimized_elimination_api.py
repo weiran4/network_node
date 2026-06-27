@@ -4277,6 +4277,20 @@ def _apply_dummy_finalization_gvalue_conditions(
     gvalue_conditions: list[dict] = []
     grouped_entries: dict[tuple[int, ...], list[dict]] = {}
 
+    def _find_gvalue_get_assignment(var: str, row: int, col: int) -> str | None:
+        for matrix_name in ["Gred_code", "Gred_dyn_code", "G_code"]:
+            assignment = f"{var} = get_CODE(&{matrix_name}, {row}, {col});"
+            if f"    {assignment}" in draft:
+                return assignment
+        match = re.search(
+            rf"^\s+({re.escape(var)}\s*=\s*get_CODE\(&[^;]+;\s*)$",
+            draft,
+            flags=re.MULTILINE,
+        )
+        if match:
+            return match.group(1).strip()
+        return None
+
     def _reuse_map_for_case(case_index: int) -> dict[tuple[int, int], tuple[tuple[int, int], int]]:
         items = list((reuse_plan_by_case or {}).get(case_index) or [])
         nodes = [str(node) for node in (reuse_nodes_by_case or {}).get(case_index) or []]
@@ -4346,9 +4360,17 @@ def _apply_dummy_finalization_gvalue_conditions(
                 for index, profile in enumerate(profile_set.case_profiles)
                 if left_id in profile.final_node_order and right_id in profile.final_node_order
             ]
+            var = _var_g_name(c_external_nodes, row, col)
+            assignment = _find_gvalue_get_assignment(var, row, col)
+            if assignment:
+                grouped_entries.setdefault(tuple(active_cases), []).append({
+                    "row": row,
+                    "col": col,
+                    "var": var,
+                    "assignment": assignment,
+                })
             if len(active_cases) == len(profile_set.case_profiles):
                 continue
-            var = _var_g_name(c_external_nodes, row, col)
             condition = _case_condition(case_id_symbol, active_cases)
             gvalue_conditions.append({
                 "var": var,
@@ -4365,29 +4387,6 @@ def _apply_dummy_finalization_gvalue_conditions(
                 f'"{left_c}", "{right_c}", 0, "{condition}");'
             )
             draft = draft.replace(pattern, replacement)
-            for matrix_name in ["Gred_code", "Gred_dyn_code", "G_code"]:
-                assignment = f"{var} = get_CODE(&{matrix_name}, {row}, {col});"
-                if f"    {assignment}" in draft:
-                    grouped_entries.setdefault(tuple(active_cases), []).append({
-                        "row": row,
-                        "col": col,
-                        "var": var,
-                        "assignment": assignment,
-                    })
-                    break
-            else:
-                match = re.search(
-                    rf"^\s+({re.escape(var)}\s*=\s*get_CODE\(&[^;]+;\s*)$",
-                    draft,
-                    flags=re.MULTILINE,
-                )
-                if match:
-                    grouped_entries.setdefault(tuple(active_cases), []).append({
-                        "row": row,
-                        "col": col,
-                        "var": var,
-                        "assignment": match.group(1).strip(),
-                    })
 
     for case_indices, entries in grouped_entries.items():
         switch_lines = _switch_lines_with_reuse(case_indices, entries)

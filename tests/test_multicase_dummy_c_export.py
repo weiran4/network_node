@@ -1,8 +1,10 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import optimized_elimination_api as optimized_api
 from optimized_elimination_api import build_multi_case_response
+from nodal_tool.optimized_elimination import GredEntryReuse
 
 
 def _deps(*symbols: str) -> dict:
@@ -35,6 +37,41 @@ def _block_after_marker(draft: str, marker: str, start_text: str, end_text: str 
 
 
 class MultiCaseDummyCExportTests(unittest.TestCase):
+    def test_dummy_finalized_full_matrix_gvalue_reuse_applies_to_all_active_entries(self):
+        draft = "\n".join([
+            '    double varG_A_A = createGValue("varG_A_A", "A", "A", 0, "TRUE");',
+            '    double varG_A_B = createGValue("varG_A_B", "A", "B", 0, "TRUE");',
+            '    double varG_B_B = createGValue("varG_B_B", "B", "B", 0, "TRUE");',
+            "    varG_A_A = get_CODE(&Gred_code, 0, 0);",
+            "    varG_A_B = get_CODE(&Gred_code, 0, 1);",
+            "    varG_B_B = get_CODE(&Gred_code, 1, 1);",
+        ])
+        profile_set = SimpleNamespace(case_profiles=[
+            SimpleNamespace(final_node_order=["A", "B"]),
+            SimpleNamespace(final_node_order=["A", "B"]),
+        ])
+        reuse = [
+            GredEntryReuse(target_row=0, target_col=1, base_row=0, base_col=0, sign=-1),
+            GredEntryReuse(target_row=1, target_col=1, base_row=0, base_col=0, sign=1),
+        ]
+
+        rewritten, conditions = optimized_api._apply_dummy_finalization_gvalue_conditions(
+            draft,
+            case_id_symbol="case_id",
+            profile_set=profile_set,
+            super_node_ids=["A", "B"],
+            c_external_nodes=["A", "B"],
+            reuse_plan_by_case={0: reuse, 1: reuse},
+            reuse_nodes_by_case={0: ["A", "B"], 1: ["A", "B"]},
+        )
+
+        self.assertEqual(conditions, [])
+        self.assertIn("varG_A_A = get_CODE(&Gred_code, 0, 0);", rewritten)
+        self.assertIn("varG_A_B = -varG_A_A;", rewritten)
+        self.assertIn("varG_B_B = varG_A_A;", rewritten)
+        self.assertNotIn("varG_A_B = get_CODE(&Gred_code, 0, 1);", rewritten)
+        self.assertNotIn("varG_B_B = get_CODE(&Gred_code, 1, 1);", rewritten)
+
     def test_no_dummy_profiles_do_not_enter_dummy_finalization_path(self):
         response = build_multi_case_response({
             "mode": "multi_case_c_export",
