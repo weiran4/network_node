@@ -12,6 +12,7 @@ import sympy as sp
 from elimination import eliminate_internal_nodes
 from nodal_tool.ground import apply_ground_constraint, validate_ground_partition
 from nodal_tool.optimized_elimination import (
+    GredEntryReuse,
     _split_matrix_ram_and_code_terms,
     build_dependency_stage_plan,
     build_structured_formula,
@@ -130,6 +131,33 @@ def _clean_gred_entry_reuse_by_case(
     out: list[dict] = []
     for case_index in sorted(reuse_plan_by_case or {}):
         items = _clean_gred_entry_reuse(reuse_plan_by_case.get(case_index) or [], external_nodes)
+        if not items:
+            continue
+        profile = profile_by_index.get(int(case_index), {})
+        out.append(
+            {
+                "case_index": int(case_index),
+                "case_name": str(profile.get("name") or f"case {case_index}"),
+                "case_comment": str(profile.get("comment") or ""),
+                "items": items,
+            }
+        )
+    return out
+
+
+def _clean_gred_entry_reuse_by_case_nodes(
+    reuse_plan_by_case: Mapping[int, Sequence],
+    profiles: Sequence[Mapping],
+    nodes_by_case: Mapping[int, Sequence[str]],
+) -> list[dict]:
+    profile_by_index = {
+        int(profile.get("index", index)): profile
+        for index, profile in enumerate(profiles or [])
+    }
+    out: list[dict] = []
+    for case_index in sorted(reuse_plan_by_case or {}):
+        nodes = [str(node) for node in (nodes_by_case.get(int(case_index)) or [])]
+        items = _clean_gred_entry_reuse(reuse_plan_by_case.get(case_index) or [], nodes)
         if not items:
             continue
         profile = profile_by_index.get(int(case_index), {})
@@ -4211,6 +4239,31 @@ def _dummy_finalized_matrix_dag_is_preferred(final_results: list[dict], *, max_o
     return _dummy_finalized_formula_cost(final_results) > max_ops
 
 
+def _dummy_finalized_gred_reuse_by_case(
+    final_results: list[dict],
+) -> tuple[dict[int, list[GredEntryReuse]], dict[int, list[str]]]:
+    reuse_by_case: dict[int, list[GredEntryReuse]] = {}
+    nodes_by_case: dict[int, list[str]] = {}
+    for item in final_results:
+        case_index = int(item.get("index", 0))
+        final = item.get("final")
+        nodes = [str(node) for node in (getattr(final, "nodes", []) if final is not None else [])]
+        nodes_by_case[case_index] = nodes
+        if final is None or not nodes:
+            reuse_by_case[case_index] = []
+            continue
+        try:
+            reuse_by_case[case_index] = structural_gred_entry_reuse_plan(
+                sp.Matrix(final.G),
+                nodes,
+                nodes,
+                [],
+            )
+        except Exception:
+            reuse_by_case[case_index] = []
+    return reuse_by_case, nodes_by_case
+
+
 def _apply_dummy_finalization_gvalue_conditions(
     draft: str,
     *,
@@ -4508,6 +4561,7 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
         for alias, info in aliases.items()
         if len(set((info.get("case_owners") or {}).values())) > 1
     ]
+    display_reuse_plan_by_case, display_reuse_nodes_by_case = _dummy_finalized_gred_reuse_by_case(final_results)
 
     return {
         "ok": True,
@@ -4529,6 +4583,11 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
             "aliases": aliases,
             "gvalue_conditions": gvalue_conditions,
             "uses_case_conditional_gvalue": bool(gvalue_conditions),
+            "gred_entry_reuse_by_case": _clean_gred_entry_reuse_by_case_nodes(
+                display_reuse_plan_by_case,
+                profiles,
+                display_reuse_nodes_by_case,
+            ),
             "external_nodes": profile_set.super_node_order,
             "effective_internal_nodes": [],
             "block_type": ((matrix_dag_result or {}).get("structured") or {}).get("block_type"),

@@ -119,6 +119,23 @@ class MultiCaseDummyCExportTests(unittest.TestCase):
         self.assertNotIn("InjN4", case1_block)
         self.assertNotIn("MATH_matx_invert", draft)
         self.assertEqual(multi["finalization_profiles"][1]["final_node_order"], ["N1", "N2"])
+        reuse_groups = multi["gred_entry_reuse_by_case"]
+        self.assertEqual([group["case_index"] for group in reuse_groups], [0, 1])
+        case1_reuse = reuse_groups[1]["items"]
+        self.assertIn(
+            {
+                "target": [0, 1],
+                "target_nodes": ["N1", "N2"],
+                "base": [0, 0],
+                "base_nodes": ["N1", "N1"],
+                "sign": -1,
+                "relation": "opposite",
+                "target_label": "Gred[N1,N2]",
+                "base_label": "Gred[N1,N1]",
+                "text": "Gred[N1,N2] = -Gred[N1,N1]",
+            },
+            case1_reuse,
+        )
 
     def test_dynamic_physical_dummy_pair_gets_profile_conditional_gvalue(self):
         deps = {"R": "RAM_CONSTANT", "G_EPSILON": "RAM_CONSTANT", "G_DYN": "CODE_VARIABLE"}
