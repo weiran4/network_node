@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 import sympy as sp
 
+from optimized_elimination_api import build_optimized_response, build_multi_case_response
 from nodal_tool.optimized_elimination import structural_gred_entry_reuse_plan
+from tests.test_multicase_c_export_alias_template import _deps, _request, _series_payload
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -88,3 +90,52 @@ def test_five_internal_dense_fixture_does_not_invent_whole_entry_reuse(monkeypat
     )
 
     assert plan == []
+
+
+def test_optimized_response_exposes_gred_entry_reuse_summary():
+    response = build_optimized_response(
+        {
+            "all_nodes": ["A", "B"],
+            "external_nodes": ["A", "B"],
+            "internal_nodes": [],
+            "ground_nodes": [],
+            "node_display_names": {"A": "A", "B": "B"},
+            "G_full": [["G", "-G"], ["-G", "G"]],
+            "Ihis_full": ["0", "0"],
+            "symbol_dependency_table": {"G": "CODE_VARIABLE"},
+            "symbol_dependency_table_tagged": {"G": "CODE_VARIABLE"},
+        }
+    )
+
+    items = response["structured"]["gred_entry_reuse"]
+    assert {
+        (item["target_label"], item["base_label"], item["sign"])
+        for item in items
+    } == {
+        ("Gred[A,B]", "Gred[A,A]", -1),
+        ("Gred[B,B]", "Gred[A,A]", 1),
+    }
+
+
+def test_multi_case_response_exposes_per_case_gred_entry_reuse_summary():
+    response = build_multi_case_response(
+        _request(
+            [
+                {"name": "case 0", "case_map": {"R1": 0}, "payload": _series_payload("G0", internal=False)},
+                {"name": "case 1", "case_map": {"R1": 1}, "payload": _series_payload("G1", internal=False)},
+            ],
+            deps=_deps(code=("G0", "G1")),
+            case_id="case_id",
+        )
+    )
+
+    groups = response["multi_case"]["gred_entry_reuse_by_case"]
+    assert [group["case_index"] for group in groups] == [0, 1]
+    for group in groups:
+        assert {
+            (item["target_label"], item["base_label"], item["sign"])
+            for item in group["items"]
+        } == {
+            ("Gred[A,B]", "Gred[A,A]", -1),
+            ("Gred[B,B]", "Gred[A,A]", 1),
+        }

@@ -80,6 +80,70 @@ def _clean_vector(matrix: sp.Matrix) -> list[str]:
     return [_clean_expr(matrix[row, 0]) for row in range(matrix.rows)]
 
 
+def _node_label(nodes: Sequence[str], index: int) -> str:
+    if 0 <= int(index) < len(nodes):
+        return str(nodes[int(index)])
+    return f"N{int(index) + 1}"
+
+
+def _gred_entry_label(nodes: Sequence[str], row: int, col: int) -> str:
+    return f"Gred[{_node_label(nodes, row)},{_node_label(nodes, col)}]"
+
+
+def _clean_gred_entry_reuse(items: Sequence, external_nodes: Sequence[str]) -> list[dict]:
+    cleaned: list[dict] = []
+    for item in items or []:
+        try:
+            sign = int(item.sign)
+            target = [int(item.target_row), int(item.target_col)]
+            base = [int(item.base_row), int(item.base_col)]
+        except Exception:
+            continue
+        sign_prefix = "-" if sign < 0 else ""
+        target_label = _gred_entry_label(external_nodes, target[0], target[1])
+        base_label = _gred_entry_label(external_nodes, base[0], base[1])
+        cleaned.append(
+            {
+                "target": target,
+                "target_nodes": [_node_label(external_nodes, target[0]), _node_label(external_nodes, target[1])],
+                "base": base,
+                "base_nodes": [_node_label(external_nodes, base[0]), _node_label(external_nodes, base[1])],
+                "sign": sign,
+                "relation": "opposite" if sign < 0 else "same",
+                "target_label": target_label,
+                "base_label": base_label,
+                "text": f"{target_label} = {sign_prefix}{base_label}",
+            }
+        )
+    return cleaned
+
+
+def _clean_gred_entry_reuse_by_case(
+    reuse_plan_by_case: Mapping[int, Sequence],
+    profiles: Sequence[Mapping],
+    external_nodes: Sequence[str],
+) -> list[dict]:
+    profile_by_index = {
+        int(profile.get("index", index)): profile
+        for index, profile in enumerate(profiles or [])
+    }
+    out: list[dict] = []
+    for case_index in sorted(reuse_plan_by_case or {}):
+        items = _clean_gred_entry_reuse(reuse_plan_by_case.get(case_index) or [], external_nodes)
+        if not items:
+            continue
+        profile = profile_by_index.get(int(case_index), {})
+        out.append(
+            {
+                "case_index": int(case_index),
+                "case_name": str(profile.get("name") or f"case {case_index}"),
+                "case_comment": str(profile.get("comment") or ""),
+                "items": items,
+            }
+        )
+    return out
+
+
 def _clean_steps(steps: list[dict]) -> list[dict]:
     out = []
     for step in steps:
@@ -514,6 +578,17 @@ def build_optimized_response(payload: dict) -> dict:
             1,
         )
     c_draft = _ensure_static_blank_line(c_draft)
+    try:
+        gred_entry_reuse = structural_gred_entry_reuse_plan(
+            G,
+            node_order,
+            external_nodes,
+            structured["effective_internal_nodes"],
+        )
+    except Exception:
+        gred_entry_reuse = []
+    node_display_names = payload.get("node_display_names") or {}
+    display_external_nodes = [str(node_display_names.get(node, node)) for node in external_nodes]
 
     return {
         "ok": True,
@@ -567,6 +642,7 @@ def build_optimized_response(payload: dict) -> dict:
             },
             "dependency_analysis": _clean_value(rtds_stage_plan.get("dependency_analysis", {})),
             "dynamic_subblock": _clean_value(rtds_stage_plan.get("dynamic_subblock", {})),
+            "gred_entry_reuse": _clean_gred_entry_reuse(gred_entry_reuse, display_external_nodes),
             "dummy_node_blocks": _clean_value(
                 {
                     "count": len(single_dummy_blocks),
@@ -3301,9 +3377,34 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             node_display_names=template_payload.get("node_display_names") or {},
             dummy_analysis=dummy_analysis,
         )
+    display_reuse_plan_by_case: dict[int, list] = {}
+    try:
+        display_reuse_plan_by_case[int(alias_model["profiles"][0].get("index", 0))] = structural_gred_entry_reuse_plan(
+            template_G,
+            template_nodes,
+            template_external,
+            template_payload.get("internal_nodes") or [],
+        )
+    except Exception:
+        display_reuse_plan_by_case = {}
+    for profile_index, profile in enumerate(alias_model["profiles"]):
+        profile_payload = profile.get("payload") or {}
+        try:
+            profile_G, _, _, _, profile_nodes, profile_external, _, _ = _partition_payload(profile_payload)
+            profile_internal = profile_payload.get("internal_nodes") or []
+            if [str(node) for node in profile_external] != [str(node) for node in template_external]:
+                continue
+            display_reuse_plan_by_case[int(profile.get("index", profile_index))] = structural_gred_entry_reuse_plan(
+                profile_G,
+                profile_nodes,
+                profile_external,
+                profile_internal,
+            )
+        except Exception:
+            continue
+
     if aliases and has_mixed_final_g:
         reuse_plan = []
-        reuse_plan_by_case: dict[int, list] = {}
         try:
             reuse_plan = structural_gred_entry_reuse_plan(
                 template_G,
@@ -3313,21 +3414,6 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             )
         except Exception:
             reuse_plan = []
-        for profile_index, profile in enumerate(alias_model["profiles"]):
-            profile_payload = profile.get("payload") or {}
-            try:
-                profile_G, _, _, _, profile_nodes, profile_external, _, _ = _partition_payload(profile_payload)
-                profile_internal = profile_payload.get("internal_nodes") or []
-                if [str(node) for node in profile_external] != [str(node) for node in template_external]:
-                    continue
-                reuse_plan_by_case[int(profile.get("index", profile_index))] = structural_gred_entry_reuse_plan(
-                    profile_G,
-                    profile_nodes,
-                    profile_external,
-                    profile_internal,
-                )
-            except Exception:
-                continue
         draft, gvalue_conditions = _apply_conditional_final_gvalues_to_structured_draft(
             draft,
             case_id_symbol=case_id_symbol,
@@ -3337,7 +3423,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             external_nodes=c_external_nodes,
             prune_code_matrix_writes=not has_internal_recovery,
             reuse_plan=reuse_plan,
-            reuse_plan_by_case=reuse_plan_by_case,
+            reuse_plan_by_case=display_reuse_plan_by_case,
         )
         warnings.append(
             "Warning: final G entries have mixed RAM/CODE ownership across cases. "
@@ -3401,6 +3487,11 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             },
             "template_blocks": _clean_value((result.get("structured") or {}).get("blocks") or {}),
             "template_direct_retained": _clean_value((result.get("structured") or {}).get("direct_retained") or {}),
+            "gred_entry_reuse_by_case": _clean_gred_entry_reuse_by_case(
+                display_reuse_plan_by_case,
+                alias_model["profiles"],
+                c_external_nodes,
+            ),
             "template_block_nodes": {
                 "retained_order": result.get("external_nodes") or template_payload.get("external_nodes") or [],
                 "internal_order": result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],

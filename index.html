@@ -10402,7 +10402,49 @@
       `;
     }
 
+    function renderGredEntryReuseTable(items) {
+      const rows = (Array.isArray(items) ? items : []).map(item => {
+        const relation = Number(item.sign) < 0 ? "-" : "+";
+        return `
+          <tr>
+            <td>${escapeHtml(item.target_label || "-")}</td>
+            <td>${escapeHtml(relation)}</td>
+            <td>${escapeHtml(item.base_label || "-")}</td>
+          </tr>
+        `;
+      }).join("");
+      if (!rows) return "";
+      return `
+        <table class="analysis-table stage-summary-table">
+          <thead>
+            <tr>
+              <th>${escapeHtml(optText("复用目标", "Reuse Target"))}</th>
+              <th>${escapeHtml(optText("关系", "Relation"))}</th>
+              <th>${escapeHtml(optText("基准 entry", "Base Entry"))}</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function renderOptimizedGredEntryReuse(result) {
+      const items = result?.structured?.gred_entry_reuse || [];
+      if (!Array.isArray(items) || !items.length) return "";
+      return `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("Gred entry 复用摘要", "Gred Entry Reuse Summary"))}</div>
+          <div class="formula-empty">${escapeHtml(optText(
+            "下列 whole-entry 关系由结构化 Grr - Grk·W·Gkr 模板识别；C 草稿会在可安全复用的路径中使用它们。",
+            "The whole-entry relations below are detected from the structured Grr - Grk*W*Gkr template. The C draft uses them on paths where reuse is safe."
+          ))}</div>
+          ${renderGredEntryReuseTable(items)}
+        </div>
+      `;
+    }
+
     function renderOptimizedFormulaResult(result, payload) {
+      const reuseSummary = renderOptimizedGredEntryReuse(result);
       const cDraft = `
         <div class="formula-card" data-c-draft-card>
           <div class="formula-title-row">
@@ -10412,7 +10454,7 @@
           <pre class="code" data-c-draft-code tabindex="0" title="${optText("聚焦后按 Ctrl+C 复制整段 C 草稿", "Focus and press Ctrl+C to copy the full C draft")}">${escapeHtml(result.structured?.c_draft || "")}</pre>
         </div>
       `;
-      return `${renderStructuredBlocks(result, payload)}${renderStructuredByType(result)}${renderStructuredFormulaSummary(result)}${renderDynamicSubblockAnalysis(result, payload)}${cDraft}`;
+      return `${renderStructuredBlocks(result, payload)}${renderStructuredByType(result)}${renderStructuredFormulaSummary(result)}${renderDynamicSubblockAnalysis(result, payload)}${reuseSummary}${cDraft}`;
     }
 
     function renderOptimizedEliminationResult(result, payload) {
@@ -10644,6 +10686,33 @@
         .join("\n");
     }
 
+    function renderMultiCaseGredEntryReuse(multiCase) {
+      const groups = Array.isArray(multiCase?.gred_entry_reuse_by_case) ? multiCase.gred_entry_reuse_by_case : [];
+      const visibleGroups = groups.filter(group => Array.isArray(group.items) && group.items.length);
+      if (!visibleGroups.length) return "";
+      const groupHtml = visibleGroups.map(group => `
+        <div class="formula-empty">
+          <div class="formula-line">
+            <span class="formula-lhs">${escapeHtml(`case ${group.case_index}`)}</span>
+            <span class="formula-eq">=</span>
+            <span class="formula-rhs">${escapeHtml(group.case_name || "")}</span>
+          </div>
+          ${group.case_comment ? `<div class="actual-block-caption">${escapeHtml(group.case_comment)}</div>` : ""}
+          ${renderGredEntryReuseTable(group.items)}
+        </div>
+      `).join("");
+      return `
+        <div class="formula-card">
+          <div class="formula-name">${escapeHtml(optText("Gred entry 复用摘要", "Gred Entry Reuse Summary"))}</div>
+          <div class="formula-empty">${escapeHtml(optText(
+            "每个 case 组合都会单独检查 whole-entry 复用；只有在该 case 条件下安全的关系才会用于 C 草稿。",
+            "Each case combination is checked for whole-entry reuse separately. Only relations safe under that case condition are used by the C draft."
+          ))}</div>
+          ${groupHtml}
+        </div>
+      `;
+    }
+
     function renderMultiCaseCExportResult(result) {
       const multiCase = result.multi_case || {};
       const branchById = new Map(multiCaseEligibleBranches().map(branch => [branch.id, branch]));
@@ -10803,6 +10872,7 @@
         ${runtimeDiagnosticsHtml}
         ${conditionalGValueHtml}
         ${aliasHtml}
+        ${renderMultiCaseGredEntryReuse(multiCase)}
         <div class="formula-card" data-c-draft-card>
           <div class="formula-header-row">
             <div class="formula-name">${escapeHtml(optText("多Case 集合 C 草稿", "Multi-case Collection C Draft"))}</div>
