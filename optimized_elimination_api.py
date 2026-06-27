@@ -16,6 +16,7 @@ from nodal_tool.optimized_elimination import (
     build_dependency_stage_plan,
     build_structured_formula,
     c_draft_for_structured_formula,
+    structural_gred_entry_reuse_plan,
 )
 from nodal_tool.multicase_finalization_profiles import (
     build_finalization_profiles,
@@ -2895,7 +2896,7 @@ def _final_g_code_case_lines(
     *,
     case_id_symbol: str,
     entry_plans: list[dict],
-    matrix_name: str,
+    matrix_name: str | None,
 ) -> list[str]:
     case_indices = sorted({
         int(item["index"])
@@ -2919,13 +2920,17 @@ def _final_g_code_case_lines(
             value = _ccode(code_case["expr"])
             row = int(plan["row"])
             col = int(plan["col"])
-            lines.append(f"        set_CODE(&{matrix_name}, {row}, {col}, {value});")
-            if row != col:
-                lines.append(f"        set_CODE(&{matrix_name}, {col}, {row}, {value});")
-        for plan in entry_plans:
-            if not any(int(item["index"]) == case_index for item in plan["code_cases"]):
-                continue
-            lines.append(f"        {plan['var']} = get_CODE(&{matrix_name}, {plan['row']}, {plan['col']});")
+            if matrix_name is None:
+                lines.append(f"        {plan['var']} = {value};")
+            else:
+                lines.append(f"        set_CODE(&{matrix_name}, {row}, {col}, {value});")
+                if row != col:
+                    lines.append(f"        set_CODE(&{matrix_name}, {col}, {row}, {value});")
+        if matrix_name is not None:
+            for plan in entry_plans:
+                if not any(int(item["index"]) == case_index for item in plan["code_cases"]):
+                    continue
+                lines.append(f"        {plan['var']} = get_CODE(&{matrix_name}, {plan['row']}, {plan['col']});")
         lines.append("        break;")
     lines.extend([
         "    default:",
@@ -2943,7 +2948,12 @@ def _replace_code_g_setup_with_conditional_final_writes(
 ) -> str:
     if not any(plan["code_cases"] for plan in entry_plans):
         return draft
-    matrix_name = "G_code" if "MATRIX_ G_code" in draft else "Gred_code"
+    if "MATRIX_ G_code" in draft:
+        matrix_name: str | None = "G_code"
+    elif "MATRIX_ Gred_code" in draft:
+        matrix_name = "Gred_code"
+    else:
+        matrix_name = None
     start_marker = "    /* ************************************************************************\n     * CODE-SIDE G MATRIX VALUE SETUP"
     end_marker = "    /* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP"
     start = draft.find(start_marker)
@@ -2996,6 +3006,7 @@ def _apply_conditional_final_gvalues_to_structured_draft(
     template_gred: sp.Matrix,
     external_nodes: list[str],
     prune_code_matrix_writes: bool = False,
+    reuse_plan: Sequence | None = None,
 ) -> tuple[str, list[dict]]:
     entry_plans = _conditional_final_g_plans(
         case_id_symbol=case_id_symbol,
@@ -3035,6 +3046,25 @@ def _apply_conditional_final_gvalues_to_structured_draft(
     ))
     draft = draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
 
+    plan_by_pair = {(int(plan["row"]), int(plan["col"])): plan for plan in entry_plans}
+
+    def code_case_indices(plan: dict) -> tuple[int, ...]:
+        return tuple(int(item["index"]) for item in plan["code_cases"])
+
+    compatible_reuse: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
+    for item in reuse_plan or []:
+        target = (int(item.target_row), int(item.target_col))
+        base = (int(item.base_row), int(item.base_col))
+        target_plan = plan_by_pair.get(target)
+        base_plan = plan_by_pair.get(base)
+        if target_plan is None or base_plan is None:
+            continue
+        if not target_plan["code_cases"] or not base_plan["code_cases"]:
+            continue
+        if code_case_indices(target_plan) != code_case_indices(base_plan):
+            continue
+        compatible_reuse[target] = (base, int(item.sign))
+
     grouped_assignments: dict[tuple[int, ...], list[str]] = {}
     for plan in entry_plans:
         if not plan["code_cases"]:
@@ -3044,8 +3074,17 @@ def _apply_conditional_final_gvalues_to_structured_draft(
         for matrix_name in ["Gred_code", "G_code"]:
             assignment = f"{plan['var']} = get_CODE(&{matrix_name}, {row}, {col});"
             if f"    {assignment}" in draft:
+                grouped_assignment = assignment
+                if matrix_name == "Gred_code":
+                    reuse = compatible_reuse.get((int(row), int(col)))
+                    if reuse:
+                        base, sign = reuse
+                        base_plan = plan_by_pair[base]
+                        prefix = "-" if sign < 0 else ""
+                        grouped_assignment = f"{plan['var']} = {prefix}{base_plan['var']};"
+                        draft = draft.replace(f"    {assignment}", f"    {grouped_assignment}", 1)
                 case_indices = tuple(item["index"] for item in plan["code_cases"])
-                grouped_assignments.setdefault(case_indices, []).append(assignment)
+                grouped_assignments.setdefault(case_indices, []).append(grouped_assignment)
                 break
 
     for case_indices, assignments in grouped_assignments.items():
@@ -3190,21 +3229,32 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             node_display_names=template_payload.get("node_display_names") or {},
             dummy_analysis=dummy_analysis,
         )
-        if aliases and has_mixed_final_g:
-            draft, gvalue_conditions = _apply_conditional_final_gvalues_to_structured_draft(
-                draft,
-                case_id_symbol=case_id_symbol,
-                profiles=alias_model["profiles"],
-                aliases=aliases,
-                template_gred=template_reduced.G_red,
-                external_nodes=c_external_nodes,
-                prune_code_matrix_writes=not has_internal_recovery,
+    if aliases and has_mixed_final_g:
+        reuse_plan = []
+        try:
+            reuse_plan = structural_gred_entry_reuse_plan(
+                template_G,
+                template_nodes,
+                template_external,
+                template_payload.get("internal_nodes") or [],
             )
-            warnings.append(
-                "Warning: final G entries have mixed RAM/CODE ownership across cases. "
-                "CODE-owned entries are enabled with case conditions. "
-                "case_id is fixed before simulation and must not change at runtime."
-            )
+        except Exception:
+            reuse_plan = []
+        draft, gvalue_conditions = _apply_conditional_final_gvalues_to_structured_draft(
+            draft,
+            case_id_symbol=case_id_symbol,
+            profiles=alias_model["profiles"],
+            aliases=aliases,
+            template_gred=template_reduced.G_red,
+            external_nodes=c_external_nodes,
+            prune_code_matrix_writes=not has_internal_recovery,
+            reuse_plan=reuse_plan,
+        )
+        warnings.append(
+            "Warning: final G entries have mixed RAM/CODE ownership across cases. "
+            "CODE-owned entries are enabled with case conditions. "
+            "case_id is fixed before simulation and must not change at runtime."
+        )
     if "codegen_mode" not in locals():
         codegen_mode = "case-agnostic alias template"
     if "fast_path" not in locals():

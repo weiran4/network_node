@@ -1,11 +1,57 @@
 import unittest
 import sympy as sp
 
-from optimized_elimination_api import build_multi_case_response
+from optimized_elimination_api import build_multi_case_response, _apply_conditional_final_gvalues_to_structured_draft
+from nodal_tool.optimized_elimination import GredEntryReuse
 from tests.test_multicase_c_export_alias_template import _deps, _request, _series_payload
 
 
 class MultiCaseConditionalGValueTests(unittest.TestCase):
+    def test_structural_varG_reuse_is_kept_only_inside_matching_case_condition(self):
+        G = sp.Symbol("G")
+        profiles = [
+            {"name": "case 0", "payload": {"symbol_dependency_table": {"G": "CODE_VARIABLE"}}},
+            {"name": "case 1", "payload": {"symbol_dependency_table": {"G": "CODE_VARIABLE"}}},
+        ]
+        draft = "\n".join(
+            [
+                '    double varG_A_A = createGValue("varG_A_A", "A", "A", 0, "TRUE");',
+                '    double varG_A_B = createGValue("varG_A_B", "A", "B", 0, "TRUE");',
+                '    double varG_B_B = createGValue("varG_B_B", "B", "B", 0, "TRUE");',
+                "    /* No RAM-side G entries: no fixed G overlay is registered. */",
+                "    varG_A_A = get_CODE(&Gred_code, 0, 0);",
+                "    varG_A_B = get_CODE(&Gred_code, 0, 1);",
+                "    varG_B_B = get_CODE(&Gred_code, 1, 1);",
+            ]
+        )
+
+        rewritten, conditions = _apply_conditional_final_gvalues_to_structured_draft(
+            draft,
+            case_id_symbol="case_id",
+            profiles=profiles,
+            aliases={},
+            template_gred=sp.Matrix([[G, -G], [-G, G]]),
+            external_nodes=["A", "B"],
+            reuse_plan=[
+                GredEntryReuse(target_row=0, target_col=1, base_row=0, base_col=0, sign=-1),
+                GredEntryReuse(target_row=1, target_col=1, base_row=0, base_col=0, sign=1),
+            ],
+        )
+
+        self.assertEqual(
+            {item["var"]: item["condition"] for item in conditions},
+            {
+                "varG_A_A": "case_id == 0 || case_id == 1",
+                "varG_A_B": "case_id == 0 || case_id == 1",
+                "varG_B_B": "case_id == 0 || case_id == 1",
+            },
+        )
+        self.assertIn("varG_A_A = get_CODE(&Gred_code, 0, 0);", rewritten)
+        self.assertIn("varG_A_B = -varG_A_A;", rewritten)
+        self.assertIn("varG_B_B = varG_A_A;", rewritten)
+        self.assertNotIn("varG_A_B = get_CODE(&Gred_code, 0, 1);", rewritten)
+        self.assertNotIn("varG_B_B = get_CODE(&Gred_code, 1, 1);", rewritten)
+
     def test_direct_final_entry_uses_case_conditional_gvalue_for_mixed_ram_code_cases(self):
         response = build_multi_case_response(
             _request(
@@ -27,21 +73,17 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn("g_mat_over[1][0] = -G_const;", draft)
         self.assertIn("case 1:", draft)
         self.assertIn("/* CODE-owned case: no RAM stamp for varG_A_B. */", draft)
-        self.assertIn("varG_A_B = get_CODE(&G_code, 0, 1);", draft)
         self.assertIn(
             "switch (case_id) {\n"
             "    case 1:\n"
-            "        set_CODE(&G_code, 0, 0, G_dynamic);\n"
-            "        set_CODE(&G_code, 0, 1, -G_dynamic);\n"
-            "        set_CODE(&G_code, 1, 0, -G_dynamic);\n"
-            "        set_CODE(&G_code, 1, 1, G_dynamic);\n"
-            "        varG_A_A = get_CODE(&G_code, 0, 0);\n"
-            "        varG_A_B = get_CODE(&G_code, 0, 1);\n"
-            "        varG_B_B = get_CODE(&G_code, 1, 1);",
+            "        varG_A_A = G_dynamic;\n"
+            "        varG_A_B = -G_dynamic;\n"
+            "        varG_B_B = G_dynamic;",
             draft,
         )
         self.assertNotIn("cr_R1_G_eff = G_const;", draft)
         self.assertNotIn("set_CODE(&G_code, 0, 0, cr_R1_G_eff);", draft)
+        self.assertNotIn("set_CODE(&Gred_code", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
         self.assertNotIn("varG_A_B = 0.0", draft)
         self.assertIn("case_id is fixed before simulation", warnings)
@@ -65,31 +107,23 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn('createGValue("varG_A_B", "A", "B", 0, "case_id == 1 || case_id == 2")', draft)
         self.assertIn("g_mat_over[0][1] = -G_const;", draft)
         self.assertIn("g_mat_over[0][1] = -G_const_3;", draft)
-        self.assertIn("varG_A_B = get_CODE(&G_code, 0, 1);", draft)
         self.assertIn(
             "switch (case_id) {\n"
             "    case 1:\n"
-            "        set_CODE(&G_code, 0, 0, G_dynamic_1);\n"
-            "        set_CODE(&G_code, 0, 1, -G_dynamic_1);\n"
-            "        set_CODE(&G_code, 1, 0, -G_dynamic_1);\n"
-            "        set_CODE(&G_code, 1, 1, G_dynamic_1);\n"
-            "        varG_A_A = get_CODE(&G_code, 0, 0);\n"
-            "        varG_A_B = get_CODE(&G_code, 0, 1);\n"
-            "        varG_B_B = get_CODE(&G_code, 1, 1);\n"
+            "        varG_A_A = G_dynamic_1;\n"
+            "        varG_A_B = -G_dynamic_1;\n"
+            "        varG_B_B = G_dynamic_1;\n"
             "        break;\n"
             "    case 2:\n"
-            "        set_CODE(&G_code, 0, 0, G_dynamic_2);\n"
-            "        set_CODE(&G_code, 0, 1, -G_dynamic_2);\n"
-            "        set_CODE(&G_code, 1, 0, -G_dynamic_2);\n"
-            "        set_CODE(&G_code, 1, 1, G_dynamic_2);\n"
-            "        varG_A_A = get_CODE(&G_code, 0, 0);\n"
-            "        varG_A_B = get_CODE(&G_code, 0, 1);\n"
-            "        varG_B_B = get_CODE(&G_code, 1, 1);",
+            "        varG_A_A = G_dynamic_2;\n"
+            "        varG_A_B = -G_dynamic_2;\n"
+            "        varG_B_B = G_dynamic_2;",
             draft,
         )
         self.assertNotIn("cr_R1_G_eff = G_const;", draft)
         self.assertNotIn("cr_R1_G_eff = G_const_3;", draft)
         self.assertNotIn("set_CODE(&G_code, 0, 0, cr_R1_G_eff);", draft)
+        self.assertNotIn("set_CODE(&Gred_code", draft)
         self.assertNotIn(
             "switch (case_id) {\n"
             "    case 1:\n"

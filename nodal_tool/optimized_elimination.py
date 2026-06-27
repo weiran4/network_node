@@ -1,11 +1,201 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from typing import Sequence
 
 import sympy as sp
 
 from .dependency_analysis import analyze_reduced_model_dependencies, classify_expr_stage
+
+
+@dataclass(frozen=True)
+class GredEntryReuse:
+    target_row: int
+    target_col: int
+    base_row: int
+    base_col: int
+    sign: int
+
+
+_PolyKey = tuple[tuple[tuple[str, ...], int], ...]
+_Poly = dict[tuple[str, ...], int]
+
+
+def _expr_is_exact_zero(expr: sp.Expr) -> bool:
+    return sp.sympify(expr) == 0
+
+
+def _signed_expr_atom(expr: sp.Expr) -> tuple[int, str]:
+    expr = sp.sympify(expr)
+    if _expr_is_exact_zero(expr):
+        return 1, "0"
+    if expr.could_extract_minus_sign():
+        return -1, sp.srepr(-expr)
+    return 1, sp.srepr(expr)
+
+
+def _poly_add(left: _Poly, right: _Poly, scale: int = 1) -> _Poly:
+    out: _Poly = dict(left)
+    for factors, coeff in right.items():
+        new_coeff = out.get(factors, 0) + scale * coeff
+        if new_coeff:
+            out[factors] = new_coeff
+        else:
+            out.pop(factors, None)
+    return out
+
+
+def _poly_atom(name: str, coeff: int = 1) -> _Poly:
+    if coeff == 0:
+        return {}
+    return {(name,): coeff}
+
+
+def _poly_from_expr(expr: sp.Expr) -> _Poly:
+    sign, atom = _signed_expr_atom(expr)
+    if atom == "0":
+        return {}
+    return _poly_atom(atom, sign)
+
+
+def _poly_mul(left: _Poly, right: _Poly) -> _Poly:
+    if not left or not right:
+        return {}
+    out: _Poly = {}
+    for left_factors, left_coeff in left.items():
+        for right_factors, right_coeff in right.items():
+            factors = tuple(sorted((*left_factors, *right_factors)))
+            coeff = left_coeff * right_coeff
+            new_coeff = out.get(factors, 0) + coeff
+            if new_coeff:
+                out[factors] = new_coeff
+            else:
+                out.pop(factors, None)
+    return out
+
+
+def _poly_key(poly: _Poly) -> _PolyKey:
+    return tuple(sorted(poly.items()))
+
+
+def _poly_neg_key(key: _PolyKey) -> _PolyKey:
+    return tuple((factors, -coeff) for factors, coeff in key)
+
+
+def _structural_w_polys(Gkk: sp.Matrix) -> list[list[_Poly]]:
+    Gkk = sp.Matrix(Gkk)
+    nk = Gkk.rows
+    if nk == 0:
+        return []
+    if all(_expr_is_exact_zero(Gkk[row, col]) for row in range(nk) for col in range(nk) if row != col):
+        return [
+            [_poly_atom(f"Wdiag_{row}") if row == col else {} for col in range(nk)]
+            for row in range(nk)
+        ]
+    return [
+        [_poly_atom(f"W_{min(row, col)}_{max(row, col)}") for col in range(nk)]
+        for row in range(nk)
+    ]
+
+
+def _structural_gred_entry_poly(
+    Grr: sp.Matrix,
+    Grk: sp.Matrix,
+    Gkr: sp.Matrix,
+    W_polys: Sequence[Sequence[_Poly]],
+    row: int,
+    col: int,
+) -> _Poly:
+    poly = _poly_from_expr(Grr[row, col])
+    nk = Grk.cols
+    for k_row in range(nk):
+        grk_poly = _poly_from_expr(Grk[row, k_row])
+        if not grk_poly:
+            continue
+        for k_col in range(nk):
+            w_poly = W_polys[k_row][k_col]
+            if not w_poly:
+                continue
+            gkr_poly = _poly_from_expr(Gkr[k_col, col])
+            if not gkr_poly:
+                continue
+            term = _poly_mul(_poly_mul(grk_poly, w_poly), gkr_poly)
+            poly = _poly_add(poly, term, scale=-1)
+    return poly
+
+
+def structural_gred_entry_reuse_plan(
+    G_full: sp.Matrix,
+    node_order: Sequence[str],
+    retained_nodes: Sequence[str],
+    internal_nodes: Sequence[str],
+) -> list[GredEntryReuse]:
+    """Find exact structural whole-entry reuse in Gred without algebraic simplification.
+
+    The helper compares the expression tree implied by
+    Grr - Grk * W * Gkr. It intentionally does not call SymPy equivalence
+    routines; uncertain entries simply do not get reused.
+    """
+    G_full = sp.Matrix(G_full)
+    node_order = list(node_order)
+    retained_nodes = list(retained_nodes)
+    internal_nodes = list(internal_nodes)
+    _validate_partition(node_order, retained_nodes, internal_nodes)
+    if G_full.shape != (len(node_order), len(node_order)):
+        raise ValueError("G_full shape must match node_order")
+
+    ordered_indices = [node_order.index(node) for node in [*retained_nodes, *internal_nodes]]
+    ordered_G = G_full.extract(ordered_indices, ordered_indices)
+    nr = len(retained_nodes)
+    nk = len(internal_nodes)
+    Grr = ordered_G[:nr, :nr]
+    Grk = ordered_G[:nr, nr:nr + nk]
+    Gkr = ordered_G[nr:nr + nk, :nr]
+    Gkk = ordered_G[nr:nr + nk, nr:nr + nk]
+    return structural_gred_entry_reuse_plan_from_blocks(Grr, Grk, Gkr, Gkk)
+
+
+def structural_gred_entry_reuse_plan_from_blocks(
+    Grr: sp.Matrix,
+    Grk: sp.Matrix,
+    Gkr: sp.Matrix,
+    Gkk: sp.Matrix,
+) -> list[GredEntryReuse]:
+    Grr = sp.Matrix(Grr)
+    Grk = sp.Matrix(Grk)
+    Gkr = sp.Matrix(Gkr)
+    Gkk = sp.Matrix(Gkk)
+    nr = Grr.rows
+    nk = Gkk.rows
+    if Grr.shape != (nr, nr):
+        raise ValueError("Grr must be square")
+    if Grk.shape != (nr, nk):
+        raise ValueError("Grk shape must be NR x NK")
+    if Gkr.shape != (nk, nr):
+        raise ValueError("Gkr shape must be NK x NR")
+    if Gkk.shape != (nk, nk):
+        raise ValueError("Gkk must be NK x NK")
+
+    W_polys = _structural_w_polys(Gkk)
+
+    seen: dict[_PolyKey, tuple[int, int]] = {}
+    reuse: list[GredEntryReuse] = []
+    for row in range(nr):
+        for col in range(row, nr):
+            key = _poly_key(_structural_gred_entry_poly(Grr, Grk, Gkr, W_polys, row, col))
+            if not key:
+                continue
+            base = seen.get(key)
+            if base is not None:
+                reuse.append(GredEntryReuse(row, col, base[0], base[1], 1))
+                continue
+            neg_base = seen.get(_poly_neg_key(key))
+            if neg_base is not None:
+                reuse.append(GredEntryReuse(row, col, neg_base[0], neg_base[1], -1))
+                continue
+            seen[key] = (row, col)
+    return reuse
 
 
 def _as_column_vector(vec: sp.Matrix, expected_rows: int, name: str) -> sp.Matrix:
@@ -1907,6 +2097,17 @@ def _c_emit_rtds_stage_sections(
             f"    {target} = {name};",
         ]
     ]
+    var_g_pair_set = {(row, col) for row, col, _, _ in var_g_pairs}
+    full_gred_var_reuse: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
+    if dynamic_gred and full_gred_code_path:
+        try:
+            for item in structural_gred_entry_reuse_plan_from_blocks(Grr, Grk, Gkr, Gkk):
+                target = (item.target_row, item.target_col)
+                base = (item.base_row, item.base_col)
+                if target in var_g_pair_set and base in var_g_pair_set:
+                    full_gred_var_reuse[target] = (base, item.sign)
+        except Exception:
+            full_gred_var_reuse = {}
     code_matrix_names = []
     if need_Grr_code:
         code_matrix_names.append("Grr_code")
@@ -2195,12 +2396,21 @@ def _c_emit_rtds_stage_sections(
             "    matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);",
             *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code") if _matrix_has_nonzero(code_Gred_direct) else []),
             "    /* Stamp dynamic Gred entries in row-major upper-triangular order. */",
-            *[
-                f"    {_var_g_name(row_node, col_node, node_display_names)} = get_CODE(&Gred_code, {row}, {col});"
-                for row, col, row_node, col_node in var_g_pairs
-            ],
-            "",
         ])
+        assigned_var_g_pairs: set[tuple[int, int]] = set()
+        for row, col, row_node, col_node in var_g_pairs:
+            target = (row, col)
+            target_name = _var_g_name(row_node, col_node, node_display_names)
+            reuse = full_gred_var_reuse.get(target)
+            if reuse and reuse[0] in assigned_var_g_pairs:
+                base_row, base_col = reuse[0]
+                base_name = _var_g_name(external_nodes[base_row], external_nodes[base_col], node_display_names)
+                prefix = "-" if reuse[1] < 0 else ""
+                lines.append(f"    {target_name} = {prefix}{base_name};")
+            else:
+                lines.append(f"    {target_name} = get_CODE(&Gred_code, {row}, {col});")
+            assigned_var_g_pairs.add(target)
+        lines.append("")
     elif dynamic_gred:
         if rectangular_gred_dyn_path:
             row_names = ", ".join(_c_display_node(external_nodes[row], node_display_names) for row in gred_dyn_rows)

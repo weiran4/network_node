@@ -392,6 +392,40 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         self.assertNotIn("W_code", draft)
         self.assertNotIn("Vk_code", draft)
 
+    def test_full_matrix_gred_varG_reads_reuse_structural_opposites(self):
+        G, H, D = sp.symbols("G H D")
+        nodes = ["A", "B", "C", "k"]
+        full_G = sp.Matrix(
+            [
+                [0, 0, 0, G],
+                [0, 0, 0, -G],
+                [0, 0, 0, H],
+                [G, -G, H, D],
+            ]
+        )
+        structured = build_structured_formula(
+            full_G,
+            sp.zeros(4, 1),
+            nodes,
+            ["A", "B", "C"],
+            ["k"],
+        )
+        plan = build_dependency_stage_plan(
+            structured,
+            {"G": "CODE_VARIABLE", "H": "CODE_VARIABLE", "D": "CODE_VARIABLE"},
+        )
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertIn("matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);", draft)
+        self.assertIn("varG_A_A = get_CODE(&Gred_code, 0, 0);", draft)
+        self.assertIn("varG_A_B = -varG_A_A;", draft)
+        self.assertIn("varG_B_B = varG_A_A;", draft)
+        self.assertIn("varG_B_C = -varG_A_C;", draft)
+        self.assertNotIn("varG_A_B = get_CODE(&Gred_code, 0, 1);", draft)
+        self.assertNotIn("varG_B_B = get_CODE(&Gred_code, 1, 1);", draft)
+        self.assertNotIn("varG_B_C = get_CODE(&Gred_code, 1, 2);", draft)
+
     def test_no_internal_nodes_split_constant_and_dynamic_g_terms(self):
         R, G, h = sp.symbols("R G h")
         nodes = ["N1", "N2", "N4", "N6"]

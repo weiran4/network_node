@@ -280,8 +280,10 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("g_mat_over[0][1] = -G_const;", draft)
         self.assertNotIn("cr_R1_G_eff = G_const;", draft)
         self.assertNotIn("cr_R1_G_eff = G_dynamic;", draft)
-        self.assertIn("set_CODE(&G_code, 0, 0, G_dynamic);", draft)
-        self.assertIn("varG_A_B = get_CODE(&G_code, 0, 1);", draft)
+        self.assertIn("varG_A_A = G_dynamic;", draft)
+        self.assertIn("varG_A_B = -G_dynamic;", draft)
+        self.assertIn("varG_B_B = G_dynamic;", draft)
+        self.assertNotIn("set_CODE(&G_code", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
 
     def test_step_history_case_promotes_alias_to_code_per_step(self):
