@@ -103,6 +103,25 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertNotIn("Template Reduction Summary", result_source)
         self.assertNotIn("Topology validation", result_source)
 
+    def test_c_export_reuse_summary_is_visible_even_when_empty(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        optimized_start = source.index("function renderOptimizedGredEntryReuse")
+        optimized_end = source.index("function renderOptimizedFormulaResult")
+        optimized_source = source[optimized_start:optimized_end]
+        self.assertIn("未发现可安全复用的 Gred entry", optimized_source)
+        self.assertIn("No safe reusable Gred entries were detected", optimized_source)
+        self.assertNotIn("if (!Array.isArray(items) || !items.length) return \"\";", optimized_source)
+
+        multi_start = source.index("function renderMultiCaseGredEntryReuse")
+        multi_end = source.index("function displayedMultiCaseCDraft")
+        if multi_end < multi_start:
+            multi_end = source.index("function renderMultiCaseCExportResult")
+        multi_source = source[multi_start:multi_end]
+        self.assertIn("未发现可安全复用的 Gred entry", multi_source)
+        self.assertIn("No safe reusable Gred entries were detected", multi_source)
+        self.assertNotIn("if (!visibleGroups.length) return \"\";", multi_source)
+
     def test_multi_case_export_shows_template_visualization(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
