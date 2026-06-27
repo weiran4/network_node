@@ -4271,9 +4271,70 @@ def _apply_dummy_finalization_gvalue_conditions(
     profile_set,
     super_node_ids: list[str],
     c_external_nodes: list[str],
+    reuse_plan_by_case: Mapping[int, Sequence] | None = None,
+    reuse_nodes_by_case: Mapping[int, Sequence[str]] | None = None,
 ) -> tuple[str, list[dict]]:
     gvalue_conditions: list[dict] = []
-    grouped_assignments: dict[tuple[int, ...], list[str]] = {}
+    grouped_entries: dict[tuple[int, ...], list[dict]] = {}
+
+    def _reuse_map_for_case(case_index: int) -> dict[tuple[int, int], tuple[tuple[int, int], int]]:
+        items = list((reuse_plan_by_case or {}).get(case_index) or [])
+        nodes = [str(node) for node in (reuse_nodes_by_case or {}).get(case_index) or []]
+        if not items or not nodes:
+            return {}
+        node_to_super = {str(node): index for index, node in enumerate(super_node_ids)}
+        mapped: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
+        for item in items:
+            try:
+                target_node = nodes[int(item.target_row)]
+                target_col_node = nodes[int(item.target_col)]
+                base_node = nodes[int(item.base_row)]
+                base_col_node = nodes[int(item.base_col)]
+                target = (node_to_super[target_node], node_to_super[target_col_node])
+                base = (node_to_super[base_node], node_to_super[base_col_node])
+            except Exception:
+                continue
+            mapped[target] = (base, int(item.sign))
+        return mapped
+
+    def _switch_lines_with_reuse(case_indices: Sequence[int], entries: Sequence[dict]) -> list[str] | None:
+        if not case_indices or not entries:
+            return None
+        grouped_by_lines: dict[tuple[str, ...], list[int]] = {}
+        used_reuse = False
+        for case_index in case_indices:
+            reuse_map = _reuse_map_for_case(int(case_index))
+            assigned_pairs: set[tuple[int, int]] = set()
+            lines_for_case: list[str] = []
+            for entry in entries:
+                pair = (int(entry["row"]), int(entry["col"]))
+                reuse = reuse_map.get(pair)
+                if reuse and reuse[0] in assigned_pairs:
+                    base_row, base_col = reuse[0]
+                    base_var = _var_g_name(c_external_nodes, base_row, base_col)
+                    prefix = "-" if int(reuse[1]) < 0 else ""
+                    lines_for_case.append(f"{entry['var']} = {prefix}{base_var};")
+                    used_reuse = True
+                else:
+                    lines_for_case.append(str(entry["assignment"]))
+                assigned_pairs.add(pair)
+            grouped_by_lines.setdefault(tuple(lines_for_case), []).append(int(case_index))
+        if not used_reuse:
+            return None
+        lines = [f"    switch ({case_id_symbol}) {{"]
+        for assignments, grouped_cases in grouped_by_lines.items():
+            for index in grouped_cases:
+                lines.append(f"    case {index}:")
+            for assignment in assignments:
+                lines.append(f"        {assignment}")
+            lines.append("        break;")
+        lines.extend([
+            "    default:",
+            "        break;",
+            "    }",
+        ])
+        return lines
+
     for row in range(len(super_node_ids)):
         for col in range(row, len(super_node_ids)):
             left_id = str(super_node_ids[row])
@@ -4307,24 +4368,38 @@ def _apply_dummy_finalization_gvalue_conditions(
             for matrix_name in ["Gred_code", "Gred_dyn_code", "G_code"]:
                 assignment = f"{var} = get_CODE(&{matrix_name}, {row}, {col});"
                 if f"    {assignment}" in draft:
-                    grouped_assignments.setdefault(tuple(active_cases), []).append(assignment)
+                    grouped_entries.setdefault(tuple(active_cases), []).append({
+                        "row": row,
+                        "col": col,
+                        "var": var,
+                        "assignment": assignment,
+                    })
                     break
             else:
                 match = re.search(
-                    rf"^    ({re.escape(var)}\s*=\s*get_CODE\(&[^;]+;\s*)$",
+                    rf"^\s+({re.escape(var)}\s*=\s*get_CODE\(&[^;]+;\s*)$",
                     draft,
                     flags=re.MULTILINE,
                 )
                 if match:
-                    grouped_assignments.setdefault(tuple(active_cases), []).append(match.group(1).strip())
+                    grouped_entries.setdefault(tuple(active_cases), []).append({
+                        "row": row,
+                        "col": col,
+                        "var": var,
+                        "assignment": match.group(1).strip(),
+                    })
 
-    for case_indices, assignments in grouped_assignments.items():
+    for case_indices, entries in grouped_entries.items():
+        switch_lines = _switch_lines_with_reuse(case_indices, entries)
+        if not switch_lines:
+            continue
+        assignments = [str(entry["assignment"]) for entry in entries]
         first_assignment = assignments[0]
         for assignment in assignments[1:]:
             draft = draft.replace(f"    {assignment}", "", 1)
         draft = draft.replace(
             f"    {first_assignment}",
-            "\n".join(_case_switch_assignment_lines(case_id_symbol, case_indices, assignments)),
+            "\n".join(switch_lines),
             1,
         )
     return draft, gvalue_conditions
@@ -4376,6 +4451,8 @@ def _build_dummy_finalized_matrix_dag_c_draft(
     alias_model: dict,
     profile_set,
     case_id_symbol: str,
+    reuse_plan_by_case: Mapping[int, Sequence] | None = None,
+    reuse_nodes_by_case: Mapping[int, Sequence[str]] | None = None,
 ) -> tuple[str, list[dict], list[str], dict]:
     raw_template_payload = alias_model["template_payload"]
     aliases = alias_model["aliases"]
@@ -4435,6 +4512,8 @@ def _build_dummy_finalized_matrix_dag_c_draft(
         profile_set=profile_set,
         super_node_ids=template_external,
         c_external_nodes=c_external_nodes,
+        reuse_plan_by_case=reuse_plan_by_case,
+        reuse_nodes_by_case=reuse_nodes_by_case,
     )
     draft = _apply_dummy_finalization_injection_guards(
         draft,
@@ -4528,6 +4607,7 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
             or _dummy_finalized_matrix_dag_is_preferred(final_results)
         )
     )
+    display_reuse_plan_by_case, display_reuse_nodes_by_case = _dummy_finalized_gred_reuse_by_case(final_results)
     gvalue_conditions: list[dict] = []
     extra_warnings: list[str] = []
     matrix_dag_result: dict | None = None
@@ -4537,6 +4617,8 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
             alias_model=alias_model,
             profile_set=profile_set,
             case_id_symbol=case_id_symbol,
+            reuse_plan_by_case=display_reuse_plan_by_case,
+            reuse_nodes_by_case=display_reuse_nodes_by_case,
         )
         fast_path = "dummy_finalization_alias_template_matrix_dag"
     else:
@@ -4561,8 +4643,6 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
         for alias, info in aliases.items()
         if len(set((info.get("case_owners") or {}).values())) > 1
     ]
-    display_reuse_plan_by_case, display_reuse_nodes_by_case = _dummy_finalized_gred_reuse_by_case(final_results)
-
     return {
         "ok": True,
         "mode": "multi_case_c_export",
