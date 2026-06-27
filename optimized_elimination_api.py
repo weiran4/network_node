@@ -3007,6 +3007,7 @@ def _apply_conditional_final_gvalues_to_structured_draft(
     external_nodes: list[str],
     prune_code_matrix_writes: bool = False,
     reuse_plan: Sequence | None = None,
+    reuse_plan_by_case: dict[int, Sequence] | None = None,
 ) -> tuple[str, list[dict]]:
     entry_plans = _conditional_final_g_plans(
         case_id_symbol=case_id_symbol,
@@ -3051,19 +3052,90 @@ def _apply_conditional_final_gvalues_to_structured_draft(
     def code_case_indices(plan: dict) -> tuple[int, ...]:
         return tuple(int(item["index"]) for item in plan["code_cases"])
 
-    compatible_reuse: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
-    for item in reuse_plan or []:
-        target = (int(item.target_row), int(item.target_col))
-        base = (int(item.base_row), int(item.base_col))
-        target_plan = plan_by_pair.get(target)
-        base_plan = plan_by_pair.get(base)
-        if target_plan is None or base_plan is None:
-            continue
-        if not target_plan["code_cases"] or not base_plan["code_cases"]:
-            continue
-        if code_case_indices(target_plan) != code_case_indices(base_plan):
-            continue
-        compatible_reuse[target] = (base, int(item.sign))
+    def _compatible_reuse_from_items(items: Sequence | None, *, case_index: int | None = None) -> dict[tuple[int, int], tuple[tuple[int, int], int]]:
+        compatible: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
+        for item in items or []:
+            target = (int(item.target_row), int(item.target_col))
+            base = (int(item.base_row), int(item.base_col))
+            target_plan = plan_by_pair.get(target)
+            base_plan = plan_by_pair.get(base)
+            if target_plan is None or base_plan is None:
+                continue
+            if not target_plan["code_cases"] or not base_plan["code_cases"]:
+                continue
+            if case_index is None:
+                if code_case_indices(target_plan) != code_case_indices(base_plan):
+                    continue
+            else:
+                target_cases = {int(case["index"]) for case in target_plan["code_cases"]}
+                base_cases = {int(case["index"]) for case in base_plan["code_cases"]}
+                if case_index not in target_cases or case_index not in base_cases:
+                    continue
+            compatible[target] = (base, int(item.sign))
+        return compatible
+
+    compatible_reuse = _compatible_reuse_from_items(reuse_plan)
+
+    if reuse_plan_by_case:
+        assignment_by_pair: dict[tuple[int, int], tuple[str, str]] = {}
+        ordered_pairs: list[tuple[int, int]] = []
+        for plan in entry_plans:
+            if not plan["code_cases"]:
+                continue
+            row = int(plan["row"])
+            col = int(plan["col"])
+            for matrix_name in ["Gred_code", "G_code"]:
+                assignment = f"{plan['var']} = get_CODE(&{matrix_name}, {row}, {col});"
+                if f"    {assignment}" in draft:
+                    pair = (row, col)
+                    assignment_by_pair[pair] = (assignment, matrix_name)
+                    ordered_pairs.append(pair)
+                    break
+        if ordered_pairs:
+            compatible_reuse_by_case = {
+                int(case_index): _compatible_reuse_from_items(items, case_index=int(case_index))
+                for case_index, items in reuse_plan_by_case.items()
+            }
+            active_case_indices = sorted({
+                int(case["index"])
+                for plan in entry_plans
+                for case in plan["code_cases"]
+                if (int(plan["row"]), int(plan["col"])) in assignment_by_pair
+            })
+            switch_lines = [f"    switch ({case_id_symbol}) {{"]
+            for case_index in active_case_indices:
+                assigned_pairs: set[tuple[int, int]] = set()
+                switch_lines.append(f"    case {case_index}:")
+                for plan in entry_plans:
+                    pair = (int(plan["row"]), int(plan["col"]))
+                    if pair not in assignment_by_pair:
+                        continue
+                    if case_index not in {int(case["index"]) for case in plan["code_cases"]}:
+                        continue
+                    reuse = compatible_reuse_by_case.get(case_index, {}).get(pair)
+                    if reuse and reuse[0] in assigned_pairs:
+                        base_plan = plan_by_pair[reuse[0]]
+                        prefix = "-" if reuse[1] < 0 else ""
+                        switch_lines.append(f"        {plan['var']} = {prefix}{base_plan['var']};")
+                    else:
+                        switch_lines.append(f"        {assignment_by_pair[pair][0]}")
+                    assigned_pairs.add(pair)
+                switch_lines.append("        break;")
+            switch_lines.extend(["    default:", "        break;", "    }"])
+            first_assignment = assignment_by_pair[ordered_pairs[0]][0]
+            switch_placeholder = "    /* __MULTICASE_FINAL_GVALUE_SWITCH__ */"
+            draft = draft.replace(f"    {first_assignment}", switch_placeholder, 1)
+            for pair in ordered_pairs[1:]:
+                draft = draft.replace(f"    {assignment_by_pair[pair][0]}", "", 1)
+            draft = draft.replace(switch_placeholder, "\n".join(switch_lines), 1)
+            if prune_code_matrix_writes:
+                draft = _replace_code_g_setup_with_conditional_final_writes(
+                    draft,
+                    case_id_symbol=case_id_symbol,
+                    entry_plans=entry_plans,
+                )
+                draft = _remove_code_g_alias_resolution_for_conditional_final_writes(draft, aliases)
+            return draft, gvalue_conditions
 
     grouped_assignments: dict[tuple[int, ...], list[str]] = {}
     for plan in entry_plans:
@@ -3231,6 +3303,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         )
     if aliases and has_mixed_final_g:
         reuse_plan = []
+        reuse_plan_by_case: dict[int, list] = {}
         try:
             reuse_plan = structural_gred_entry_reuse_plan(
                 template_G,
@@ -3240,6 +3313,21 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             )
         except Exception:
             reuse_plan = []
+        for profile_index, profile in enumerate(alias_model["profiles"]):
+            profile_payload = profile.get("payload") or {}
+            try:
+                profile_G, _, _, _, profile_nodes, profile_external, _, _ = _partition_payload(profile_payload)
+                profile_internal = profile_payload.get("internal_nodes") or []
+                if [str(node) for node in profile_external] != [str(node) for node in template_external]:
+                    continue
+                reuse_plan_by_case[int(profile.get("index", profile_index))] = structural_gred_entry_reuse_plan(
+                    profile_G,
+                    profile_nodes,
+                    profile_external,
+                    profile_internal,
+                )
+            except Exception:
+                continue
         draft, gvalue_conditions = _apply_conditional_final_gvalues_to_structured_draft(
             draft,
             case_id_symbol=case_id_symbol,
@@ -3249,6 +3337,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             external_nodes=c_external_nodes,
             prune_code_matrix_writes=not has_internal_recovery,
             reuse_plan=reuse_plan,
+            reuse_plan_by_case=reuse_plan_by_case,
         )
         warnings.append(
             "Warning: final G entries have mixed RAM/CODE ownership across cases. "

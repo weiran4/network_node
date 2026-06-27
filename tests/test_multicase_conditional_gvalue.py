@@ -52,6 +52,47 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertNotIn("varG_A_B = get_CODE(&Gred_code, 0, 1);", rewritten)
         self.assertNotIn("varG_B_B = get_CODE(&Gred_code, 1, 1);", rewritten)
 
+    def test_structural_varG_reuse_can_differ_by_case_combination(self):
+        G = sp.Symbol("G")
+        profiles = [
+            {"name": "case 0", "payload": {"symbol_dependency_table": {"G": "CODE_VARIABLE"}}},
+            {"name": "case 1", "payload": {"symbol_dependency_table": {"G": "CODE_VARIABLE"}}},
+        ]
+        draft = "\n".join(
+            [
+                '    double varG_A_A = createGValue("varG_A_A", "A", "A", 0, "TRUE");',
+                '    double varG_A_B = createGValue("varG_A_B", "A", "B", 0, "TRUE");',
+                "    /* No RAM-side G entries: no fixed G overlay is registered. */",
+                "    varG_A_A = get_CODE(&Gred_code, 0, 0);",
+                "    varG_A_B = get_CODE(&Gred_code, 0, 1);",
+            ]
+        )
+
+        rewritten, _ = _apply_conditional_final_gvalues_to_structured_draft(
+            draft,
+            case_id_symbol="case_id",
+            profiles=profiles,
+            aliases={},
+            template_gred=sp.Matrix([[G, -G], [-G, G]]),
+            external_nodes=["A", "B"],
+            reuse_plan_by_case={
+                0: [GredEntryReuse(target_row=0, target_col=1, base_row=0, base_col=0, sign=-1)],
+                1: [],
+            },
+        )
+
+        self.assertIn(
+            "switch (case_id) {\n"
+            "    case 0:\n"
+            "        varG_A_A = get_CODE(&Gred_code, 0, 0);\n"
+            "        varG_A_B = -varG_A_A;\n"
+            "        break;\n"
+            "    case 1:\n"
+            "        varG_A_A = get_CODE(&Gred_code, 0, 0);\n"
+            "        varG_A_B = get_CODE(&Gred_code, 0, 1);",
+            rewritten,
+        )
+
     def test_direct_final_entry_uses_case_conditional_gvalue_for_mixed_ram_code_cases(self):
         response = build_multi_case_response(
             _request(
@@ -248,16 +289,14 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn("varG_n11a_n11a = get_CODE(&Gred_code, 0, 0);", draft)
         self.assertIn("varG_n11a_N4 = get_CODE(&Gred_code, 0, 1);", draft)
         self.assertIn("varG_N4_N4 = get_CODE(&Gred_code, 1, 1);", draft)
-        grouped_assignment = (
-            "switch (case_id) {\n"
-            "    case 1:\n"
-            "    case 2:\n"
-            "    case 3:\n"
-            "        varG_n11a_n11a = get_CODE(&Gred_code, 0, 0);\n"
-            "        varG_n11a_N4 = get_CODE(&Gred_code, 0, 1);\n"
-            "        varG_N4_N4 = get_CODE(&Gred_code, 1, 1);"
-        )
-        self.assertIn(grouped_assignment, draft)
+        for case_index in [1, 2, 3]:
+            self.assertIn(
+                f"case {case_index}:\n"
+                "        varG_n11a_n11a = get_CODE(&Gred_code, 0, 0);\n"
+                "        varG_n11a_N4 = get_CODE(&Gred_code, 0, 1);\n"
+                "        varG_N4_N4 = get_CODE(&Gred_code, 1, 1);",
+                draft,
+            )
         self.assertEqual(draft.count("switch (case_id) {"), 3)
         self.assertIn("T1_T2:", draft)
 

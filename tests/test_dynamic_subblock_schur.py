@@ -100,7 +100,6 @@ class DynamicSubblockSchurTests(unittest.TestCase):
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
         self.assertIn("Sliced Schur sparse updates for dynamic Gred entries", draft)
-        self.assertIn("double codeG_A_A = 0.0;", draft)
         self.assertIn("double Grr_shared_1 = 0.0;", draft)
         self.assertIn("double Grk_A_k1 = 0.0;", draft)
         self.assertIn("double Gkr_k1_A = 0.0;", draft)
@@ -109,14 +108,44 @@ class DynamicSubblockSchurTests(unittest.TestCase):
         self.assertIn("Grr_shared_1 = Gc;", draft)
         self.assertIn("set_CODE(&Grr_code, 0, 0, Grr_shared_1);", draft)
         self.assertIn("W_1_1 = 1.0/(Gc + Gv);", draft)
-        self.assertIn("/* codeG_A_A represents Gred[A,A]:", draft)
-        self.assertIn("codeG_A_A = Grr_shared_1 - Grk_A_k1*W_1_1*Gkr_k1_A;", draft)
-        self.assertIn("varG_A_A = codeG_A_A;", draft)
-        self.assertIn("double codeG_B_B = 0.0;", draft)
-        self.assertIn("codeG_B_B = Grr_B_B - Grk_B_k1*W_1_1*Gkr_k1_B;", draft)
-        self.assertIn("varG_B_B = codeG_B_B;", draft)
+        self.assertIn("/* varG_A_A represents Gred[A,A]:", draft)
+        self.assertIn("varG_A_A = Grr_shared_1 - Grk_A_k1*W_1_1*Gkr_k1_A;", draft)
+        self.assertIn("/* varG_B_B represents Gred[B,B]:", draft)
+        self.assertIn("varG_B_B = Grr_B_B - Grk_B_k1*W_1_1*Gkr_k1_B;", draft)
+        self.assertNotIn("codeG_", draft)
         self.assertNotIn("codeG_A_A = Gc*Gv/(Gc + Gv);", draft)
         self.assertNotIn("MATRIX_ Gred_dyn_code", draft)
+
+    def test_sparse_gred_fallback_reuses_opposite_whole_entries_without_codeG_temps(self):
+        D, P, Q = sp.symbols("D P Q")
+        nodes = ["A", "B", "C", "X"]
+        G = sp.Matrix(
+            [
+                [0, 0, 0, P],
+                [0, 0, 0, -P],
+                [0, 0, 0, Q],
+                [P, -P, Q, D],
+            ]
+        )
+        structured = build_structured_formula(G, sp.zeros(4, 1), nodes, ["A", "B", "C"], ["X"])
+        plan = build_dependency_stage_plan(
+            structured,
+            {"D": "RAM_CONSTANT", "P": "CODE_VARIABLE", "Q": "RAM_CONSTANT"},
+        )
+        plan["dependency_analysis"]["Gred_stage"] = [
+            ["CODE_UPDATE", "RAM_INIT", "CODE_UPDATE"],
+            ["RAM_INIT", "RAM_INIT", "CODE_UPDATE"],
+            ["RAM_INIT", "RAM_INIT", "RAM_INIT"],
+        ]
+        plan["dynamic_subblock"] = detect_rectangular_dynamic_blocks([(0, 0), (0, 2), (1, 2)])
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertIn("Sliced Schur sparse updates for dynamic Gred entries", draft)
+        self.assertIn("varG_A_C = -Grk_A_k1*W_1_1*Gkr_k1_C;", draft)
+        self.assertIn("varG_B_C = -varG_A_C;", draft)
+        self.assertNotIn("double codeG_", draft)
+        self.assertNotIn("codeG_", draft)
 
     def test_c_draft_groups_static_declarations_by_role(self):
         Gc, Gv, h = sp.symbols("Gc Gv h")

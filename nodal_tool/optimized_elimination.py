@@ -2054,9 +2054,21 @@ def _c_emit_rtds_stage_sections(
     ]
     w_builder_matrix_dims = _diagonal_plus_coupled_w_matrix_dims(details) if structured_w_builder else []
     w_builder_matrix_names = [name for name, _, _ in w_builder_matrix_dims]
+    var_g_pair_set = {(row, col) for row, col, _, _ in var_g_pairs}
+    gred_var_reuse: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
+    if dynamic_gred:
+        try:
+            for item in structural_gred_entry_reuse_plan_from_blocks(Grr, Grk, Gkr, Gkk):
+                target = (item.target_row, item.target_col)
+                base = (item.base_row, item.base_col)
+                if target in var_g_pair_set and base in var_g_pair_set:
+                    gred_var_reuse[target] = (base, item.sign)
+        except Exception:
+            gred_var_reuse = {}
     sparse_gred_scalar_assignments = (
         [
             (
+                (row, col),
                 _var_g_name(row_node, col_node, node_display_names),
                 (
                     f"/* Gred[{_c_display_node(row_node, node_display_names)},"
@@ -2078,7 +2090,7 @@ def _c_emit_rtds_stage_sections(
                         W.rows or Gkk.rows,
                     ),
                     code_Gred_direct[row, col] if row < code_Gred_direct.rows and col < code_Gred_direct.cols else sp.Integer(0),
-                ),
+                    ),
                 f"Gred[{_c_display_node(row_node, node_display_names)},{_c_display_node(col_node, node_display_names)}]",
             )
             for row, col, row_node, col_node in var_g_pairs
@@ -2086,28 +2098,29 @@ def _c_emit_rtds_stage_sections(
         if dynamic_gred and not full_gred_code_path and not rectangular_gred_dyn_path
         else []
     )
-    code_gred_temp_names = [str(item[2]) for item in sparse_gred_scalar_assignments]
-    code_gred_compute_lines = [
-        line
-        for target, comment, name, expr, label in sparse_gred_scalar_assignments
-        for line in [
-            f"    /* {name} represents {label}: {expr}. */",
-            f"    {name} = {expr};",
-            f"    {comment}",
-            f"    {target} = {name};",
-        ]
-    ]
-    var_g_pair_set = {(row, col) for row, col, _, _ in var_g_pairs}
-    full_gred_var_reuse: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
-    if dynamic_gred and full_gred_code_path:
-        try:
-            for item in structural_gred_entry_reuse_plan_from_blocks(Grr, Grk, Gkr, Gkk):
-                target = (item.target_row, item.target_col)
-                base = (item.base_row, item.base_col)
-                if target in var_g_pair_set and base in var_g_pair_set:
-                    full_gred_var_reuse[target] = (base, item.sign)
-        except Exception:
-            full_gred_var_reuse = {}
+    code_gred_temp_names: list[str] = []
+    var_g_name_by_pair = {
+        (row, col): _var_g_name(row_node, col_node, node_display_names)
+        for row, col, row_node, col_node in var_g_pairs
+    }
+    code_gred_compute_lines = []
+    assigned_sparse_var_g_pairs: set[tuple[int, int]] = set()
+    for pair, target, comment, _name, expr, label in sparse_gred_scalar_assignments:
+        reuse = gred_var_reuse.get(pair)
+        if reuse and reuse[0] in assigned_sparse_var_g_pairs:
+            base_name = var_g_name_by_pair[reuse[0]]
+            prefix = "-" if reuse[1] < 0 else ""
+            code_gred_compute_lines.extend([
+                f"    /* {target} reuses {label}: {prefix}{base_name}. */",
+                f"    {target} = {prefix}{base_name};",
+            ])
+        else:
+            code_gred_compute_lines.extend([
+                f"    /* {target} represents {label}: {expr}. */",
+                f"    {comment}",
+                f"    {target} = {expr};",
+            ])
+        assigned_sparse_var_g_pairs.add(pair)
     code_matrix_names = []
     if need_Grr_code:
         code_matrix_names.append("Grr_code")
@@ -2401,7 +2414,7 @@ def _c_emit_rtds_stage_sections(
         for row, col, row_node, col_node in var_g_pairs:
             target = (row, col)
             target_name = _var_g_name(row_node, col_node, node_display_names)
-            reuse = full_gred_var_reuse.get(target)
+            reuse = gred_var_reuse.get(target)
             if reuse and reuse[0] in assigned_var_g_pairs:
                 base_row, base_col = reuse[0]
                 base_name = _var_g_name(external_nodes[base_row], external_nodes[base_col], node_display_names)
