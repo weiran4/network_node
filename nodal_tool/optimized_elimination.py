@@ -891,6 +891,11 @@ def _matrix_has_nonzero(matrix: sp.Matrix) -> bool:
     return any(sp.simplify(value) != 0 for value in matrix)
 
 
+def _matrix_is_ram_stage(matrix: sp.Matrix, symbol_table: dict[str, str]) -> bool:
+    matrix = sp.Matrix(matrix)
+    return all(classify_expr_stage(sp.sympify(value), symbol_table) == "RAM_INIT" for value in matrix)
+
+
 def _matrix_is_symmetric_light(matrix: sp.Matrix) -> bool:
     matrix = sp.Matrix(matrix)
     if matrix.rows != matrix.cols:
@@ -1613,6 +1618,16 @@ def _c_emit_rtds_stage_sections(
     need_tmp_w_gkr_vr_code = bool(need_vk_vr_path)
     need_tmp_w_ihisk_code = bool(need_vk_ihis_path)
     need_tmp_vk_sum_code = bool(need_vk_vr_path and need_vk_ihis_path)
+    ram_static_matrix_precompute_allowed = bool(
+        not dynamic_gred
+        and not w_runtime_inverse
+        and not structured_w_builder
+        and _matrix_is_ram_stage(Grk, symbol_table)
+        and _matrix_is_ram_stage(Gkr, symbol_table)
+        and _matrix_is_ram_stage(W, symbol_table)
+    )
+    ram_precompute_grk_w = bool(need_tmp_grk_w_code and ram_static_matrix_precompute_allowed)
+    ram_precompute_w_gkr = bool(need_tmp_w_gkr_code and ram_static_matrix_precompute_allowed)
     use_fast_symmetric_gkk_inverse = bool(
         need_Gkk_code
         and Gkk.rows in (1, 2, 3)
@@ -1629,11 +1644,11 @@ def _c_emit_rtds_stage_sections(
     code_g_matrices = []
     if need_Grr_code:
         code_g_matrices.append(Grr)
-    if need_Grk_code or partial_ihisred_code_path:
+    if (need_Grk_code and not ram_precompute_grk_w) or partial_ihisred_code_path:
         code_g_matrices.append(Grk)
-    if need_Gkr_code:
+    if need_Gkr_code and not ram_precompute_w_gkr:
         code_g_matrices.append(Gkr)
-    if need_W_code:
+    if need_W_code and not (ram_precompute_grk_w or ram_precompute_w_gkr):
         code_g_matrices.append(W)
     if dynamic_gred:
         code_g_matrices.append(code_Gred_direct)
@@ -1674,21 +1689,19 @@ def _c_emit_rtds_stage_sections(
         )
         code_g_assignments_no_elim = [
             (
-                f"set_CODE(&G_code, {row}, {col}, {{expr}})",
+                _var_g_name(row_node, col_node, node_display_names),
                 code_G_no_elim[row, col],
                 None,
-                _scalar_g_name("G", external_nodes[row], external_nodes[col], node_display_names),
-                f"G[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]",
+                _scalar_g_name("G", row_node, col_node, node_display_names),
+                f"G[{_c_display_node(row_node, node_display_names)},{_c_display_node(col_node, node_display_names)}]",
             )
-            for row in range(code_G_no_elim.rows)
-            for col in range(code_G_no_elim.cols)
-            if sp.simplify(code_G_no_elim[row, col]) != 0
+            for row, col, row_node, col_node in var_g_pairs_no_elim
         ]
         code_g_temp_names_no_elim, code_g_compute_lines_no_elim, code_g_assignment_lines_no_elim = _c_scalar_assignment_cse(
             code_g_assignments_no_elim,
             "G",
         )
-        no_elim_code_names = ["G_code"] if dynamic_gred_no_elim else []
+        no_elim_code_names: list[str] = []
         no_elim_g_symbol_names = _matrix_symbol_names(code_G_no_elim)
         no_elim_ihis_symbol_names = _matrix_symbol_names(Ihisred_no_elim) - no_elim_g_symbol_names
         no_elim_symbol_names = no_elim_g_symbol_names | no_elim_ihis_symbol_names
@@ -1698,7 +1711,6 @@ def _c_emit_rtds_stage_sections(
             "   No Schur complement is required: use the original G matrix and Ihis vector directly. */",
             "STATIC:",
             "    /* Runtime matrix objects */",
-            *(["    MATRIX_ G_code = {0};"] if dynamic_gred_no_elim else []),
             "    /* Runtime state */",
             "    int rtds_matrix_code_ready = 0;",
             *_c_declaration_group("User G/CODE symbols", no_elim_g_symbol_names),
@@ -1740,7 +1752,6 @@ def _c_emit_rtds_stage_sections(
                 else "    /* No RAM-side G entries: no fixed G overlay is registered. */"
             ),
             "",
-            *(["    err += matrixDim(&G_code, NR, NR);"] if dynamic_gred_no_elim else []),
             "    if (err > 0) {",
             '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
             '                       "RTDS matrix allocation failed for component %s.", Name);',
@@ -1779,17 +1790,12 @@ def _c_emit_rtds_stage_sections(
                     "CODE-SIDE G MATRIX VALUE SETUP",
                 [
                     "No internal-node elimination is required.",
-                    "Refresh only the non-RAM G terms split from the original G matrix.",
-                    "Then stamp dynamic G values before node-current injection.",
+                    "Assign the non-RAM G terms split from the original G matrix directly to GValue handles.",
+                    "No CODE matrix staging is needed because there is no Schur or Vk matrix DAG.",
                 ],
             ),
                 *code_g_compute_lines_no_elim,
                 *code_g_assignment_lines_no_elim,
-                "    /* Stamp dynamic G entries in row-major upper-triangular order. */",
-                *[
-                    f"    {_var_g_name(row_node, col_node, node_display_names)} = get_CODE(&G_code, {row}, {col});"
-                    for row, col, row_node, col_node in var_g_pairs_no_elim
-                ],
                 "",
             ])
         lines.extend([
@@ -1841,6 +1847,20 @@ def _c_emit_rtds_stage_sections(
         *(Gkr_alias_entries if need_Gkr_code or rectangular_gred_dyn_path else []),
         *(Gkk_alias_entries if need_Gkk_code else []),
         *(W_alias_entries if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
+    ]
+    ram_precompute_alias_entries = [
+        *(Grk_alias_entries if ram_precompute_grk_w else []),
+        *(W_alias_entries if ram_precompute_grk_w or ram_precompute_w_gkr else []),
+        *(Gkr_alias_entries if ram_precompute_w_gkr else []),
+    ]
+    ram_precompute_alias_keys = {
+        (str(entry["name"]), int(entry["row"]), int(entry["col"]))
+        for entry in ram_precompute_alias_entries
+    }
+    code_block_alias_entries = [
+        entry
+        for entry in block_alias_entries
+        if (str(entry["name"]), int(entry["row"]), int(entry["col"])) not in ram_precompute_alias_keys
     ]
     w_builder_matrix_dims = _diagonal_plus_coupled_w_matrix_dims(details) if structured_w_builder else []
     w_builder_matrix_names = [name for name, _, _ in w_builder_matrix_dims]
@@ -1942,6 +1962,19 @@ def _c_emit_rtds_stage_sections(
         code_matrix_names.insert(11, "tmp_Grk_W_Gkr_code")
     if full_ihisred_code_path:
         code_matrix_names.insert(12, "tmp_Grk_W_Ihisk_code")
+    code_runtime_matrix_names = list(code_matrix_names)
+    # RAM-only MATRIX_ objects need matrixDim plus RAM helpers, but not register/condition.
+    # Keep precomputed result matrices registered when CODE later reads them.
+    if ram_precompute_grk_w and "Grk_code" in code_runtime_matrix_names:
+        code_runtime_matrix_names.remove("Grk_code")
+    if ram_precompute_w_gkr and "Gkr_code" in code_runtime_matrix_names:
+        code_runtime_matrix_names.remove("Gkr_code")
+    if (
+        (ram_precompute_grk_w or ram_precompute_w_gkr)
+        and not need_tmp_w_ihisk_code
+        and "W_code" in code_runtime_matrix_names
+    ):
+        code_runtime_matrix_names.remove("W_code")
     lines = [
         "/* RTDS lifecycle placement generated from final-expression dependency analysis.",
         "   RAM_PASS1 stamps only RAM_CONSTANT Gred entries through g_mat_over.",
@@ -2053,7 +2086,27 @@ def _c_emit_rtds_stage_sections(
         '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
         '                       "RTDS matrix allocation failed for component %s.", Name);',
         "    }",
-        *_c_register_lines(code_matrix_names),
+        *(
+            [
+                *_c_section_warning(
+                    "RAM-SIDE STATIC MATRIX PRECOMPUTE",
+                    [
+                        "These Schur matrices depend only on RAM constants.",
+                        "Precompute reusable products in RAM; CODE only multiplies them by runtime vectors.",
+                    ],
+                ),
+                *_block_alias_compute_lines(ram_precompute_alias_entries),
+                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set") if ram_precompute_grk_w else []),
+                *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set") if ram_precompute_grk_w or ram_precompute_w_gkr else []),
+                *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set") if ram_precompute_w_gkr else []),
+                *(["    matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);"] if ram_precompute_grk_w else []),
+                *(["    matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);"] if ram_precompute_w_gkr else []),
+                "",
+            ]
+            if ram_precompute_grk_w or ram_precompute_w_gkr
+            else []
+        ),
+        *_c_register_lines(code_runtime_matrix_names),
         "",
     ])
     if dynamic_gred:
@@ -2076,7 +2129,7 @@ def _c_emit_rtds_stage_sections(
         "BEGIN_T0:",
         "    if (!rtds_matrix_code_ready) {",
         "        initializeMatricesForCode();",
-        *_c_condition_lines(code_matrix_names),
+        *_c_condition_lines(code_runtime_matrix_names),
         "        rtds_matrix_code_ready = 1;",
         "    }",
         "",
@@ -2091,10 +2144,10 @@ def _c_emit_rtds_stage_sections(
                     ],
                 ),
                 "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */",
-                *_block_alias_compute_lines(block_alias_entries),
+                *_block_alias_compute_lines(code_block_alias_entries),
                 *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set_CODE") if need_Grr_code else []),
-                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE") if need_Grk_code else []),
-                *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE") if need_Gkr_code else []),
+                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE") if need_Grk_code and not ram_precompute_grk_w else []),
+                *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE") if need_Gkr_code and not ram_precompute_w_gkr else []),
                 *(_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_code", "set_CODE") if need_Gkk_code else []),
                 *(
                     _matrix_code_sym_inverse_lines("Gkk_code", "W_code", Gkk.rows)
@@ -2102,13 +2155,17 @@ def _c_emit_rtds_stage_sections(
                     else (["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code else [])
                 ),
                 *(_diagonal_plus_coupled_w_code_lines(details) if structured_w_builder else []),
-                *(_matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE") if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
+                *(
+                    _matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE")
+                    if need_W_code and not w_runtime_inverse and not structured_w_builder and not (ram_precompute_grk_w or ram_precompute_w_gkr)
+                    else []
+                ),
                 *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
                 *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
                 *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
                 "",
             ]
-            if block_alias_entries
+            if code_block_alias_entries
             else []
         ),
         *(
@@ -2129,7 +2186,7 @@ def _c_emit_rtds_stage_sections(
             if need_Ihisr_code or need_Ihisk_code or partial_ihisred_code_path
             else []
         ),
-        *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if need_tmp_grk_w_code else []),
+        *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if need_tmp_grk_w_code and not ram_precompute_grk_w else []),
     ])
     if dynamic_gred and full_gred_code_path:
         lines.extend([
@@ -2252,7 +2309,7 @@ def _c_emit_rtds_stage_sections(
                 if need_vk_vr_path
                 else []
             ),
-            *(["    matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);"] if need_vk_vr_path else []),
+            *(["    matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);"] if need_vk_vr_path and not ram_precompute_w_gkr else []),
             *(["    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);"] if need_vk_vr_path else []),
             *(["    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);"] if need_vk_ihis_path else []),
             *(["    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);"] if need_tmp_vk_sum_code else []),

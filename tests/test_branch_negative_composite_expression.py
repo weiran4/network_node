@@ -238,9 +238,10 @@ process.stdout.write(JSON.stringify(cases));
         self.assertIn("g_mat_over[0][0] = X + Y;", draft)
         self.assertIn("g_mat_over[0][1] = -X - Y;", draft)
         self.assertIn("g_mat_over[1][0] = -X - Y;", draft)
-        self.assertIn("set_CODE(&G_code, 0, 0, Z);", draft)
-        self.assertIn("set_CODE(&G_code, 0, 1, -Z);", draft)
-        self.assertIn("varG_N2_N4 = get_CODE(&G_code, 0, 1);", draft)
+        self.assertIn("varG_N2_N2 = Z;", draft)
+        self.assertIn("varG_N2_N4 = -Z;", draft)
+        self.assertNotIn("set_CODE(&G_code", draft)
+        self.assertNotIn("get_CODE(&G_code", draft)
 
     def test_no_internal_direct_retained_branch_keeps_all_dynamic_g_in_code(self):
         response = build_optimized_response(make_test6_payload(ram_symbols=()))
@@ -251,10 +252,11 @@ process.stdout.write(JSON.stringify(cases));
         self.assertIn("No RAM-side G entries", draft)
         self.assertIn("/* G_N2_N2 represents G[N2,N2]: X + Y + Z. */", draft)
         self.assertIn("G_N2_N2 = X + Y + Z;", draft)
-        self.assertIn("set_CODE(&G_code, 0, 0, G_N2_N2);", draft)
-        self.assertIn("set_CODE(&G_code, 0, 1, -G_N2_N2);", draft)
-        self.assertIn("set_CODE(&G_code, 1, 0, -G_N2_N2);", draft)
-        self.assertIn("set_CODE(&G_code, 1, 1, G_N2_N2);", draft)
+        self.assertIn("varG_N2_N2 = G_N2_N2;", draft)
+        self.assertIn("varG_N2_N4 = -G_N2_N2;", draft)
+        self.assertIn("varG_N4_N4 = G_N2_N2;", draft)
+        self.assertNotIn("set_CODE(&G_code", draft)
+        self.assertNotIn("get_CODE(&G_code", draft)
 
     def test_no_internal_direct_retained_branch_splits_long_expression_terms(self):
         response = build_optimized_response(
@@ -264,8 +266,9 @@ process.stdout.write(JSON.stringify(cases));
         self.assertIn("g_mat_over[0][0] = G22 + G_rc;", draft)
         self.assertIn("g_mat_over[0][1] = -G22 - G_rc;", draft)
         self.assertIn("g_mat_over[1][0] = -G22 - G_rc;", draft)
-        self.assertIn("set_CODE(&G_code, 0, 0, AA + w2);", draft)
-        self.assertIn("set_CODE(&G_code, 0, 1, -AA - w2);", draft)
+        self.assertIn("varG_N2_N2 = AA + w2;", draft)
+        self.assertIn("varG_N2_N4 = -AA - w2;", draft)
+        self.assertNotIn("set_CODE(&G_code", draft)
 
 
 if __name__ == "__main__":

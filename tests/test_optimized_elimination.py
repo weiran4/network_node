@@ -98,9 +98,12 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("cr_tx_G_eff = G1;", draft)
         self.assertIn("cr_tx_G_eff = G3;", draft)
         self.assertNotIn("TODO", draft)
-        self.assertIn("set_CODE(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
+        self.assertIn("RAM-SIDE STATIC MATRIX PRECOMPUTE", draft)
+        self.assertIn("set(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
         self.assertIn("Gkr_k1_A = -cr_tx_G_eff;", draft)
-        self.assertIn("matrix_mult_CODE", draft)
+        self.assertIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
+        self.assertNotIn("set_CODE(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
 
     def test_two_conductances_in_series(self):
         G1, G2 = sp.symbols("G1 G2")

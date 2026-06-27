@@ -203,6 +203,43 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(multi["template_block_nodes"]["retained_order"], ["A", "B"])
         self.assertEqual(multi["template_block_nodes"]["internal_order"], ["X"])
 
+    def test_ram_owned_multicase_alias_precomputes_static_blocks_before_runtime_ihis(self):
+        def payload(value: str) -> dict:
+            data = _series_payload(value)
+            data["Ihis_full"] = ["0", "0", "h"]
+            data["Ihis_full_tagged"] = ["0", "0", "h_tag"]
+            return data
+
+        response = build_multi_case_response(
+            _request(
+                [
+                    {"name": "R1 Case 0", "case_map": {"R1": 0}, "payload": payload("X")},
+                    {"name": "R1 Case 1", "case_map": {"R1": 1}, "payload": payload("X + Y")},
+                ],
+                deps=_deps("X", "Y", "G2", step=("h",)),
+            )
+        )
+
+        draft = response["multi_case"]["c_draft"]
+        self.assertIn("cr_R1_G_eff = X;", draft)
+        self.assertIn("cr_R1_G_eff = X + Y;", draft)
+        self.assertIn("set(&Grk_code, 0, 0, Grk_A_k1);", draft)
+        self.assertIn("set(&W_code, 0, 0, W_1_1);", draft)
+        self.assertIn("matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
+        self.assertNotIn("set_CODE(&Grk_code", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
+        self.assertNotIn("matrix_register(&Grk_code);", draft)
+        self.assertNotIn("matrix_register(&Gkr_code);", draft)
+        self.assertNotIn("conditionMatrixForCODE(&Grk_code);", draft)
+        self.assertNotIn("conditionMatrixForCODE(&Gkr_code);", draft)
+        self.assertIn("matrix_register(&W_code);", draft)
+        self.assertIn("conditionMatrixForCODE(&W_code);", draft)
+        self.assertIn("matrix_register(&tmp_Grk_W_code);", draft)
+        self.assertIn("matrix_register(&tmp_W_Gkr_code);", draft)
+        self.assertIn("matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);", draft)
+
     def test_identical_profiles_collapse_to_single_structured_draft(self):
         response = build_multi_case_response(
             _request(

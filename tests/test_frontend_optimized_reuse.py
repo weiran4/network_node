@@ -10,9 +10,33 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("async function ensureReducedResult", source)
         self.assertIn("function reducedDependencyAnalysisFromResult", source)
         self.assertIn("function cachedReducedDependencyAnalysis", source)
+        self.assertIn("function reducedDependencyAnalysisForOptimizedPayload", source)
+        self.assertIn("await ensureReducedResult(payload)", source)
         self.assertIn("reduced_dependency_analysis", source)
         self.assertIn("const reducedDependency = cachedReducedDependencyAnalysis(basePayload)", source)
-        self.assertNotIn("await ensureReducedResult(basePayload)", source)
+        self.assertIn("const reducedDependency = await reducedDependencyAnalysisForOptimizedPayload(basePayload)", source)
+
+    def test_old_reduced_cache_keys_are_migrated_for_optimized_reuse(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function migratedReducedCacheKey", source)
+        self.assertIn("parsed.version === REDUCED_CACHE_VERSION", source)
+        self.assertIn("payload: parsed.payload", source)
+        restore_start = source.index("function restoreReducedCacheSnapshot")
+        restore_end = source.index("function restoreCacheSnapshot")
+        restore_source = source[restore_start:restore_end]
+        self.assertIn("const migratedKey = migratedReducedCacheKey(entry.key);", restore_source)
+        self.assertIn("if (migratedKey) cacheSet(reducedCache, migratedKey, value);", restore_source)
+
+    def test_background_optimized_precompute_skips_without_reduced_dependency(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("async function precomputeReducedAndOptimized")
+        end = source.index("function renderOptimizedControls")
+        precompute_source = source[start:end]
+        self.assertIn("const reducedDependency = cachedReducedDependencyAnalysis(basePayload);", precompute_source)
+        self.assertIn("if (!reducedDependency) return;", precompute_source)
+        self.assertNotIn("await ensureReducedResult(basePayload)", precompute_source)
 
     def test_optimized_payload_includes_direct_retained_stamps(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -268,6 +292,24 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn('optText(`已导入 ${file.name}：新增 ${result.branches} 个元件`', source)
         self.assertIn('optText("导入失败"', source)
         self.assertIn('optText("已调整画布顺序"', source)
+
+    def test_formula_output_cards_do_not_force_max_content_width(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        list_start = source.index(".formula-list {")
+        list_end = source.index(".output-body-formulas .formula-list")
+        list_css = source[list_start:list_end]
+        self.assertIn("width: 100%;", list_css)
+        self.assertIn("min-width: 0;", list_css)
+        self.assertNotIn("width: max-content;", list_css)
+
+        card_start = source.index(".formula-card {")
+        card_end = source.index(".output-body-formulas .formula-card")
+        card_css = source[card_start:card_end]
+        self.assertIn("width: auto;", card_css)
+        self.assertIn("max-width: 100%;", card_css)
+        self.assertIn("overflow-x: auto;", card_css)
+        self.assertNotIn("width: max-content;", card_css)
         self.assertIn('"关闭": "Close"', source)
         self.assertIn('"全屏": "Fullscreen"', source)
         self.assertIn('"退出全屏": "Exit Fullscreen"', source)

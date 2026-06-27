@@ -1432,8 +1432,8 @@
       display: grid;
       gap: 12px;
       padding-bottom: 8px;
-      width: max-content;
-      min-width: 100%;
+      width: 100%;
+      min-width: 0;
     }
 
     .output-body-formulas .formula-list {
@@ -1455,8 +1455,10 @@
       border: 1px solid rgba(71, 96, 116, 0.92);
       border-radius: 8px;
       background: linear-gradient(180deg, #152532 0%, var(--output-panel) 100%);
-      width: max-content;
-      min-width: calc(100% - 24px);
+      width: auto;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: auto;
       box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.045) inset,
         0 8px 18px rgba(0, 0, 0, 0.10);
@@ -3087,6 +3089,20 @@
       return JSON.stringify({ version: REDUCED_CACHE_VERSION, language: state.language, payload });
     }
 
+    function migratedReducedCacheKey(key) {
+      try {
+        const parsed = JSON.parse(key);
+        if (!parsed?.payload || parsed.version === REDUCED_CACHE_VERSION) return null;
+        return JSON.stringify({
+          version: REDUCED_CACHE_VERSION,
+          language: parsed.language || state.language,
+          payload: parsed.payload
+        });
+      } catch {
+        return null;
+      }
+    }
+
     function invalidateMathCaches() {
       reducedRenderToken += 1;
       branchCurrentRenderToken += 1;
@@ -3249,12 +3265,15 @@
     function restoreReducedCacheSnapshot(entries = []) {
       (Array.isArray(entries) ? entries : []).forEach(entry => {
         if (!entry?.key || !entry?.html) return;
-        cacheSet(reducedCache, entry.key, {
+        const value = {
           html: entry.html,
           result: entry.result || null,
           pending: null,
           restored: true
-        });
+        };
+        cacheSet(reducedCache, entry.key, value);
+        const migratedKey = migratedReducedCacheKey(entry.key);
+        if (migratedKey) cacheSet(reducedCache, migratedKey, value);
       });
     }
 
@@ -9351,6 +9370,13 @@
       return reducedDependencyAnalysisFromResult(cachedEntry?.result);
     }
 
+    async function reducedDependencyAnalysisForOptimizedPayload(payload) {
+      const cached = cachedReducedDependencyAnalysis(payload);
+      if (cached) return cached;
+      const result = await ensureReducedResult(payload);
+      return reducedDependencyAnalysisFromResult(result);
+    }
+
     function optimizedEliminationPayload(options = {}) {
       const payload = {
         ...buildReducedPayload(options),
@@ -9749,6 +9775,7 @@
       const cachedEntry = cacheGet(optimizedEliminationCache, key);
       if (cachedEntry?.result || cachedEntry?.pending) return;
       const reducedDependency = cachedReducedDependencyAnalysis(basePayload);
+      if (!reducedDependency) return;
       const optimizedPayload = reducedDependency
         ? { ...basePayload, reduced_dependency_analysis: reducedDependency }
         : basePayload;
@@ -10862,7 +10889,7 @@
 
       const basePayload = payload;
       const pending = (async () => {
-        const reducedDependency = cachedReducedDependencyAnalysis(basePayload);
+        const reducedDependency = await reducedDependencyAnalysisForOptimizedPayload(basePayload);
         const requestPayload = reducedDependency
           ? { ...basePayload, reduced_dependency_analysis: reducedDependency }
           : basePayload;
