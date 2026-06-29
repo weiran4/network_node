@@ -154,10 +154,9 @@
 
     #preview svg {
       max-width: none;
-      width: 2600px;
-      min-width: 2600px;
+      width: 3600px;
+      min-width: 3600px;
       height: auto;
-      font-size: 34px;
     }
 
     #preview .formula,
@@ -263,7 +262,7 @@
   </main>
 
   <script>
-    const storageKey = "branch-builder-c-export-flowchart-v28";
+    const storageKey = "branch-builder-c-export-flowchart-v29";
     const defaultMindmap = `flowchart TD
   GFULL(("Full network equations<br/><span class='formula'>Gfull / Ihisfull</span>"))
   STAMP["Build node order and stamp all sources<br/>branches / blackboxes / controlled sources / observers"]
@@ -336,12 +335,12 @@
   SCHUR --> SYM_REUSE --> FINAL
   FINAL --> PRUNE --> OUT
 
-  classDef start fill:#ffffff,stroke:#111827,color:#111111,stroke-width:3px,font-size:34px;
-  classDef decision fill:#ffffff,stroke:#d97706,color:#111111,stroke-width:3px,font-size:34px;
-  classDef ram fill:#ffffff,stroke:#15803d,color:#111111,stroke-width:3px,font-size:34px;
-  classDef code fill:#ffffff,stroke:#2563eb,color:#111111,stroke-width:3px,font-size:34px;
-  classDef warn fill:#ffffff,stroke:#be185d,color:#111111,stroke-width:3px,font-size:34px;
-  classDef out fill:#ffffff,stroke:#7c3aed,color:#111111,stroke-width:3px,font-size:34px;
+  classDef start fill:#ffffff,stroke:#111827,color:#111111,stroke-width:3px,font-size:22px;
+  classDef decision fill:#ffffff,stroke:#d97706,color:#111111,stroke-width:3px,font-size:22px;
+  classDef ram fill:#ffffff,stroke:#15803d,color:#111111,stroke-width:3px,font-size:22px;
+  classDef code fill:#ffffff,stroke:#2563eb,color:#111111,stroke-width:3px,font-size:22px;
+  classDef warn fill:#ffffff,stroke:#be185d,color:#111111,stroke-width:3px,font-size:22px;
+  classDef out fill:#ffffff,stroke:#7c3aed,color:#111111,stroke-width:3px,font-size:22px;
 
   class GFULL start;
   class MC,INTERNAL,NOINT_STAGE,DUMMY,GKK,RUNTIME decision;
@@ -413,7 +412,6 @@
       style.textContent = `
         text, tspan, foreignObject, .nodeLabel {
           font-family: "Times New Roman", Times, serif;
-          font-size: 34px;
         }
         .formula, .formula * {
           color: #1d4ed8 !important;
@@ -477,7 +475,10 @@
         theme: "base",
         flowchart: {
           htmlLabels: true,
-          curve: "basis"
+          curve: "basis",
+          nodeSpacing: 95,
+          rankSpacing: 115,
+          padding: 24
         },
         themeVariables: {
           background: "#ffffff",
@@ -497,7 +498,7 @@
           clusterBorder: "#111111",
           nodeBorder: "#111111",
           fontFamily: "Times New Roman, Times, serif",
-          fontSize: "34px"
+          fontSize: "22px"
         }
       });
     }
