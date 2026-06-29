@@ -162,6 +162,30 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertIn("Gred[C_1,RC_B] = -Gred[B_1,RC_B]", by_case.get(6, set()))
         self.assertIn("Gred[C_1,RC_C] = -Gred[A_1,RC_C]", by_case.get(6, set()))
 
+    def test_trf_rcy_ucm_profiled_diagonal_cases_use_scalar_path_without_bare_nr(self):
+        data = json.loads(Path("exports/Trf_RCY_UCM.json").read_text(encoding="utf-8"))
+        cache_key = data["multiCaseExportCache"][0]["key"]
+        payload = json.loads(cache_key)
+        payload["mode"] = "multi_case_c_export"
+
+        response = build_multi_case_response(payload)
+
+        draft = response["multi_case"]["c_draft"]
+        self.assertIn("enum { PROFILE_Y = 0, PROFILE_D = 1, NR_Y = 9, NR_D = 6, NK = 3 };", draft)
+        self.assertNotIn("for (int col = 0; col < NR; col++)", draft)
+        self.assertIn("for (int col = 0; col < nr_active; col++)", draft)
+        self.assertIn("Case-resolved diagonal Gkk scalar Schur/Ihis path", draft)
+        scalar_marker = draft.index("Case-resolved diagonal Gkk scalar Schur/Ihis path")
+        diagonal_block_start = draft.index("case 4:", scalar_marker)
+        diagonal_block_end = draft.index("case 0:", diagonal_block_start)
+        diagonal_block = draft[diagonal_block_start:diagonal_block_end]
+        self.assertIn("case 6:", diagonal_block)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", diagonal_block)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", diagonal_block)
+        fallback_block = draft[diagonal_block_end:]
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", fallback_block)
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", fallback_block)
+
 
 if __name__ == "__main__":
     unittest.main()

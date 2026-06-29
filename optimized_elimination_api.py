@@ -2394,6 +2394,209 @@ def _apply_multicase_conditional_diagonal_w_builder(
     return draft[:start] + replacement + draft[end:]
 
 
+def _multicase_diagonal_case_groups(
+    *,
+    profiles: list[dict],
+    aliases: dict[str, dict],
+    gkk_template: sp.Matrix,
+) -> tuple[list[int], list[int]]:
+    gkk_template = sp.Matrix(gkk_template)
+    if not profiles or gkk_template.rows != gkk_template.cols or gkk_template.rows == 0:
+        return [], list(range(len(profiles)))
+    diagonal_cases: list[int] = []
+    fallback_cases: list[int] = []
+    for index, profile in enumerate(profiles):
+        if _case_resolved_matrix_is_diagonal(gkk_template, profile, aliases, index):
+            diagonal_cases.append(index)
+        else:
+            fallback_cases.append(index)
+    return diagonal_cases, fallback_cases
+
+
+def _case_group_switch_prefix(case_id_symbol: str, case_indices: Sequence[int]) -> list[str]:
+    return [f"    case {index}:" for index in case_indices]
+
+
+def _diagonal_gkk_scalar_gred_lines(active_nr_expr: str, indent: int = 8) -> list[str]:
+    prefix = " " * indent
+    return [
+        f"{prefix}/* Diagonal Gkk scalar Schur path: tmp_Grk_W[row,k] = Grk[row,k] / Gkk[k,k]. */",
+        f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
+        f"{prefix}    for (int k = 0; k < NK; k++) {{",
+        f"{prefix}        double gkk_diag = get_CODE(&Gkk_code, k, k);",
+        f"{prefix}        double grk_w = get_CODE(&Grk_code, row, k) / gkk_diag;",
+        f"{prefix}        set_CODE(&tmp_Grk_W_code, row, k, grk_w);",
+        f"{prefix}    }}",
+        f"{prefix}}}",
+        f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
+        f"{prefix}    for (int col = 0; col < {active_nr_expr}; col++) {{",
+        f"{prefix}        double schur_acc = 0.0;",
+        f"{prefix}        for (int k = 0; k < NK; k++) {{",
+        f"{prefix}            schur_acc += get_CODE(&tmp_Grk_W_code, row, k) * get_CODE(&Gkr_code, k, col);",
+        f"{prefix}        }}",
+        f"{prefix}        set_CODE(&Gred_code, row, col, get_CODE(&Grr_code, row, col) - schur_acc);",
+        f"{prefix}    }}",
+        f"{prefix}}}",
+    ]
+
+
+def _diagonal_gkk_scalar_ihis_lines(active_nr_expr: str, indent: int = 8) -> list[str]:
+    prefix = " " * indent
+    return [
+        f"{prefix}/* Diagonal Gkk scalar Ihisred path: Ihisred = Ihisr - tmp_Grk_W * Ihisk. */",
+        f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
+        f"{prefix}    double ihis_acc = 0.0;",
+        f"{prefix}    for (int k = 0; k < NK; k++) {{",
+        f"{prefix}        ihis_acc += get_CODE(&tmp_Grk_W_code, row, k) * get_CODE(&Ihisk_code, k, 0);",
+        f"{prefix}    }}",
+        f"{prefix}    set_CODE(&Ihisred_code, row, 0, get_CODE(&Ihisr_code, row, 0) - ihis_acc);",
+        f"{prefix}}}",
+    ]
+
+
+def _diagonal_gkk_scalar_vk_lines(active_nr_expr: str, indent: int = 8) -> list[str]:
+    prefix = " " * indent
+    return [
+        f"{prefix}/* Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W). */",
+        f"{prefix}for (int k = 0; k < NK; k++) {{",
+        f"{prefix}    double core_v = 0.0;",
+        f"{prefix}    for (int col = 0; col < {active_nr_expr}; col++) {{",
+        f"{prefix}        core_v += get_CODE(&tmp_Grk_W_code, col, k) * get_CODE(&Vr_code, col, 0);",
+        f"{prefix}    }}",
+        f"{prefix}    double hist_v = get_CODE(&Ihisk_code, k, 0) / get_CODE(&Gkk_code, k, k);",
+        f"{prefix}    set_CODE(&Vk_code, k, 0, -(core_v + hist_v));",
+        f"{prefix}}}",
+    ]
+
+
+def _wrap_multicase_diagonal_scalar_block(
+    *,
+    case_id_symbol: str,
+    diagonal_cases: Sequence[int],
+    fallback_cases: Sequence[int],
+    diagonal_lines: Sequence[str],
+    fallback_lines: Sequence[str],
+) -> list[str]:
+    lines = [f"    switch ({case_id_symbol}) {{"]
+    lines.extend(_case_group_switch_prefix(case_id_symbol, diagonal_cases))
+    lines.append("    {")
+    lines.extend(diagonal_lines)
+    lines.append("        break;")
+    lines.append("    }")
+    if fallback_cases:
+        lines.extend(_case_group_switch_prefix(case_id_symbol, fallback_cases))
+        lines.append("    {")
+        lines.extend(_indent_c_block("\n".join(fallback_lines), 4))
+        lines.append("        break;")
+        lines.append("    }")
+    lines.append("    default:")
+    lines.append("    {")
+    lines.extend(_indent_c_block("\n".join(fallback_lines), 4))
+    lines.append("        break;")
+    lines.append("    }")
+    lines.append("    }")
+    return lines
+
+
+def _apply_multicase_conditional_diagonal_scalar_paths(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: list[dict],
+    aliases: dict[str, dict],
+    gkk_template: sp.Matrix,
+    active_nr_expr: str = "NR",
+) -> str:
+    if "Case-resolved diagonal Gkk scalar Schur/Ihis path" in draft:
+        return draft
+    gkk_template = sp.Matrix(gkk_template)
+    if not profiles or gkk_template.rows != gkk_template.cols or gkk_template.rows == 0:
+        return draft
+    diagonal_cases, fallback_cases = _multicase_diagonal_case_groups(
+        profiles=profiles,
+        aliases=aliases,
+        gkk_template=gkk_template,
+    )
+    if not diagonal_cases:
+        return draft
+
+    gred_old = "\n".join([
+        "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+        "    /* Full Gred CODE path: all reduced entries are CODE-owned, so a full Schur update is allowed. */",
+        "    matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);",
+        "    matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);",
+    ])
+    gred_new = "\n".join(
+        ["    /* Case-resolved diagonal Gkk scalar Schur/Ihis path. */"]
+        + _wrap_multicase_diagonal_scalar_block(
+            case_id_symbol=case_id_symbol,
+            diagonal_cases=diagonal_cases,
+            fallback_cases=fallback_cases,
+            diagonal_lines=_diagonal_gkk_scalar_gred_lines(active_nr_expr),
+            fallback_lines=gred_old.splitlines(),
+        )
+    )
+    if gred_old in draft:
+        draft = draft.replace(gred_old, gred_new, 1)
+
+    ihis_old = "\n".join([
+        "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+        "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+    ])
+    ihis_new = "\n".join(
+        ["    /* Case-resolved diagonal Gkk scalar Ihisred path. */"]
+        + _wrap_multicase_diagonal_scalar_block(
+            case_id_symbol=case_id_symbol,
+            diagonal_cases=diagonal_cases,
+            fallback_cases=fallback_cases,
+            diagonal_lines=_diagonal_gkk_scalar_ihis_lines(active_nr_expr),
+            fallback_lines=ihis_old.splitlines(),
+        )
+    )
+    if ihis_old in draft:
+        draft = draft.replace(ihis_old, ihis_new, 1)
+
+    vk_old = "\n".join([
+        "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
+        "    for (int row = 0; row < NK; row++) {",
+        "        for (int col = 0; col < NR; col++) {",
+        "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
+        "        }",
+        "    }",
+        "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+        "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
+        "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
+        "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+    ])
+    vk_fallback = [
+        "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
+        "    for (int row = 0; row < NK; row++) {",
+        f"        for (int col = 0; col < {active_nr_expr}; col++) {{",
+        "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
+        "        }",
+        "    }",
+        "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+        "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
+        "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
+        "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+    ]
+    vk_new = "\n".join(
+        ["    /* Case-resolved diagonal Gkk scalar Vk recovery path. */"]
+        + _wrap_multicase_diagonal_scalar_block(
+            case_id_symbol=case_id_symbol,
+            diagonal_cases=diagonal_cases,
+            fallback_cases=fallback_cases,
+            diagonal_lines=_diagonal_gkk_scalar_vk_lines(active_nr_expr),
+            fallback_lines=vk_fallback,
+        )
+    )
+    if vk_old in draft:
+        draft = draft.replace(vk_old, vk_new, 1)
+    else:
+        draft = draft.replace("for (int col = 0; col < NR; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
+    return draft
+
+
 def _retained_layout_profiles_from_finalization(profile_set, super_node_ids: Sequence[str]) -> tuple[list[dict], list[str]]:
     case_profiles = list(getattr(profile_set, "case_profiles", []) or [])
     if not case_profiles:
@@ -3395,6 +3598,14 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 profiles=alias_model["profiles"],
                 aliases=aliases,
                 gkk_template=_template_gkk_from_payload(template_payload),
+            )
+            draft = _apply_multicase_conditional_diagonal_scalar_paths(
+                draft,
+                case_id_symbol=case_id_symbol,
+                profiles=alias_model["profiles"],
+                aliases=aliases,
+                gkk_template=_template_gkk_from_payload(template_payload),
+                active_nr_expr="NR",
             )
             codegen_mode = "case-agnostic alias template"
             fast_path = "case_alias_template"
@@ -4573,6 +4784,14 @@ def _build_dummy_finalized_matrix_dag_c_draft(
         profiles=alias_model["profiles"],
         aliases=aliases,
         gkk_template=_template_gkk_from_payload(template_payload),
+    )
+    draft = _apply_multicase_conditional_diagonal_scalar_paths(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=alias_model["profiles"],
+        aliases=aliases,
+        gkk_template=_template_gkk_from_payload(template_payload),
+        active_nr_expr="nr_active",
     )
     draft = _apply_retained_layout_profile_compaction(
         draft,
