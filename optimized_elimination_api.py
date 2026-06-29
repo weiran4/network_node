@@ -4358,7 +4358,7 @@ def _apply_dummy_finalization_gvalue_conditions(
         })
         if not case_indices:
             return None
-        grouped_by_lines: dict[tuple[str, ...], list[int]] = {}
+        case_lines: dict[int, list[str]] = {}
         used_reuse = False
         for case_index in case_indices:
             reuse_map = _reuse_map_for_case(int(case_index))
@@ -4379,10 +4379,39 @@ def _apply_dummy_finalization_gvalue_conditions(
                     lines_for_case.append(str(entry["assignment"]))
                 assigned_pairs.add(pair)
             if lines_for_case:
-                grouped_by_lines.setdefault(tuple(lines_for_case), []).append(int(case_index))
+                case_lines[int(case_index)] = lines_for_case
         if not used_reuse:
             return None
-        lines = [f"    switch ({case_id_symbol}) {{"]
+        common_lines: list[str] = []
+        if case_lines:
+            common_candidates = set.intersection(*(set(lines) for lines in case_lines.values()))
+            # Keep this conservative: only hoist direct matrix reads. Reuse assignments
+            # can depend on case-local aliases, so they stay inside the case branch.
+            common_candidates = {
+                line for line in common_candidates
+                if "= get_CODE(" in line
+            }
+            first_case = next(iter(case_lines.values()))
+            common_lines = [
+                line for line in first_case
+                if line in common_candidates
+            ]
+            if common_lines:
+                common_set = set(common_lines)
+                case_lines = {
+                    index: [line for line in lines if line not in common_set]
+                    for index, lines in case_lines.items()
+                }
+        grouped_by_lines: dict[tuple[str, ...], list[int]] = {}
+        for case_index, lines_for_case in case_lines.items():
+            if lines_for_case:
+                grouped_by_lines.setdefault(tuple(lines_for_case), []).append(int(case_index))
+        lines = [f"    {line}" for line in common_lines]
+        if not grouped_by_lines:
+            return lines
+        if lines:
+            lines.append("")
+        lines.append(f"    switch ({case_id_symbol}) {{")
         for assignments, grouped_cases in grouped_by_lines.items():
             for index in grouped_cases:
                 lines.append(f"    case {index}:")

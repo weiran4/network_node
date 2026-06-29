@@ -145,6 +145,11 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
 
         response = build_multi_case_response(payload)
 
+        draft = response["multi_case"]["c_draft"]
+        stamp_section = draft.split("/* Stamp dynamic Gred entries", 1)[1].split("/* Ihisred", 1)[0]
+        common_assignment = "varG_A_1_G = get_CODE(&Gred_code, 0, 3);"
+        self.assertEqual(stamp_section.count(common_assignment), 1)
+        self.assertLess(stamp_section.index(common_assignment), stamp_section.index("switch (case_id) {"))
         groups = response["multi_case"].get("gred_entry_reuse_by_case") or []
         by_case = {
             group.get("case_index"): {
