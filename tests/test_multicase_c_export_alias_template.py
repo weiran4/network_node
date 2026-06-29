@@ -155,10 +155,10 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
 
         stamp_entries = alias_model["template_payload"]["direct_retained_stamps"][0]["G"]
-        self.assertEqual(stamp_entries[0]["expr"], "cr_R1_G_eff")
-        self.assertEqual(stamp_entries[1]["expr"], "-cr_R1_G_eff")
-        self.assertEqual(stamp_entries[2]["tagged"], "-cr_R1_G_eff")
-        self.assertEqual(stamp_entries[3]["tagged"], "cr_R1_G_eff")
+        self.assertEqual(stamp_entries[0]["expr"], "multcase_G_R1_A_A")
+        self.assertEqual(stamp_entries[1]["expr"], "-multcase_G_R1_A_A")
+        self.assertEqual(stamp_entries[2]["tagged"], "-multcase_G_R1_A_A")
+        self.assertEqual(stamp_entries[3]["tagged"], "multcase_G_R1_A_A")
 
     def test_single_branch_two_cases_use_full_value_effective_alias(self):
         response = build_multi_case_response(
@@ -174,9 +174,9 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         draft = response["multi_case"]["c_draft"]
         self.assertEqual(response["multi_case"]["codegen_mode"], "case-agnostic alias template")
         self.assertIn("STATIC:\n\n", draft)
-        self.assertIn("cr_R1_G_eff", draft)
-        self.assertIn("cr_R1_G_eff = X;", draft)
-        self.assertIn("cr_R1_G_eff = X + Y;", draft)
+        self.assertIn("multcase_G_R1_A_A", draft)
+        self.assertIn("multcase_G_R1_A_A = X;", draft)
+        self.assertIn("multcase_G_R1_A_A = X + Y;", draft)
         self.assertNotIn("X + Y - X", draft)
         self.assertNotIn("base + delta", draft)
         self.assertLessEqual(draft.count("Gred ="), 1)
@@ -198,8 +198,8 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("G_ri", blocks)
         self.assertIn("G_ir", blocks)
         self.assertIn("G_ii", blocks)
-        self.assertEqual(blocks["G_ri"][0][0], "-cr_R1_G_eff")
-        self.assertEqual(blocks["G_ir"][0][0], "-cr_R1_G_eff")
+        self.assertEqual(blocks["G_ri"][0][0], "-multcase_G_R1_A_A")
+        self.assertEqual(blocks["G_ir"][0][0], "-multcase_G_R1_A_A")
         self.assertEqual(multi["template_block_nodes"]["retained_order"], ["A", "B"])
         self.assertEqual(multi["template_block_nodes"]["internal_order"], ["X"])
 
@@ -221,8 +221,8 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
 
         draft = response["multi_case"]["c_draft"]
-        self.assertIn("cr_R1_G_eff = X;", draft)
-        self.assertIn("cr_R1_G_eff = X + Y;", draft)
+        self.assertIn("multcase_G_R1_A_A = X;", draft)
+        self.assertIn("multcase_G_R1_A_A = X + Y;", draft)
         self.assertIn("set(&Grk_code, 0, 0, Grk_A_k1);", draft)
         self.assertIn("set(&W_code, 0, 0, W_1_1);", draft)
         self.assertIn("matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
@@ -275,13 +275,13 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
 
         aliases = response["multi_case"]["aliases"]
-        self.assertEqual(aliases["cr_R1_G_eff"]["owner"], "CODE")
-        self.assertTrue(any("cr_R1_G_eff" in warning and "case_id is fixed before simulation" in warning for warning in response["warnings"]))
+        self.assertEqual(aliases["multcase_G_R1_A_A"]["owner"], "CODE")
+        self.assertTrue(any("multcase_G_R1_A_A" in warning and "case_id is fixed before simulation" in warning for warning in response["warnings"]))
         draft = response["multi_case"]["c_draft"]
         self.assertIn("BEGIN_T0:", draft)
         self.assertIn("g_mat_over[0][1] = -G_const;", draft)
-        self.assertNotIn("cr_R1_G_eff = G_const;", draft)
-        self.assertNotIn("cr_R1_G_eff = G_dynamic;", draft)
+        self.assertNotIn("multcase_G_R1_A_A = G_const;", draft)
+        self.assertNotIn("multcase_G_R1_A_A = G_dynamic;", draft)
         self.assertIn("varG_A_A = G_dynamic;", draft)
         self.assertIn("varG_A_B = -G_dynamic;", draft)
         self.assertIn("varG_B_B = G_dynamic;", draft)
@@ -300,11 +300,11 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
 
         aliases = response["multi_case"]["aliases"]
-        self.assertEqual(aliases["cr_R1_G_eff"]["owner"], "CODE_PER_STEP")
-        self.assertTrue(any("cr_R1_G_eff" in warning and "case_id is fixed before simulation" in warning for warning in response["warnings"]))
+        self.assertEqual(aliases["multcase_G_R1_A_A"]["owner"], "CODE_PER_STEP")
+        self.assertTrue(any("multcase_G_R1_A_A" in warning and "case_id is fixed before simulation" in warning for warning in response["warnings"]))
         draft = response["multi_case"]["c_draft"]
-        self.assertIn("cr_R1_G_eff = H_const;", draft)
-        self.assertIn("cr_R1_G_eff = H_step;", draft)
+        self.assertIn("multcase_G_R1_A_A = H_const;", draft)
+        self.assertIn("multcase_G_R1_A_A = H_step;", draft)
 
     def test_two_branches_do_not_generate_cartesian_final_gred_blocks(self):
         response = build_multi_case_response(
@@ -320,8 +320,8 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
 
         draft = response["multi_case"]["c_draft"]
-        self.assertIn("cr_R1_G_eff", draft)
-        self.assertIn("cr_R2_G_eff", draft)
+        self.assertIn("multcase_G_R1_A_A", draft)
+        self.assertIn("multcase_G_R2_B_B", draft)
         self.assertIn("switch (global_case_id)", draft)
         self.assertIn("R1_case_id = 1;", draft)
         self.assertIn("R2_case_id = 1;", draft)
@@ -368,8 +368,8 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
 
         self.assertLess(elapsed, 1.0)
         composite = alias_model["template_payload"]["G_full"][5][5]
-        self.assertIn("cr_R1_G_eff", composite)
-        self.assertIn("cr_R2_G_eff", composite)
+        self.assertIn("multcase_G_R1_N0_N0", composite)
+        self.assertIn("multcase_G_R2_N0_N1", composite)
 
     def test_overlapping_case_sources_fall_back_to_profile_resolved_input_alias(self):
         nodes = ["N1", "N2"]
@@ -399,8 +399,8 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
 
         alias_model = _build_multicase_alias_template_payload({"case_profiles": profiles})
 
-        self.assertEqual(alias_model["template_payload"]["G_full"][0][0], "cr_G_0_0_eff")
-        alias = alias_model["aliases"]["cr_G_0_0_eff"]
+        self.assertEqual(alias_model["template_payload"]["G_full"][0][0], "multcase_G_combined_N1_N1")
+        alias = alias_model["aliases"]["multcase_G_combined_N1_N1"]
         self.assertEqual(alias["selector"], "global")
         self.assertEqual(alias["case_values"]["3"], "Dabc + G22 + Grc + w2")
 
@@ -437,10 +437,10 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
             for alias, info in alias_model["aliases"].items()
             if info.get("selector") == "global" and info.get("kind") == "G"
         ]
-        self.assertEqual(global_g_aliases, ["cr_G_0_0_eff"])
-        self.assertEqual(alias_model["template_payload"]["G_full"][0][0], "cr_G_0_0_eff")
-        self.assertEqual(alias_model["template_payload"]["G_full"][1][1], "cr_G_0_0_eff")
-        self.assertEqual(alias_model["aliases"]["cr_G_0_0_eff"]["used_by"], ["G_full[0][0]", "G_full[1][1]"])
+        self.assertEqual(global_g_aliases, ["multcase_G_combined_N1_N1"])
+        self.assertEqual(alias_model["template_payload"]["G_full"][0][0], "multcase_G_combined_N1_N1")
+        self.assertEqual(alias_model["template_payload"]["G_full"][1][1], "multcase_G_combined_N1_N1")
+        self.assertEqual(alias_model["aliases"]["multcase_G_combined_N1_N1"]["used_by"], ["G_full[0][0]", "G_full[1][1]"])
 
     def test_general_symmetric_3x3_gkk_uses_fast_inverse(self):
         def payload(diagonal: str, offdiag: str) -> dict:
@@ -540,17 +540,17 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
 
     def test_same_branch_code_aliases_share_one_local_case_switch(self):
         aliases = {
-            "cr_C1_G_eff": {
+            "multcase_G_C1_A_A": {
                 "branch_id": "C1",
                 "owner": "CODE",
                 "case_values": {"0": "AA + G22 + G_rc + w2", "1": "Dabc + G22 + G_rc + w2"},
             },
-            "cr_C1_G_eff_2": {
+            "multcase_G_C1_B_B": {
                 "branch_id": "C1",
                 "owner": "CODE",
                 "case_values": {"0": "BB + G22 + G_rc + w2", "1": "Dabc + G22 + G_rc + w2"},
             },
-            "cr_C1_G_eff_3": {
+            "multcase_G_C1_C_C": {
                 "branch_id": "C1",
                 "owner": "CODE",
                 "case_values": {"0": "CC + G22 + G_rc + w2", "1": "Dabc + G22 + G_rc + w2"},
@@ -560,8 +560,8 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         lines = "\n".join(_alias_assignment_lines(aliases, "CODE"))
 
         self.assertEqual(lines.count("switch (C1_case_id)"), 1)
-        self.assertIn("case 0:\n        cr_C1_G_eff = AA + G22 + G_rc + w2;\n        cr_C1_G_eff_2 = BB + G22 + G_rc + w2;\n        cr_C1_G_eff_3 = CC + G22 + G_rc + w2;", lines)
-        self.assertIn("case 1:\n        cr_C1_G_eff = Dabc + G22 + G_rc + w2;\n        cr_C1_G_eff_2 = Dabc + G22 + G_rc + w2;\n        cr_C1_G_eff_3 = Dabc + G22 + G_rc + w2;", lines)
+        self.assertIn("case 0:\n        multcase_G_C1_A_A = AA + G22 + G_rc + w2;\n        multcase_G_C1_B_B = BB + G22 + G_rc + w2;\n        multcase_G_C1_C_C = CC + G22 + G_rc + w2;", lines)
+        self.assertIn("case 1:\n        multcase_G_C1_A_A = Dabc + G22 + G_rc + w2;\n        multcase_G_C1_B_B = Dabc + G22 + G_rc + w2;\n        multcase_G_C1_C_C = Dabc + G22 + G_rc + w2;", lines)
 
     def test_mult_case_test_fixture_uses_alias_template_not_single_profile_fallback(self):
         data = json.loads(Path("exports/mult_case_test.json").read_text(encoding="utf-8"))
@@ -608,16 +608,16 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(multi["profile_count"], 4)
         self.assertNotIn("RAM-switch multi-case C draft", draft)
         self.assertNotIn("NCASE = 1", draft)
-        self.assertIn("cr_B11_G_eff", draft)
-        self.assertIn("cr_B12_G_eff", draft)
+        self.assertIn("multcase_G_B11_N1_N1", draft)
+        self.assertIn("multcase_G_B12_N2_N3", draft)
         self.assertIn("switch (case_id)", draft)
         self.assertIn("switch (B11_case_id)", draft)
         self.assertIn("switch (B12_case_id)", draft)
         self.assertIn("case 3:", draft)
-        self.assertIn("cr_B11_G_eff = G1;", draft)
-        self.assertIn("cr_B11_G_eff = G2;", draft)
-        self.assertIn("cr_B12_G_eff = G3;", draft)
-        self.assertIn("cr_B12_G_eff = G4;", draft)
+        self.assertIn("multcase_G_B11_N1_N1 = G1;", draft)
+        self.assertIn("multcase_G_B11_N1_N1 = G2;", draft)
+        self.assertIn("multcase_G_B12_N2_N3 = G3;", draft)
+        self.assertIn("multcase_G_B12_N2_N3 = G4;", draft)
         self.assertNotIn("G2 - G1", draft)
         self.assertNotIn("G4 - G3", draft)
 
@@ -633,9 +633,9 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
 
         draft = response["multi_case"]["c_draft"]
-        self.assertIn("cr_R1_G_eff = 0.0;", draft)
-        self.assertIn("cr_R1_G_eff = X;", draft)
-        self.assertIn("g_mat_over[0][0] = cr_R1_G_eff;", draft)
+        self.assertIn("multcase_G_R1_A_A = 0.0;", draft)
+        self.assertIn("multcase_G_R1_A_A = X;", draft)
+        self.assertIn("g_mat_over[0][0] = multcase_G_R1_A_A;", draft)
 
     def test_rejects_case_that_changes_topology(self):
         bad_payload = _series_payload("X", internal=False)
@@ -663,7 +663,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
             )
         )
         template_gred = sp.Matrix(response["multi_case"]["template"]["Gred"])
-        alias = sp.Symbol("cr_R1_G_eff")
+        alias = sp.Symbol("multcase_G_R1_A_A")
 
         for expr in [sp.Symbol("X"), sp.Symbol("X") + sp.Symbol("Y")]:
             single_payload = _series_payload(str(expr))

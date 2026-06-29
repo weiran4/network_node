@@ -270,10 +270,45 @@
       display: grid;
     }
 
+    .package-case-overlay.minimized {
+      width: min(360px, calc(100% - 28px));
+      gap: 0;
+      padding: 9px 10px;
+    }
+
+    .package-case-overlay-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
     .package-case-overlay-title {
       font-size: 13px;
       font-weight: 850;
       color: #102033;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .package-case-overlay-toggle {
+      border: 1px solid #cfd8e3;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      padding: 5px 9px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .package-case-overlay-toggle:hover {
+      border-color: #9fb0c3;
+      color: var(--ink);
+      background: #f8fafc;
     }
 
     .package-case-overlay-text {
@@ -3051,7 +3086,8 @@
       history: [],
       future: [],
       restoring: false,
-      packageCaseEdit: null
+      packageCaseEdit: null,
+      packageCaseEditMinimized: false
     };
     let reducedRenderToken = 0;
     let branchCurrentRenderToken = 0;
@@ -3201,6 +3237,7 @@
       state.history = structuredClone(data.history || []);
       state.future = structuredClone(data.future || []);
       state.packageCaseEdit = structuredClone(data.packageCaseEdit || null);
+      state.packageCaseEditMinimized = false;
       state.pendingTerminal = null;
       state.drag = null;
       state.wireDrag = null;
@@ -3465,8 +3502,9 @@
       "复制当前内部网络为新工况": "Duplicate Current Internal Network as New Case",
       "编辑当前内部网络工况": "Edit Active Internal Network Case",
       "Pack 工况编辑": "Pack Case Edit",
-      "新增 Dummy 支路": "Add Dummy Branch",
       "新增 N-Dummy 节点块": "Add N-Dummy Node Block",
+      "最小化": "Minimize",
+      "展开": "Expand",
       "N-Dummy 节点块": "N-Dummy Node Block",
       "N-Dummy 节点数量": "N-Dummy Node Count",
       "孤立 Dummy 内部节点块": "Isolated dummy internal-node block",
@@ -5951,9 +5989,26 @@
       return branchUsesMatrix(branch) ? ["gMatrix", "ihisVector"] : ["g", "ihis"];
     }
 
+    function defaultCaseName(index = 0) {
+      const safeIndex = Math.max(0, Number(index) || 0);
+      return `Case ${safeIndex}`;
+    }
+
+    function displayCaseName(caseItem, index = 0) {
+      const safeIndex = Math.max(0, Number(index) || 0);
+      const name = String(caseItem?.name || "").trim();
+      if (!name) return defaultCaseName(safeIndex);
+      const match = name.match(/^Case\s+(\d+)$/i);
+      if (match) {
+        const numeric = Number(match[1]);
+        if (numeric === safeIndex || numeric === safeIndex + 1) return defaultCaseName(safeIndex);
+      }
+      return name;
+    }
+
     function switchCaseFromBranch(branch, index = 0) {
       const item = {
-        name: `Case ${index + 1}`,
+        name: defaultCaseName(index),
         gIsConstant: branch.gIsConstant !== false,
         constantGSymbols: branch.constantGSymbols || ""
       };
@@ -5973,7 +6028,7 @@
       const gMatrix = branch.gMatrix || "[]";
       const ihisVector = branch.ihisVector || "[]";
       return {
-        name: `Case ${index + 1}`,
+        name: defaultCaseName(index),
         branches: structuredClone(pkg.branches || []),
         wires: structuredClone(packageInternalWiresForBranches(pkg.branches || [], pkg.wires || [])),
         nodeState: structuredClone(pkg.nodeState || []),
@@ -6050,12 +6105,12 @@
       pkg.networkCases = pkg.networkCases.map((source, index) => ({
         ...packageNetworkCaseFromBranch(branch, index),
         ...(source || {}),
-        name: String(source?.name || `Case ${index + 1}`)
+        name: displayCaseName(source, index)
       }));
       const activeIndex = Math.max(0, Math.min(pkg.networkCases.length - 1, Number(pkg.activeNetworkCase ?? branch.activeSwitchCase) || 0));
       pkg.activeNetworkCase = activeIndex;
       branch.switchCases = pkg.networkCases.map((item, index) => ({
-        name: item.name || `Case ${index + 1}`,
+        name: displayCaseName(item, index),
         gMatrix: item.gMatrix || "[]",
         ihisVector: item.ihisVector || "[]",
         gIsConstant: item.gIsConstant !== false,
@@ -6075,7 +6130,7 @@
       normalizePackageNetworkCases(branch);
       const pkg = branch?.packageOriginal;
       const index = activePackageNetworkCaseIndex(branch);
-      return pkg?.networkCases?.[index]?.name || `Case ${index + 1}`;
+      return displayCaseName(pkg?.networkCases?.[index], index);
     }
 
     function normalizeSwitchCases(branch) {
@@ -6098,7 +6153,7 @@
         const item = {
           ...switchCaseFromBranch(branch, index),
           ...(source || {}),
-          name: String(source?.name || `Case ${index + 1}`)
+          name: displayCaseName(source, index)
         };
         fields.forEach(field => {
           if (!item[field]) item[field] = branch[field] || switchCaseFromBranch(branch, index)[field];
@@ -6132,7 +6187,7 @@
     function switchCaseLabel(branch) {
       const activeCase = activeSwitchCase(branch);
       if (!activeCase || !branch.switchCases?.length) return "";
-      return activeCase.name || `Case ${(branch.activeSwitchCase || 0) + 1}`;
+      return displayCaseName(activeCase, branch.activeSwitchCase || 0);
     }
 
     function switchCaseLabelSvg(branch, yOffset = 22) {
@@ -6372,7 +6427,7 @@
       }
       normalizeSwitchCases(branch);
       const next = branch.switchCases?.slice(0, count) || [switchCaseFromBranch(branch, 0)];
-      while (next.length < count) next.push({ ...switchCaseFromBranch(branch, next.length), name: `Case ${next.length + 1}` });
+      while (next.length < count) next.push({ ...switchCaseFromBranch(branch, next.length), name: defaultCaseName(next.length) });
       branch.switchCases = next;
       branch.activeSwitchCase = Math.max(0, Math.min(next.length - 1, Number(branch.activeSwitchCase) || 0));
     }
@@ -6405,12 +6460,12 @@
             <label>${escapeHtml(tr("当前工况"))}</label>
             <select data-field="switchActive" ${count <= 1 ? "disabled" : ""}>
               ${Array.from({ length: count }, (_, index) => `
-                <option value="${index}" ${index === activeIndex ? "selected" : ""}>${escapeHtml(branch.switchCases?.[index]?.name || `Case ${index + 1}`)}</option>
+                <option value="${index}" ${index === activeIndex ? "selected" : ""}>${escapeHtml(displayCaseName(branch.switchCases?.[index], index))}</option>
               `).join("")}
             </select>
           </div>
         </div>
-        ${activeCase ? editableField("工况名称", "switchCaseName", activeCase.name || `Case ${activeIndex + 1}`) : ""}
+        ${activeCase ? editableField("工况名称", "switchCaseName", displayCaseName(activeCase, activeIndex)) : ""}
         ${count > 1 ? `
           <div class="runtime-case-card ${runtimeMutable ? "active" : ""}">
             <label class="runtime-case-card-toggle">
@@ -6454,7 +6509,7 @@
                   <label>${escapeHtml(inner.name || inner.id)}</label>
                   <select data-package-case-index="${index}">
                     ${inner.switchCases.map((item, caseIndex) => `
-                      <option value="${caseIndex}" ${caseIndex === activeIndex ? "selected" : ""}>${escapeHtml(item.name || `Case ${caseIndex + 1}`)}</option>
+                      <option value="${caseIndex}" ${caseIndex === activeIndex ? "selected" : ""}>${escapeHtml(displayCaseName(item, caseIndex))}</option>
                     `).join("")}
                   </select>
                 </div>
@@ -6478,12 +6533,12 @@
             <label>${escapeHtml(tr("当前 Pack 工况"))}</label>
             <select data-package-network-case-active ${cases.length <= 1 ? "disabled" : ""}>
               ${cases.map((item, index) => `
-                <option value="${index}" ${index === activeIndex ? "selected" : ""}>${escapeHtml(item.name || `Case ${index + 1}`)}</option>
+                <option value="${index}" ${index === activeIndex ? "selected" : ""}>${escapeHtml(displayCaseName(item, index))}</option>
               `).join("")}
             </select>
           </div>
         </div>
-        ${cases[activeIndex] ? editableField("Pack 工况名称", "packageNetworkCaseName", cases[activeIndex].name || `Case ${activeIndex + 1}`) : ""}
+        ${cases[activeIndex] ? editableField("Pack 工况名称", "packageNetworkCaseName", displayCaseName(cases[activeIndex], activeIndex)) : ""}
         <div class="row">
           <button class="text-button" type="button" data-package-network-action="duplicate">${escapeHtml(tr("复制当前内部网络为新工况"))}</button>
           <button class="text-button" type="button" data-package-network-action="edit">${escapeHtml(tr("编辑当前内部网络工况"))}</button>
@@ -9463,7 +9518,7 @@
         case_map: {}
       }] : [];
       const profiles = [];
-      const caseName = (branch, index) => branch.switchCases?.[index]?.name || `Case ${index + 1}`;
+      const caseName = (branch, index) => displayCaseName(branch?.switchCases?.[index], index);
       const buildProfile = (branchIndex, caseMap, labels) => {
         if (branchIndex >= branches.length) {
           profiles.push({
@@ -9516,7 +9571,7 @@
       const profiles = JSON.parse(text);
       if (!Array.isArray(profiles)) throw new Error(optText("case profiles 必须是数组。", "case profiles must be an array."));
       return profiles.map((profile, index) => ({
-        name: String(profile?.name || `Case ${index + 1}`),
+        name: String(profile?.name || defaultCaseName(index)),
         comment: String(profile?.comment || ""),
         case_map: profile?.case_map && typeof profile.case_map === "object" ? profile.case_map : {}
       }));
@@ -9689,7 +9744,7 @@
         const payload = payloadForCaseProfile(profile, runtimeBaseCaseMap);
         const dummy_finalization = dummyFinalizationForCaseProfile(profile, payload);
         return {
-          name: profile.name || `Case ${index + 1}`,
+          name: profile.name || defaultCaseName(index),
           comment: profile.comment || "",
           case_map: profile.case_map || {},
           payload,
@@ -9703,7 +9758,7 @@
         case_id_symbol: `runtime_${cIdentifier(branch.name || branch.id || "case")}_case_id`,
         cases: (branch.switchCases || []).map((item, index) => ({
           index,
-          name: item.name || `Case ${index + 1}`,
+          name: displayCaseName(item, index),
           payloads: profiles.map(profile => payloadForCaseProfile(profile, { [branch.id]: index }))
         }))
       }));
@@ -10480,14 +10535,14 @@
       const branchById = new Map(branches.map(branch => [branch.id, branch]));
       const caseLabel = (branch, caseIndex) => {
         const index = Math.max(0, Number(caseIndex) || 0);
-        return branch?.switchCases?.[index]?.name || `Case ${index + 1}`;
+        return displayCaseName(branch?.switchCases?.[index], index);
       };
       const branchLabel = branch => branch?.name || branch?.id || "-";
       const initBranches = initTimeMultiCaseBranches(branches);
       const runtimeBranches = runtimeMutableCaseBranches(branches);
       const branchList = branches.map(branch => {
         const cases = (branch.switchCases || [])
-          .map((item, index) => `${index}: ${item.name || `Case ${index + 1}`}`)
+          .map((item, index) => `${index}: ${displayCaseName(item, index)}`)
           .join(" / ");
         return `<div class="formula-line"><span class="formula-rhs">${escapeHtml(branchLabel(branch))}: ${escapeHtml(cases)}</span></div>`;
       }).join("");
@@ -12382,7 +12437,7 @@
     function packagedOriginalSystem(branch, netByTerminal) {
       normalizePackageNetworkCases(branch);
       const pkg = branch.packageOriginal;
-      const originalBranches = pkg?.branches || [];
+      const originalBranches = (pkg?.branches || []).filter(item => item.kind !== "dummy_dimension_branch");
       if (!originalBranches.length) return null;
       const selectedIds = new Set(originalBranches.map(item => item.id));
       const parent = new Map();
@@ -12881,7 +12936,7 @@
       }
       if (field === "switchCaseName") {
         const activeCase = activeSwitchCase(branch);
-        if (activeCase) activeCase.name = value.trim() || `Case ${(branch.activeSwitchCase || 0) + 1}`;
+        if (activeCase) activeCase.name = value.trim() || defaultCaseName(branch.activeSwitchCase || 0);
         render();
         return;
       }
@@ -12896,7 +12951,7 @@
         normalizePackageNetworkCases(branch);
         const pkg = branch.packageOriginal;
         const index = activePackageNetworkCaseIndex(branch);
-        const name = String(value || "").trim() || `Case ${index + 1}`;
+        const name = String(value || "").trim() || defaultCaseName(index);
         if (pkg?.networkCases?.[index]) pkg.networkCases[index].name = name;
         if (branch.switchCases?.[index]) branch.switchCases[index].name = name;
         render();
@@ -13084,7 +13139,7 @@
       if ((Number(inner.activeSwitchCase) || 0) === nextIndex) return;
       commitHistory();
       inner.activeSwitchCase = nextIndex;
-      const caseName = inner.switchCases[nextIndex]?.name || `Case ${nextIndex + 1}`;
+      const caseName = displayCaseName(inner.switchCases[nextIndex], nextIndex);
       statusEl.textContent = state.language === "en"
         ? `${branch.name}: ${inner.name || inner.id} switch -> ${caseName}`
         : `${branch.name}: ${inner.name || inner.id} 已切换到 ${caseName}`;
@@ -13145,9 +13200,10 @@
     function validateDummyBranchesForPackCase(shell, subsystem) {
       const edit = state.packageCaseEdit || {};
       const pkg = shell?.packageOriginal || {};
-      const caseName = pkg.networkCases?.[edit.caseIndex]?.name || `Case ${Number(edit.caseIndex || 0) + 1}`;
+      const caseName = displayCaseName(pkg.networkCases?.[edit.caseIndex], Number(edit.caseIndex || 0));
       const packName = shell?.name || shell?.id || "Pack";
       const errors = [];
+      const internalGroupIds = new Set((subsystem.internalGroups || []).map(group => group.id));
 
       dummyBranchesForPackCase(subsystem.sourceBranches || state.branches).forEach(branch => {
         const dummySide = branch.dummyTerminalSide || "B";
@@ -13190,7 +13246,7 @@
     function validateDummyNodeBlocksForPackCase(shell, subsystem) {
       const edit = state.packageCaseEdit || {};
       const pkg = shell?.packageOriginal || {};
-      const caseName = pkg.networkCases?.[edit.caseIndex]?.name || `Case ${Number(edit.caseIndex || 0) + 1}`;
+      const caseName = displayCaseName(pkg.networkCases?.[edit.caseIndex], Number(edit.caseIndex || 0));
       const packName = shell?.name || shell?.id || "Pack";
       const errors = [];
 
@@ -13313,7 +13369,7 @@
       const pkg = branch.packageOriginal;
       const activeIndex = Number(pkg.activeNetworkCase) || 0;
       const copy = structuredClone(pkg.networkCases[activeIndex] || packageNetworkCaseFromBranch(branch, 0));
-      copy.name = `Case ${pkg.networkCases.length + 1}`;
+      copy.name = defaultCaseName(pkg.networkCases.length);
       pkg.networkCases.push(copy);
       applyPackageNetworkCase(branch, pkg.networkCases.length - 1);
       invalidateMathCaches();
@@ -13337,6 +13393,7 @@
         packageShell: structuredClone(branch),
         returnData
       };
+      state.packageCaseEditMinimized = false;
       state.branches = structuredClone(caseData.branches || []);
       state.wires = structuredClone(packageInternalWiresForBranches(state.branches, caseData.wires || []));
       state.groups = [];
@@ -13368,8 +13425,10 @@
       const canvasState = currentCanvas();
       const returnData = structuredClone(canvasState?.data || edit.returnData || blankCanvasData());
       state.packageCaseEdit = null;
+      state.packageCaseEditMinimized = false;
       applyCanvasData(returnData);
       state.packageCaseEdit = null;
+      state.packageCaseEditMinimized = false;
     }
 
     function renderPackageCasePortReminder(shell) {
@@ -13511,7 +13570,7 @@
       }
       const pkg = shell.packageOriginal;
       const index = Math.max(0, Math.min(pkg.networkCases.length - 1, Number(edit.caseIndex) || 0));
-      const previousName = pkg.networkCases[index]?.name || `Case ${index + 1}`;
+      const previousName = displayCaseName(pkg.networkCases[index], index);
       pkg.networkCases[index] = packagedCaseFromReduction(
         shell,
         subsystem,
@@ -13535,28 +13594,38 @@
       if (!packageCaseEditOverlay) return;
       const edit = state.packageCaseEdit;
       packageCaseEditOverlay.classList.toggle("open", Boolean(edit));
+      packageCaseEditOverlay.classList.toggle("minimized", Boolean(edit && state.packageCaseEditMinimized));
       if (!edit) {
         packageCaseEditOverlay.innerHTML = "";
         return;
       }
       const shell = edit.packageShell || {};
       const cases = shell.packageOriginal?.networkCases || [];
-      const caseName = cases[edit.caseIndex]?.name || `Case ${Number(edit.caseIndex || 0) + 1}`;
+      const caseName = displayCaseName(cases[edit.caseIndex], Number(edit.caseIndex || 0));
+      const title = `${tr("Pack 工况编辑")}: ${shell.name || shell.id || ""} / ${caseName}`;
+      const minimized = Boolean(state.packageCaseEditMinimized);
       packageCaseEditOverlay.innerHTML = `
-        <div class="package-case-overlay-title">${escapeHtml(tr("Pack 工况编辑"))}: ${escapeHtml(shell.name || shell.id || "")} / ${escapeHtml(caseName)}</div>
-        <div class="package-case-overlay-text">${escapeHtml(tr("正在编辑 Pack 内部工况。完成前请保持外部端口数量、名字和顺序不变。"))}</div>
-        ${renderPackageCasePortReminder(shell)}
-        <div class="package-case-overlay-actions">
-          <button class="text-button" type="button" data-package-case-overlay-action="dummy">${escapeHtml(tr("新增 Dummy 支路"))}</button>
-          <button class="text-button" type="button" data-package-case-overlay-action="dummyNodeBlock">${escapeHtml(tr("新增 N-Dummy 节点块"))}</button>
-          <button class="text-button primary" type="button" data-package-case-overlay-action="finish">${escapeHtml(tr("完成并保存 Pack 工况"))}</button>
-          <button class="text-button" type="button" data-package-case-overlay-action="cancel">${escapeHtml(tr("取消 Pack 工况编辑"))}</button>
+        <div class="package-case-overlay-header">
+          <div class="package-case-overlay-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+          <button class="package-case-overlay-toggle" type="button" data-package-case-overlay-action="toggle">
+            ${escapeHtml(tr(minimized ? "展开" : "最小化"))}
+          </button>
         </div>
+        ${minimized ? "" : `
+          <div class="package-case-overlay-text">${escapeHtml(tr("正在编辑 Pack 内部工况。完成前请保持外部端口数量、名字和顺序不变。"))}</div>
+          ${renderPackageCasePortReminder(shell)}
+          <div class="package-case-overlay-actions">
+            <button class="text-button" type="button" data-package-case-overlay-action="dummyNodeBlock">${escapeHtml(tr("新增 N-Dummy 节点块"))}</button>
+            <button class="text-button primary" type="button" data-package-case-overlay-action="finish">${escapeHtml(tr("完成并保存 Pack 工况"))}</button>
+            <button class="text-button" type="button" data-package-case-overlay-action="cancel">${escapeHtml(tr("取消 Pack 工况编辑"))}</button>
+          </div>
+        `}
       `;
       packageCaseEditOverlay.querySelectorAll("[data-package-case-overlay-action]").forEach(button => {
         const run = () => {
-          if (button.dataset.packageCaseOverlayAction === "dummy") {
-            createDummyDimensionBranch();
+          if (button.dataset.packageCaseOverlayAction === "toggle") {
+            state.packageCaseEditMinimized = !state.packageCaseEditMinimized;
+            renderPackageCaseEditOverlay();
           } else if (button.dataset.packageCaseOverlayAction === "dummyNodeBlock") {
             createDummyNodeBlock();
           } else if (button.dataset.packageCaseOverlayAction === "finish") {

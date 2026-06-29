@@ -267,20 +267,21 @@ class MultiCaseDummyNodeBlockTests(unittest.TestCase):
 
         multi = response["multi_case"]
         draft = multi["c_draft"]
-        self.assertIn("NR_Y = 9, NR_D = 6, NK = 3", draft)
-        self.assertIn("int nr_active = NR_Y;", draft)
-        self.assertIn("retained_profile = PROFILE_D;", draft)
-        self.assertIn("matrixDim(&Gkr_code, NK, nr_active);", draft)
-        self.assertIn("matrixDim(&Vr_code, nr_active, 1);", draft)
-        self.assertIn("matrixDim(&tmp_W_Gkr_code, NK, nr_active);", draft)
+        self.assertIn("PACK_CASE_0 = 0, PACK_CASE_1 = 1, RETAINED_NODES_CASE_0 = 9, RETAINED_NODES_CASE_1 = 6, INTERNAL_NODES = 3", draft)
+        self.assertIn("int node_active = RETAINED_NODES_CASE_0;", draft)
+        self.assertIn("node_active is the retained-node count used by matrix allocation, g_mat_over, and GValue stamping", draft)
+        self.assertIn("retained_profile = PACK_CASE_1;", draft)
+        self.assertIn("matrixDim(&Gkr_code, INTERNAL_NODES, node_active);", draft)
+        self.assertIn("matrixDim(&Vr_code, node_active, 1);", draft)
+        self.assertIn("matrixDim(&tmp_W_Gkr_code, INTERNAL_NODES, node_active);", draft)
         self.assertIn("Retained layout is selected during initialization", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        err += matrixDim(&Grr_dyn_code, 3, 3);", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        matrix_register(&Grr_dyn_code);", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n            conditionMatrixForCODE(&Grr_dyn_code);", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        err += matrixDim(&Grr_dyn_code, 3, 3);", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        matrix_register(&Grr_dyn_code);", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n            conditionMatrixForCODE(&Grr_dyn_code);", draft)
         self.assertNotIn("NR = 6, NK = 6", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        set_CODE(&Gkr_code, 0, 6, Gkr_shared_1);", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        set_CODE(&Grr_dyn_code, 0, 0, Grr_shared_1);", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        set_CODE(&Vr_code, 6, 0, RC_A);", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        set_CODE(&Gkr_code, 0, 6, Gkr_shared_1);", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        set_CODE(&Grr_dyn_code, 0, 0, Grr_shared_1);", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        set_CODE(&Vr_code, 6, 0, RC_A);", draft)
         self.assertEqual(multi["fast_path"], "dummy_finalization_alias_template_matrix_dag")
         retained_profiles = multi["retained_layout_profiles"]
         self.assertEqual(len(retained_profiles), 2)
@@ -306,10 +307,10 @@ class MultiCaseDummyNodeBlockTests(unittest.TestCase):
             self.assertNotIn(', "TRUE")', line)
         stamp_section = draft.split("/* Stamp dynamic Gred entries", 1)[1].split("/* CODE-SIDE IHIS", 1)[0]
         self.assertLessEqual(stamp_section.count("switch (case_id) {"), 1)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        varG_RC_A_RC_A = get_CODE(&Gred_dyn_code, 0, 0);", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        varG_RC_A_RC_A = get_CODE(&Gred_dyn_code, 0, 0);", draft)
         self.assertRegex(
             draft,
-            r"if \(retained_profile == PROFILE_Y\) \{\n\s*varG_[A-Za-z0-9_]*RC_[ABC][A-Za-z0-9_]* = get_CODE\(&Gred(?:_dyn)?_code, \d+, \d+\);",
+            r"if \(retained_profile == PACK_CASE_0\) \{\n\s*varG_[A-Za-z0-9_]*RC_[ABC][A-Za-z0-9_]* = get_CODE\(&Gred(?:_dyn)?_code, \d+, \d+\);",
         )
         self.assertRegex(
             draft,
@@ -421,12 +422,12 @@ class MultiCaseDummyNodeBlockTests(unittest.TestCase):
 
         multi = response["multi_case"]
         draft = multi["c_draft"]
-        self.assertIn("NR_Y = 5, NR_D = 4, NK = 0", draft)
-        self.assertIn("setupGMatrix(nr_active);", draft)
-        self.assertIn("for (int row = 0; row < nr_active; row++)", draft)
-        self.assertIn("for (int col = 0; col < nr_active; col++)", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        g_mat_nods[4] = getNodeNum(comp, \"N3\");", draft)
-        self.assertIn("if (retained_profile == PROFILE_Y) {\n        g_mat_over[1][4] =", draft)
+        self.assertIn("PACK_CASE_0 = 0, PACK_CASE_1 = 1, RETAINED_NODES_CASE_0 = 5, RETAINED_NODES_CASE_1 = 4, INTERNAL_NODES = 0", draft)
+        self.assertIn("setupGMatrix(node_active);", draft)
+        self.assertIn("for (int row = 0; row < node_active; row++)", draft)
+        self.assertIn("for (int col = 0; col < node_active; col++)", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        g_mat_nods[4] = getNodeNum(comp, \"N3\");", draft)
+        self.assertIn("if (retained_profile == PACK_CASE_0) {\n        g_mat_over[1][4] =", draft)
         self.assertNotIn("setupGMatrix(5);", draft)
         self.assertEqual(multi["retained_layout_profiles"][0]["ordered_active_nodes"], nodes)
         self.assertEqual(multi["retained_layout_profiles"][1]["ordered_active_nodes"], common_nodes)

@@ -1245,14 +1245,31 @@ def _position_depends_only_on_branch(
     return len({str(sp.expand(value)) for value in by_case.values()}) > 1
 
 
-def _alias_name(branch_id: str, kind: str, index: int) -> str:
-    base = f"cr_{_c_identifier_name(branch_id, 'branch')}_{kind}_eff"
+def _alias_node_name(node_order: Sequence[str], index: int) -> str:
+    if 0 <= index < len(node_order):
+        return _c_identifier_name(str(node_order[index]), f"N{index}")
+    return f"N{index}"
+
+
+def _alias_name(branch_id: str, kind: str, index: int, key: str, row: int, col: int, node_order: Sequence[str]) -> str:
+    branch = _c_identifier_name(branch_id, "branch")
+    if kind == "G":
+        node_a = _alias_node_name(node_order, row)
+        node_b = _alias_node_name(node_order, col)
+        base = f"multcase_G_{branch}_{node_a}_{node_b}"
+    else:
+        node = _alias_node_name(node_order, row)
+        base = f"multcase_Ihis_{branch}_{node}"
     return base if index == 1 else f"{base}_{index}"
 
 
-def _matrix_entry_alias_name(key: str, row: int, col: int) -> str:
-    kind = "G" if key == "G_full" else "Ihis"
-    return f"cr_{kind}_{row}_{col}_eff"
+def _matrix_entry_alias_name(key: str, row: int, col: int, node_order: Sequence[str] = ()) -> str:
+    if key == "G_full":
+        node_a = _alias_node_name(node_order, row)
+        node_b = _alias_node_name(node_order, col)
+        return f"multcase_G_combined_{node_a}_{node_b}"
+    node = _alias_node_name(node_order, row)
+    return f"multcase_Ihis_combined_{node}"
 
 
 def _global_alias_cache_key(key: str, case_values: Mapping[int, sp.Expr]) -> tuple:
@@ -1375,9 +1392,10 @@ def _add_global_profile_alias(
     key: str,
     row: int,
     col: int,
+    node_order: Sequence[str],
     values: Sequence[sp.Expr],
 ) -> None:
-    alias = _matrix_entry_alias_name(key, row, col)
+    alias = _matrix_entry_alias_name(key, row, col, node_order)
     case_values = {index: sp.sympify(value) for index, value in enumerate(values)}
     cache_key = _global_alias_cache_key(key, case_values)
     cached_alias = global_alias_cache.get(cache_key)
@@ -1410,6 +1428,7 @@ def _add_global_init_profile_alias(
     key: str,
     row: int,
     col: int,
+    node_order: Sequence[str],
     values_by_init: Mapping[int, sp.Expr],
 ) -> sp.Expr:
     ordered = {int(index): sp.sympify(values_by_init[index]) for index in sorted(values_by_init)}
@@ -1421,7 +1440,7 @@ def _add_global_init_profile_alias(
     if cached_alias:
         _record_global_alias_use(aliases, cached_alias, key, row, col)
         return sp.Symbol(cached_alias)
-    alias = _matrix_entry_alias_name(key, row, col)
+    alias = _matrix_entry_alias_name(key, row, col, node_order)
     if alias in aliases:
         suffix = 2
         while f"{alias}_{suffix}" in aliases:
@@ -1473,17 +1492,16 @@ def _ensure_branch_profile_alias(
     runtime_groups: Mapping[str, dict],
     branch_id: str,
     kind: str,
+    key: str,
+    row: int,
+    col: int,
+    node_order: Sequence[str],
     profile_values: Sequence[sp.Expr],
     base_case: int,
 ) -> tuple[int, str]:
     sign, sequence_key = _signed_sequence_key(profile_values)
     group_key = (branch_id, kind, sequence_key)
     if group_key not in grouped:
-        alias_index = 1 + sum(
-            1
-            for item in grouped.values()
-            if item["branch_id"] == branch_id and item["kind"] == kind
-        )
         local_cases = sorted({
             _profile_case_index(profile, branch_id, base_case)
             for profile in sample_profiles
@@ -1495,7 +1513,12 @@ def _ensure_branch_profile_alias(
             if local_case in case_values and not _expr_equal_light(case_values[local_case], canonical):
                 raise ValueError(f"multi-case alias template found conflicting values for {branch_id} case {local_case}")
             case_values[local_case] = canonical
-        alias = _alias_name(branch_id, kind, alias_index)
+        alias_base = _alias_name(branch_id, kind, 1, key, row, col, node_order)
+        alias = alias_base
+        suffix = 2
+        while alias in aliases:
+            alias = f"{alias_base}_{suffix}"
+            suffix += 1
         case_owners = {
             case_index: _expr_stage(expr, symbol_table)
             for case_index, expr in case_values.items()
@@ -1556,6 +1579,7 @@ def _try_runtime_additive_replacement(
     key: str,
     row: int,
     col: int,
+    node_order: Sequence[str],
     values: Sequence[sp.Expr],
     branch_id: str,
     kind: str,
@@ -1642,6 +1666,10 @@ def _try_runtime_additive_replacement(
         runtime_groups=runtime_groups,
         branch_id=branch_id,
         kind=kind,
+        key=key,
+        row=row,
+        col=col,
+        node_order=node_order,
         profile_values=profile_values,
         base_case=base_case,
     )
@@ -1652,6 +1680,7 @@ def _try_runtime_additive_replacement(
         key=key,
         row=row,
         col=col,
+        node_order=node_order,
         values_by_init=residual_by_init,
     )
     return sp.expand(residual_expr + sign * sp.Symbol(alias))
@@ -1721,6 +1750,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     base_payload = sample_profiles[0].get("payload")
     if not isinstance(base_payload, dict):
         return None
+    node_order = [str(node) for node in base_payload.get("all_nodes") or []]
     symbol_table = {}
     for profile in sample_profiles:
         symbol_table.update((profile.get("payload") or {}).get("symbol_dependency_table") or {})
@@ -1782,6 +1812,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                             key=key,
                             row=row,
                             col=col,
+                            node_order=node_order,
                             values=values,
                             branch_id=branch_id,
                             kind=kind,
@@ -1801,6 +1832,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                             key=key,
                             row=row,
                             col=col,
+                            node_order=node_order,
                             values_by_init=runtime_invariant,
                         )
                         continue
@@ -1815,6 +1847,10 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                     runtime_groups=runtime_groups,
                     branch_id=branch_id,
                     kind=kind,
+                    key=key,
+                    row=row,
+                    col=col,
+                    node_order=node_order,
                     profile_values=values,
                     base_case=base_case_by_branch.get(branch_id, 0),
                 )
@@ -1844,6 +1880,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                 key=key,
                 row=row,
                 col=col,
+                node_order=node_order,
                 values_by_init=runtime_invariant,
             )
             continue
@@ -1855,6 +1892,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
             key=key,
             row=row,
             col=col,
+            node_order=node_order,
             values=values,
         )
 
@@ -2626,12 +2664,9 @@ def _retained_layout_profiles_from_finalization(profile_set, super_node_ids: Seq
         grouped[active]["case_ids"].append(index)
 
     profiles = sorted(grouped.values(), key=lambda item: (-item["nr_active"], item["case_ids"]))
-    if len(profiles) == 2:
-        profiles[0]["profile_id"] = "PROFILE_Y"
-        profiles[1]["profile_id"] = "PROFILE_D"
-    else:
-        for index, item in enumerate(profiles):
-            item["profile_id"] = f"PROFILE_{index}"
+    for index, item in enumerate(profiles):
+        item["profile_id"] = f"PACK_CASE_{index}"
+        item["retained_nodes_id"] = f"RETAINED_NODES_CASE_{index}"
     return profiles, compact_super_order
 
 
@@ -2645,9 +2680,20 @@ def _replace_enum_for_retained_layouts(draft: str, profiles: list[dict], nk: int
     if not profiles:
         return draft
     enum_parts = [f"{profile['profile_id']} = {index}" for index, profile in enumerate(profiles)]
-    dim_parts = [f"NR_{profile['profile_id'].removeprefix('PROFILE_')} = {profile['nr_active']}" for profile in profiles]
-    enum_line = f"enum {{ {', '.join(enum_parts)}, {', '.join(dim_parts)}, NK = {nk} }};"
-    return re.sub(r"enum \{ NR = \d+, NK = \d+ \};", enum_line, draft, count=1)
+    dim_parts = [f"{profile['retained_nodes_id']} = {profile['nr_active']}" for profile in profiles]
+    enum_line = (
+        f"enum {{ {', '.join(enum_parts)}, {', '.join(dim_parts)}, INTERNAL_NODES = {nk} }};"
+    )
+    enum_comment = [
+        "/* Multi-case retained-layout constants:",
+        " * PACK_CASE_n identifies a group of case_id values that share the same retained-node layout.",
+        " * RETAINED_NODES_CASE_n is the active retained-node count for that layout after dummy finalization.",
+        " * INTERNAL_NODES is the number of eliminated internal nodes used by the shared Schur/Vk workflow.",
+        " * node_active is selected from RETAINED_NODES_CASE_n during RAM initialization; runtime layout switching is not supported.",
+        " */",
+    ]
+    enum_replacement = enum_line + "\n" + "\n".join(enum_comment)
+    return re.sub(r"enum \{ NR = \d+, NK = \d+ \};", enum_replacement, draft, count=1)
 
 
 def _case_condition_from_ids(case_id_symbol: str, case_ids: Sequence[int]) -> str:
@@ -2655,12 +2701,14 @@ def _case_condition_from_ids(case_id_symbol: str, case_ids: Sequence[int]) -> st
 
 
 def _insert_retained_profile_selection(draft: str, *, case_id_symbol: str, profiles: list[dict]) -> str:
-    if not profiles or "int nr_active = " in draft:
+    if not profiles or "int node_active = " in draft:
         return draft
     largest = profiles[0]
     static_lines = [
+        "    /* Active retained layout for the selected Pack case group. */",
         f"    int retained_profile = {largest['profile_id']};",
-        f"    int nr_active = NR_{largest['profile_id'].removeprefix('PROFILE_')};",
+        "    /* node_active is the retained-node count used by matrix allocation, g_mat_over, and GValue stamping. */",
+        f"    int node_active = {largest['retained_nodes_id']};",
     ]
     draft = draft.replace("    /* Runtime matrix objects */", "\n".join(static_lines) + "\n    /* Runtime matrix objects */", 1)
     selection = [
@@ -2670,7 +2718,7 @@ def _insert_retained_profile_selection(draft: str, *, case_id_symbol: str, profi
         keyword = "if" if index == 0 else "else if"
         selection.append(f"    {keyword} ({_case_condition_from_ids(case_id_symbol, profile['case_ids'])}) {{")
         selection.append(f"        retained_profile = {profile['profile_id']};")
-        selection.append(f"        nr_active = NR_{profile['profile_id'].removeprefix('PROFILE_')};")
+        selection.append(f"        node_active = {profile['retained_nodes_id']};")
         selection.append("    }")
     marker = "    int err = 0;"
     return draft.replace(marker, "\n".join(selection) + "\n" + marker, 1)
@@ -2678,31 +2726,35 @@ def _insert_retained_profile_selection(draft: str, *, case_id_symbol: str, profi
 
 def _apply_active_matrix_dimensions(draft: str) -> str:
     replacements = {
-        "matrixDim(&Grr_code, NR, NR)": "matrixDim(&Grr_code, nr_active, nr_active)",
-        "matrixDim(&Grk_code, NR, NK)": "matrixDim(&Grk_code, nr_active, NK)",
-        "matrixDim(&Gkr_code, NK, NR)": "matrixDim(&Gkr_code, NK, nr_active)",
-        "matrixDim(&Gred_code, NR, NR)": "matrixDim(&Gred_code, nr_active, nr_active)",
-        "matrixDim(&Ihisr_code, NR, 1)": "matrixDim(&Ihisr_code, nr_active, 1)",
-        "matrixDim(&Ihisred_code, NR, 1)": "matrixDim(&Ihisred_code, nr_active, 1)",
-        "matrixDim(&Vr_code, NR, 1)": "matrixDim(&Vr_code, nr_active, 1)",
-        "matrixDim(&tmp_Grk_W_code, NR, NK)": "matrixDim(&tmp_Grk_W_code, nr_active, NK)",
-        "matrixDim(&tmp_Grk_W_Gkr_code, NR, NR)": "matrixDim(&tmp_Grk_W_Gkr_code, nr_active, nr_active)",
-        "matrixDim(&tmp_Grk_W_Ihisk_code, NR, 1)": "matrixDim(&tmp_Grk_W_Ihisk_code, nr_active, 1)",
-        "matrixDim(&tmp_W_Gkr_code, NK, NR)": "matrixDim(&tmp_W_Gkr_code, NK, nr_active)",
+        "matrixDim(&Grr_code, NR, NR)": "matrixDim(&Grr_code, node_active, node_active)",
+        "matrixDim(&Grk_code, NR, NK)": "matrixDim(&Grk_code, node_active, NK)",
+        "matrixDim(&Gkr_code, NK, NR)": "matrixDim(&Gkr_code, NK, node_active)",
+        "matrixDim(&Gred_code, NR, NR)": "matrixDim(&Gred_code, node_active, node_active)",
+        "matrixDim(&Ihisr_code, NR, 1)": "matrixDim(&Ihisr_code, node_active, 1)",
+        "matrixDim(&Ihisred_code, NR, 1)": "matrixDim(&Ihisred_code, node_active, 1)",
+        "matrixDim(&Vr_code, NR, 1)": "matrixDim(&Vr_code, node_active, 1)",
+        "matrixDim(&tmp_Grk_W_code, NR, NK)": "matrixDim(&tmp_Grk_W_code, node_active, NK)",
+        "matrixDim(&tmp_Grk_W_Gkr_code, NR, NR)": "matrixDim(&tmp_Grk_W_Gkr_code, node_active, node_active)",
+        "matrixDim(&tmp_Grk_W_Ihisk_code, NR, 1)": "matrixDim(&tmp_Grk_W_Ihisk_code, node_active, 1)",
+        "matrixDim(&tmp_W_Gkr_code, NK, NR)": "matrixDim(&tmp_W_Gkr_code, NK, node_active)",
     }
     for old, new in replacements.items():
         draft = draft.replace(old, new)
     return draft
 
 
+def _rename_internal_node_constant_for_retained_layouts(draft: str) -> str:
+    return re.sub(r"\bNK\b", "INTERNAL_NODES", draft)
+
+
 def _apply_active_ram_overlay_dimension(draft: str, *, y_profile: dict, d_profile: dict) -> str:
     nr_d = int(d_profile["nr_active"])
     draft = re.sub(
         r"for \(int row = 0; row < \d+; row\+\+\) \{\n        for \(int col = 0; col < \d+; col\+\+\) \{\n            g_mat_over\[row\]\[col\] = 0\.0;",
-        "for (int row = 0; row < nr_active; row++) {\n        for (int col = 0; col < nr_active; col++) {\n            g_mat_over[row][col] = 0.0;",
+        "for (int row = 0; row < node_active; row++) {\n        for (int col = 0; col < node_active; col++) {\n            g_mat_over[row][col] = 0.0;",
         draft,
     )
-    draft = re.sub(r"setupGMatrix\(\d+\);", "setupGMatrix(nr_active);", draft, count=1)
+    draft = re.sub(r"setupGMatrix\(\d+\);", "setupGMatrix(node_active);", draft, count=1)
 
     lines = draft.splitlines()
     guarded: list[str] = []
@@ -2884,6 +2936,7 @@ def _apply_retained_layout_profile_compaction(
     draft = _guard_optional_retained_set_code_lines(draft, y_profile=profiles[0], d_profile=profiles[-1])
     draft = _guard_profile_y_matrix_lifecycle_lines(draft, y_profile=profiles[0])
     draft = _guard_profile_y_dynamic_schur_lines(draft, y_profile=profiles[0])
+    draft = _rename_internal_node_constant_for_retained_layouts(draft)
     return draft
 
 
@@ -4791,7 +4844,7 @@ def _build_dummy_finalized_matrix_dag_c_draft(
         profiles=alias_model["profiles"],
         aliases=aliases,
         gkk_template=_template_gkk_from_payload(template_payload),
-        active_nr_expr="nr_active",
+        active_nr_expr="node_active",
     )
     draft = _apply_retained_layout_profile_compaction(
         draft,

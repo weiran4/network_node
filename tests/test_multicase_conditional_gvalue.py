@@ -122,8 +122,8 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
             "        varG_B_B = G_dynamic;",
             draft,
         )
-        self.assertNotIn("cr_R1_G_eff = G_const;", draft)
-        self.assertNotIn("set_CODE(&G_code, 0, 0, cr_R1_G_eff);", draft)
+        self.assertNotIn("multcase_G_R1_A_A = G_const;", draft)
+        self.assertNotIn("set_CODE(&G_code, 0, 0, multcase_G_R1_A_A);", draft)
         self.assertNotIn("set_CODE(&Gred_code", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
         self.assertNotIn("varG_A_B = 0.0", draft)
@@ -161,9 +161,9 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
             "        varG_B_B = G_dynamic_2;",
             draft,
         )
-        self.assertNotIn("cr_R1_G_eff = G_const;", draft)
-        self.assertNotIn("cr_R1_G_eff = G_const_3;", draft)
-        self.assertNotIn("set_CODE(&G_code, 0, 0, cr_R1_G_eff);", draft)
+        self.assertNotIn("multcase_G_R1_A_A = G_const;", draft)
+        self.assertNotIn("multcase_G_R1_A_A = G_const_3;", draft)
+        self.assertNotIn("set_CODE(&G_code, 0, 0, multcase_G_R1_A_A);", draft)
         self.assertNotIn("set_CODE(&Gred_code", draft)
         self.assertNotIn(
             "switch (case_id) {\n"
@@ -221,8 +221,8 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         )
 
         draft = response["multi_case"]["c_draft"]
-        self.assertIn("cr_R1_G_eff = G_const;", draft)
-        self.assertIn("cr_R1_G_eff = G_dynamic;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_const;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_dynamic;", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
         self.assertIn('createGValue("varG_A_A", "A", "A", 0, "case_id == 1")', draft)
         self.assertIn('createGValue("varG_A_B", "A", "B", 0, "case_id == 1")', draft)
@@ -237,7 +237,7 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn("X = get_CODE(&Vk_code, 0, 0);", draft)
         self.assertNotIn("This conditional GValue export assumes no runtime case switching", draft)
 
-        alias = sp.Symbol("cr_R1_G_eff")
+        alias = sp.Symbol("multcase_G_R1_A_A")
         template_gred = sp.Matrix(response["multi_case"]["template"]["Gred"])
         for concrete in [sp.Symbol("G_const"), sp.Symbol("G_dynamic")]:
             substituted = template_gred.xreplace({alias: concrete})

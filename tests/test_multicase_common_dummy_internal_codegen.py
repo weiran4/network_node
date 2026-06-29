@@ -171,9 +171,16 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         response = build_multi_case_response(payload)
 
         draft = response["multi_case"]["c_draft"]
-        self.assertIn("enum { PROFILE_Y = 0, PROFILE_D = 1, NR_Y = 9, NR_D = 6, NK = 3 };", draft)
+        self.assertIn(
+            "enum { PACK_CASE_0 = 0, PACK_CASE_1 = 1, RETAINED_NODES_CASE_0 = 9, RETAINED_NODES_CASE_1 = 6, INTERNAL_NODES = 3 };",
+            draft,
+        )
+        self.assertIn("/* Multi-case retained-layout constants:", draft)
+        self.assertIn("PACK_CASE_n identifies a group of case_id values", draft)
+        self.assertIn("RETAINED_NODES_CASE_n is the active retained-node count", draft)
+        self.assertIn("INTERNAL_NODES is the number of eliminated internal nodes", draft)
         self.assertNotIn("for (int col = 0; col < NR; col++)", draft)
-        self.assertIn("for (int col = 0; col < nr_active; col++)", draft)
+        self.assertIn("for (int col = 0; col < node_active; col++)", draft)
         self.assertIn("Case-resolved diagonal Gkk scalar Schur/Ihis path", draft)
         scalar_marker = draft.index("Case-resolved diagonal Gkk scalar Schur/Ihis path")
         diagonal_block_start = draft.index("case 4:", scalar_marker)

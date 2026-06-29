@@ -432,7 +432,7 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("branch.switchCases[index].name = name;", source)
         self.assertIn('if (field === "packageNetworkCaseName") return', source)
 
-    def test_dummy_dimension_branch_is_pack_edit_only_and_fixed(self):
+    def test_legacy_dummy_dimension_branch_is_compat_only_not_a_user_action(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
         self.assertIn("dummy_dimension_branch", source)
@@ -440,9 +440,11 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("if (!state.packageCaseEdit) return;", source)
         self.assertIn("G_EPSILON", source)
         self.assertIn("dummyTerminalSide", source)
-        self.assertIn("data-package-case-overlay-action=\"dummy\"", source)
+        self.assertNotIn("data-package-case-overlay-action=\"dummy\"", source)
+        self.assertNotIn("新增 Dummy 支路", source)
         self.assertIn("if (isDummyTerminal(branch, portSide))", source)
         self.assertIn("function validateDummyBranchesForPackCase", source)
+        self.assertIn("const internalGroupIds = new Set((subsystem.internalGroups || []).map(group => group.id));", source)
         self.assertIn("function buildDummyAdjustedPackReduction", source)
         self.assertIn("dummyAdjusted.reductionPayload", source)
         self.assertIn("dummyAdjusted.finalSubsystem", source)

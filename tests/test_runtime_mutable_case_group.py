@@ -93,12 +93,12 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         draft = response["multi_case"]["c_draft"]
         aliases = response["multi_case"]["aliases"]
 
-        self.assertIn("cr_R11_G_eff", aliases)
-        self.assertEqual(aliases["cr_R11_G_eff"]["owner"], "CODE")
-        self.assertTrue(aliases["cr_R11_G_eff"]["runtime_mutable"])
+        self.assertIn("multcase_G_R11_A_A", aliases)
+        self.assertEqual(aliases["multcase_G_R11_A_A"]["owner"], "CODE")
+        self.assertTrue(aliases["multcase_G_R11_A_A"]["runtime_mutable"])
         self.assertIn("switch (runtime_R11_case_id)", draft)
-        self.assertIn("cr_R11_G_eff = G_const;", draft)
-        self.assertIn("cr_R11_G_eff = G_dyn;", draft)
+        self.assertIn("multcase_G_R11_A_A = G_const;", draft)
+        self.assertIn("multcase_G_R11_A_A = G_dyn;", draft)
         self.assertNotIn("G_dyn - G_const", draft)
         self.assertNotIn("G_const - G_dyn", draft)
 
@@ -322,9 +322,9 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         draft = response["multi_case"]["c_draft"]
 
         self.assertIn("switch (runtime_R11_case_id)", draft)
-        self.assertIn("cr_R11_G_eff = G_const;", draft)
-        self.assertIn("cr_R11_G_eff = G_dyn;", draft)
-        self.assertIn("Gkk_k1_k1 = G2 + cr_R11_G_eff;", draft)
+        self.assertIn("multcase_G_R11_A_A = G_const;", draft)
+        self.assertIn("multcase_G_R11_A_A = G_dyn;", draft)
+        self.assertIn("Gkk_k1_k1 = G2 + multcase_G_R11_A_A;", draft)
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
         self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);", draft)
         self.assertNotIn("matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);", draft)
