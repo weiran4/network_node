@@ -304,6 +304,8 @@ class MultiCaseDummyNodeBlockTests(unittest.TestCase):
         for line in rc_gvalue_lines:
             self.assertIn(f', "{y_only_condition}")', line)
             self.assertNotIn(', "TRUE")', line)
+        stamp_section = draft.split("/* Stamp dynamic Gred entries", 1)[1].split("/* CODE-SIDE IHIS", 1)[0]
+        self.assertLessEqual(stamp_section.count("switch (case_id) {"), 1)
         self.assertIn("if (retained_profile == PROFILE_Y) {\n        varG_RC_A_RC_A = get_CODE(&Gred_dyn_code, 0, 0);", draft)
         self.assertRegex(
             draft,

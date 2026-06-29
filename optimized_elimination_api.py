@@ -4312,7 +4312,7 @@ def _apply_dummy_finalization_gvalue_conditions(
     reuse_nodes_by_case: Mapping[int, Sequence[str]] | None = None,
 ) -> tuple[str, list[dict]]:
     gvalue_conditions: list[dict] = []
-    grouped_entries: dict[tuple[int, ...], list[dict]] = {}
+    ordered_entries: list[dict] = []
 
     def _find_gvalue_get_assignment(var: str, row: int, col: int) -> str | None:
         for matrix_name in ["Gred_code", "Gred_dyn_code", "G_code"]:
@@ -4348,8 +4348,15 @@ def _apply_dummy_finalization_gvalue_conditions(
             mapped[target] = (base, int(item.sign))
         return mapped
 
-    def _switch_lines_with_reuse(case_indices: Sequence[int], entries: Sequence[dict]) -> list[str] | None:
-        if not case_indices or not entries:
+    def _merged_switch_lines_with_reuse(entries: Sequence[dict]) -> list[str] | None:
+        if not entries:
+            return None
+        case_indices = sorted({
+            int(case_index)
+            for entry in entries
+            for case_index in (entry.get("active_cases") or [])
+        })
+        if not case_indices:
             return None
         grouped_by_lines: dict[tuple[str, ...], list[int]] = {}
         used_reuse = False
@@ -4358,6 +4365,8 @@ def _apply_dummy_finalization_gvalue_conditions(
             assigned_pairs: set[tuple[int, int]] = set()
             lines_for_case: list[str] = []
             for entry in entries:
+                if case_index not in entry.get("active_case_set", set()):
+                    continue
                 pair = (int(entry["row"]), int(entry["col"]))
                 reuse = reuse_map.get(pair)
                 if reuse and reuse[0] in assigned_pairs:
@@ -4369,7 +4378,8 @@ def _apply_dummy_finalization_gvalue_conditions(
                 else:
                     lines_for_case.append(str(entry["assignment"]))
                 assigned_pairs.add(pair)
-            grouped_by_lines.setdefault(tuple(lines_for_case), []).append(int(case_index))
+            if lines_for_case:
+                grouped_by_lines.setdefault(tuple(lines_for_case), []).append(int(case_index))
         if not used_reuse:
             return None
         lines = [f"    switch ({case_id_symbol}) {{"]
@@ -4400,12 +4410,15 @@ def _apply_dummy_finalization_gvalue_conditions(
             var = _var_g_name(c_external_nodes, row, col)
             assignment = _find_gvalue_get_assignment(var, row, col)
             if assignment:
-                grouped_entries.setdefault(tuple(active_cases), []).append({
+                entry = {
+                    "active_cases": tuple(active_cases),
+                    "active_case_set": {int(index) for index in active_cases},
                     "row": row,
                     "col": col,
                     "var": var,
                     "assignment": assignment,
-                })
+                }
+                ordered_entries.append(entry)
             if len(active_cases) == len(profile_set.case_profiles):
                 continue
             condition = _case_condition(case_id_symbol, active_cases)
@@ -4425,11 +4438,9 @@ def _apply_dummy_finalization_gvalue_conditions(
             )
             draft = draft.replace(pattern, replacement)
 
-    for case_indices, entries in grouped_entries.items():
-        switch_lines = _switch_lines_with_reuse(case_indices, entries)
-        if not switch_lines:
-            continue
-        assignments = [str(entry["assignment"]) for entry in entries]
+    switch_lines = _merged_switch_lines_with_reuse(ordered_entries)
+    if switch_lines:
+        assignments = [str(entry["assignment"]) for entry in ordered_entries]
         first_assignment = assignments[0]
         for assignment in assignments[1:]:
             draft = draft.replace(f"    {assignment}", "", 1)
@@ -4438,6 +4449,7 @@ def _apply_dummy_finalization_gvalue_conditions(
             "\n".join(switch_lines),
             1,
         )
+        draft = re.sub(r"\n{4,}", "\n\n\n", draft)
     return draft, gvalue_conditions
 
 
