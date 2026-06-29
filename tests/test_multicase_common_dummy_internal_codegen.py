@@ -1,4 +1,6 @@
 import unittest
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 import optimized_elimination_api as optimized_api
@@ -134,6 +136,26 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertNotIn("One variable per eliminated node, in effective k order.", draft)
         self.assertNotIn("NR_FINAL_MAX", draft)
         self.assertNotIn("Piecewise", draft)
+
+    def test_trf_rcy_ucm_reports_per_profile_gred_entry_reuse(self):
+        data = json.loads(Path("exports/Trf_RCY_UCM.json").read_text(encoding="utf-8"))
+        cache_key = data["multiCaseExportCache"][0]["key"]
+        payload = json.loads(cache_key)
+        payload["mode"] = "multi_case_c_export"
+
+        response = build_multi_case_response(payload)
+
+        groups = response["multi_case"].get("gred_entry_reuse_by_case") or []
+        by_case = {
+            group.get("case_index"): {
+                item.get("text")
+                for item in (group.get("items") or [])
+            }
+            for group in groups
+        }
+        self.assertIn("Gred[B_1,RC_A] = -Gred[A_1,RC_A]", by_case.get(6, set()))
+        self.assertIn("Gred[C_1,RC_B] = -Gred[B_1,RC_B]", by_case.get(6, set()))
+        self.assertIn("Gred[C_1,RC_C] = -Gred[A_1,RC_C]", by_case.get(6, set()))
 
 
 if __name__ == "__main__":

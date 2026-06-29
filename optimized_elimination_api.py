@@ -4264,6 +4264,43 @@ def _dummy_finalized_gred_reuse_by_case(
     return reuse_by_case, nodes_by_case
 
 
+def _source_gred_reuse_by_case(
+    profiles: Sequence[Mapping],
+) -> tuple[dict[int, list[GredEntryReuse]], dict[int, list[str]], dict[int, list[str]]]:
+    """Find per-profile Gred whole-entry reuse from source Schur inputs.
+
+    Dummy-finalized multi-case C export may use a shared MATRIX_ DAG for codegen,
+    while the visible final dimensions vary by case.  The reusable Gred
+    relationships users expect to inspect are still relationships in each
+    profile's source-level Schur system, so compute them before any final
+    dummy-node slicing.  This stays on the structural path and intentionally
+    avoids simplify/cancel/factor.
+    """
+    reuse_by_case: dict[int, list[GredEntryReuse]] = {}
+    node_ids_by_case: dict[int, list[str]] = {}
+    display_nodes_by_case: dict[int, list[str]] = {}
+    for index, profile in enumerate(profiles or []):
+        case_index = int(profile.get("index", index))
+        payload = profile.get("payload") or {}
+        external_nodes = [str(node) for node in (payload.get("external_nodes") or [])]
+        display_names = payload.get("node_display_names") or {}
+        node_ids_by_case[case_index] = external_nodes
+        display_nodes_by_case[case_index] = [str(display_names.get(node, node)) for node in external_nodes]
+        if not external_nodes:
+            reuse_by_case[case_index] = []
+            continue
+        try:
+            reuse_by_case[case_index] = structural_gred_entry_reuse_plan(
+                _parse_matrix(payload.get("G_full") or []),
+                [str(node) for node in (payload.get("all_nodes") or [])],
+                external_nodes,
+                [str(node) for node in (payload.get("internal_nodes") or [])],
+            )
+        except Exception:
+            reuse_by_case[case_index] = []
+    return reuse_by_case, node_ids_by_case, display_nodes_by_case
+
+
 def _apply_dummy_finalization_gvalue_conditions(
     draft: str,
     *,
@@ -4606,7 +4643,20 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
             or _dummy_finalized_matrix_dag_is_preferred(final_results)
         )
     )
-    display_reuse_plan_by_case, display_reuse_nodes_by_case = _dummy_finalized_gred_reuse_by_case(final_results)
+    (
+        source_reuse_plan_by_case,
+        source_reuse_node_ids_by_case,
+        source_reuse_display_nodes_by_case,
+    ) = _source_gred_reuse_by_case(profiles)
+    final_reuse_plan_by_case, final_reuse_nodes_by_case = _dummy_finalized_gred_reuse_by_case(final_results)
+    if any(source_reuse_plan_by_case.values()):
+        display_reuse_plan_by_case = source_reuse_plan_by_case
+        display_reuse_nodes_by_case = source_reuse_display_nodes_by_case
+        draft_reuse_nodes_by_case = source_reuse_node_ids_by_case
+    else:
+        display_reuse_plan_by_case = final_reuse_plan_by_case
+        display_reuse_nodes_by_case = final_reuse_nodes_by_case
+        draft_reuse_nodes_by_case = final_reuse_nodes_by_case
     gvalue_conditions: list[dict] = []
     extra_warnings: list[str] = []
     matrix_dag_result: dict | None = None
@@ -4617,7 +4667,7 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
             profile_set=profile_set,
             case_id_symbol=case_id_symbol,
             reuse_plan_by_case=display_reuse_plan_by_case,
-            reuse_nodes_by_case=display_reuse_nodes_by_case,
+            reuse_nodes_by_case=draft_reuse_nodes_by_case,
         )
         fast_path = "dummy_finalization_alias_template_matrix_dag"
     else:

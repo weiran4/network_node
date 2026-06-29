@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C Export Logic Mind Map</title>
+  <script src="./vendor/mermaid/mermaid.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --panel-2: #f8fafc;
+      --line: #111827;
+      --soft-line: #d1d5db;
+      --text: #111827;
+      --muted: #4b5563;
+      --accent: #111827;
+      --accent-2: #111827;
+      --danger: #b91c1c;
+      --shadow: rgba(17, 24, 39, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Times New Roman", Times, serif;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 22px;
+      border-bottom: 2px solid var(--line);
+      background: #ffffff;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    button {
+      border: 2px solid #111827;
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--text);
+      padding: 9px 12px;
+      font-weight: 650;
+      cursor: pointer;
+      min-height: 38px;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 18px;
+    }
+
+    button.primary {
+      background: #111827;
+      border-color: #111827;
+      color: #ffffff;
+    }
+
+    button:hover {
+      background: #f3f4f6;
+      border-color: var(--accent);
+    }
+
+    button.primary:hover {
+      background: #374151;
+      color: #ffffff;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(340px, 0.42fr) minmax(520px, 0.58fr);
+      gap: 16px;
+      padding: 16px;
+      height: calc(100vh - 87px);
+    }
+
+    .pane {
+      min-width: 0;
+      min-height: 0;
+      border: 2px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 12px 34px var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pane-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 2px solid var(--line);
+      background: var(--panel-2);
+      font-weight: 700;
+      font-size: 20px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    textarea {
+      flex: 1;
+      width: 100%;
+      min-height: 0;
+      resize: none;
+      border: 0;
+      outline: 0;
+      padding: 14px;
+      background: #ffffff;
+      color: #111827;
+      font: 18px/1.55 "Times New Roman", Times, serif;
+      tab-size: 2;
+    }
+
+    #preview {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 28px;
+      background: #ffffff;
+    }
+
+    #preview svg {
+      max-width: none;
+      width: 2600px;
+      min-width: 2600px;
+      height: auto;
+      font-size: 34px;
+    }
+
+    #preview .formula,
+    #preview .formula *,
+    #preview .nodeLabel .formula,
+    #preview foreignObject .formula {
+      color: #1d4ed8 !important;
+      fill: #1d4ed8 !important;
+      font-family: "Cambria Math", "Latin Modern Math", "STIX Two Math", "Times New Roman", serif !important;
+      font-style: italic;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    #preview .math-word,
+    #preview .math-word *,
+    #preview .nodeLabel .math-word,
+    #preview foreignObject .math-word {
+      color: #9333ea !important;
+      fill: #9333ea !important;
+      font-weight: 700;
+    }
+
+    .status {
+      min-height: 34px;
+      padding: 8px 14px;
+      border-top: 2px solid var(--soft-line);
+      color: var(--muted);
+      font-size: 16px;
+      background: #f9fafb;
+    }
+
+    .status.error {
+      color: #7f1d1d;
+      background: #fef2f2;
+      border-top-color: #b91c1c;
+      white-space: pre-wrap;
+    }
+
+    .fallback {
+      border: 2px solid #b91c1c;
+      border-radius: 8px;
+      padding: 14px;
+      color: #7f1d1d;
+      background: #fef2f2;
+      white-space: pre-wrap;
+      font: 14px/1.55 "Times New Roman", Times, serif;
+    }
+
+    @media (max-width: 980px) {
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .actions {
+        justify-content: flex-start;
+      }
+
+      main {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+
+      .pane {
+        min-height: 420px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>C Export Logic Flowchart</h1>
+      <div class="subtitle">Local Mermaid preview for discussion and reporting. Edit the source on the left, then refresh the preview.</div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="renderButton" type="button">Refresh Preview</button>
+      <button id="copyButton" type="button">Copy Mermaid</button>
+      <button id="downloadSvgButton" type="button">Download SVG</button>
+      <button id="resetButton" type="button">Reset Default</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="pane">
+      <div class="pane-title">
+        <span>Mermaid Source</span>
+        <span class="hint">flowchart syntax</span>
+      </div>
+      <textarea id="source" spellcheck="false"></textarea>
+      <div class="status" id="editorStatus">Edits are stored locally in browser localStorage.</div>
+    </section>
+
+    <section class="pane">
+      <div class="pane-title">
+        <span>Preview</span>
+        <span class="hint">local vendor/mermaid</span>
+      </div>
+      <div id="preview"></div>
+      <div class="status" id="renderStatus">Ready to render.</div>
+    </section>
+  </main>
+
+  <script>
+    const storageKey = "branch-builder-c-export-flowchart-v28";
+    const defaultMindmap = `flowchart TD
+  GFULL(("Full network equations<br/><span class='formula'>Gfull / Ihisfull</span>"))
+  STAMP["Build node order and stamp all sources<br/>branches / blackboxes / controlled sources / observers"]
+  MC{"Multi-case model?"}
+  SINGLE["Single-case mode<br/>use the active UI case"]
+  %% AI note: alias-template first compares case-resolved source entries; entries that differ across cases get cr_*_eff aliases.
+  %% AI note: each cr_*_eff is assigned the full source value for the selected case before the shared template DAG runs.
+  %% AI note: never generate base + delta for Schur inputs because inv(Gkk) makes delta compensation unsafe.
+  MULTI["Compare each source matrix entry across cases<br/>Example: if <span class='formula'>G[x][x]</span> is <span class='math-word'>G1</span> in case 0 and <span class='math-word'>G2</span> in case 1<br/>replace that template entry by <span class='formula'>cr_*_eff</span><br/><span class='formula'>cr_*_eff</span> is assigned the selected case full value<br/>then one shared <span class='formula'>Gred / Vk</span> flow is generated"]
+  %% AI note: code reuse also requires compatible RAM/CODE owner and active case condition.
+  CASESAFE["Case compatibility check<br/>same node order<br/>same branch connections and blackbox port order<br/>same retained/internal partition<br/>same observer definitions"]
+  RUNTIME{"Can case_id change during CODE?"}
+  INITCASE["Initialization-time case<br/>optional RAM switch<br/>fixed after simulation starts"]
+  RUNTIMECASE["Runtime-changeable case group<br/>only expressions may change<br/>topology and matrix dimensions must stay fixed"]
+
+  INTERNAL{"Any internal nodes to eliminate?"}
+  NOINT["No node elimination<br/><span class='formula'>Gred = Gfull</span><br/><span class='formula'>Ihisred = Ihis</span>"]
+  NOINT_STAGE{"G entry placement?"}
+  NOINT_RAM["All RAM constants<br/>write <span class='formula'>g_mat_over</span> in RAM_PASS1<br/>call <span class='formula'>setupGMatrix</span>"]
+  NOINT_CODE["Some CODE-side G entries<br/>create <span class='formula'>varG</span> handles in GVALUES<br/>assign <span class='formula'>varG</span> directly when possible<br/>avoid unnecessary set_CODE/get_CODE matrices"]
+  NOINT_IHIS["Write <span class='formula'>Ihis</span> directly to Inj<br/>no Schur flow and no Vk recovery"]
+
+  %% AI note: source-level split means Gtotal = Gcore + Gdirect and Ihis_total = Ihis_core + Ihis_direct.
+  SPLIT["Source-level split by element support nodes<br/>Retained-only elements: direct-retained path, not part of Schur elimination<br/>constant direct terms: stamp in RAM_PASS1<br/>runtime direct terms: update and add in CODE<br/>elements touching internal nodes: core network for elimination and voltage recovery"]
+  DUMMY{"Any Dummy / N-Dummy alignment nodes?"}
+  DUMMY_FINAL["Dummy / N-Dummy nodes align cases with different visible structures<br/>before C export, finalize them for the selected case<br/>they are pruned or forced into elimination<br/>they are not real retained-side stamp nodes"]
+  DUMMY_KEEP["No Dummy / N-Dummy nodes<br/>continue with physical node order"]
+  CORE["Core block partition<br/>split the core network by node role<br/><span class='math-word'>r</span>: retained external nodes<br/><span class='math-word'>k</span>: internal nodes to eliminate<br/><span class='formula'>Grr</span>: retained-retained block<br/><span class='formula'>Grk / Gkr</span>: retained-internal coupling<br/><span class='formula'>Gkk</span>: internal-internal block<br/><span class='formula'>Ihisr / Ihisk</span>: retained/internal history vectors"]
+  DIRECT["Direct-retained placement<br/><span class='formula'>Gdirect / Ihisdirect</span> never enter <span class='formula'>Gkk / W / Schur</span><br/>RAM constants go to <span class='formula'>g_mat_over</span><br/>CODE or STEP terms update <span class='formula'>varG / Inj</span><br/>final equation adds them after Schur"]
+
+  GKK{"Gkk structure?"}
+  DIAG["Diagonal <span class='formula'>Gkk</span><br/>only diagonal terms exist<br/><span class='formula'>W(k,k) = 1 / Gkk(k,k)</span><br/><span class='formula'>W(k,m) = 0</span> for off-diagonal entries"]
+  DIAG_OPT["Scalar diagonal path<br/><span class='formula'>Gschur(i,j) = Grr(i,j) - Σk Grk(i,k)Gkr(k,j)/Gkk(k,k)</span><br/><span class='formula'>Ihis_schur(i) = Ihisr(i) - Σk Grk(i,k)Ihisk(k)/Gkk(k,k)</span><br/><span class='formula'>Vk(k) = -(Gkr(k,*)·Vr + Ihisk(k))/Gkk(k,k)</span><br/>no explicit W matrix or matrix multiplication is required"]
+  DPC["Diagonal plus small coupled block<br/>most internal nodes are diagonal-only<br/>a small coupled subset has size ≤ 3<br/>eliminate diagonal-only nodes first<br/>then solve the small coupled block"]
+  DUSM["Block inverse for the coupled subset<br/><span class='formula'>Gkk = [[D, U], [Uᵀ, S]]</span><br/><span class='formula'>D</span> is diagonal, <span class='formula'>S</span> is the small coupled block<br/><span class='formula'>M = S - UᵀD⁻¹U</span><br/>use fast 2x2 / 3x3 symmetric inverse on <span class='formula'>M</span><br/><span class='formula'>W = [[D⁻¹ + D⁻¹UM⁻¹UᵀD⁻¹, -D⁻¹UM⁻¹], [-M⁻¹UᵀD⁻¹, M⁻¹]]</span>"]
+  GEN["General <span class='formula'>Gkk</span><br/>use runtime matrix inverse<br/>avoid expanding a large symbolic inverse in Python"]
+
+  SCHUR["Shared intermediate DAG<br/><span class='formula'>W</span> is already produced by the selected inverse path<br/>compute shared intermediates<br/><span class='formula'>A = Grk · W</span><br/><span class='formula'>b = W · Ihisk</span><br/><span class='formula'>A</span> serves both Gred and Vk<br/><span class='formula'>b</span> serves both Ihisred and Vk"]
+  SYM_REUSE["Symmetric-network reuse<br/>if <span class='formula'>Gcore</span> is symmetric, then <span class='formula'>Gkr = Grkᵀ</span> and <span class='formula'>W</span> is symmetric<br/><span class='formula'>W · Gkr = Aᵀ</span><br/><span class='formula'>Gschur_upper = Grr_upper - upper(A · Gkr)</span><br/><span class='formula'>Ihisschur = Ihisr - Grk · b</span><br/><span class='formula'>Vk = -Aᵀ · Vr - b</span>"]
+  VK["Vk recovery<br/><span class='formula'>Vk = -W · Gkr · Vr - W · Ihisk</span><br/>core matrices only"]
+  FINAL["Final assembly<br/><span class='formula'>Gfinal_upper = Gschur_upper + Gdirect_upper</span><br/><span class='formula'>Ihisfinal = Ihisschur + Ihisdirect</span><br/>only upper-triangle G stamp entries are needed<br/>each entry carries its RAM / CODE / STEP placement"]
+  %% AI note: ideas that may differ from current source code:
+  %% 1. diagonal Gkk can bypass explicit W and matrix multiplication with scalar Schur/Vk.
+  %% 2. symmetric networks can reuse A=Grk*W, W*Gkr=A^T, and b=W*Ihisk.
+  %% 3. multi-case / dummy paths must validate these fast paths per case/profile.
+
+  PRUNE["C draft emission<br/>write only required <span class='formula'>G / Ihis / Vk</span> paths<br/>omit zero entries<br/>RAM constants do not enter CODE<br/>unused MATRIX objects are not registered or conditioned"]
+  OUT["RTDS draft sections<br/>STATIC blank line<br/>RAM_PASS1<br/>GVALUES<br/>CODE BEGIN_T0<br/>T1_T2"]
+
+  GFULL --> STAMP --> MC
+  MC -- "No" --> SINGLE --> INTERNAL
+  MC -- "Yes" --> MULTI --> CASESAFE --> RUNTIME
+  RUNTIME -- "No" --> INITCASE --> INTERNAL
+  RUNTIME -- "Yes" --> RUNTIMECASE --> INTERNAL
+
+  INTERNAL -- "No" --> NOINT --> NOINT_STAGE
+  NOINT_STAGE -- "RAM" --> NOINT_RAM --> NOINT_IHIS --> OUT
+  NOINT_STAGE -- "CODE / STEP" --> NOINT_CODE --> NOINT_IHIS
+
+  INTERNAL -- "Yes" --> SPLIT
+  SPLIT --> DUMMY
+  DUMMY -- "Yes" --> DUMMY_FINAL --> CORE
+  DUMMY -- "No" --> DUMMY_KEEP --> CORE
+  SPLIT --> DIRECT
+  CORE --> GKK
+  GKK -- "diagonal" --> DIAG --> DIAG_OPT --> FINAL
+  GKK -- "diagonal + coupled" --> DPC --> DUSM --> SCHUR
+  GKK -- "general" --> GEN --> SCHUR
+  DIRECT --> FINAL
+  SCHUR --> SYM_REUSE --> FINAL
+  FINAL --> PRUNE --> OUT
+
+  classDef start fill:#ffffff,stroke:#111827,color:#111111,stroke-width:3px,font-size:34px;
+  classDef decision fill:#ffffff,stroke:#d97706,color:#111111,stroke-width:3px,font-size:34px;
+  classDef ram fill:#ffffff,stroke:#15803d,color:#111111,stroke-width:3px,font-size:34px;
+  classDef code fill:#ffffff,stroke:#2563eb,color:#111111,stroke-width:3px,font-size:34px;
+  classDef warn fill:#ffffff,stroke:#be185d,color:#111111,stroke-width:3px,font-size:34px;
+  classDef out fill:#ffffff,stroke:#7c3aed,color:#111111,stroke-width:3px,font-size:34px;
+
+  class GFULL start;
+  class MC,INTERNAL,NOINT_STAGE,DUMMY,GKK,RUNTIME decision;
+  class NOINT_RAM,DIAG,DIAG_OPT,DPC ram;
+  class NOINT_CODE,RUNTIMECASE code;
+  class DUMMY_FINAL warn;
+  class OUT out;`;
+
+    const sourceEl = document.getElementById("source");
+    const previewEl = document.getElementById("preview");
+    const renderStatusEl = document.getElementById("renderStatus");
+    const editorStatusEl = document.getElementById("editorStatus");
+
+    function setStatus(message, isError = false) {
+      renderStatusEl.textContent = message;
+      renderStatusEl.classList.toggle("error", isError);
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    async function renderMindmap() {
+      const source = sourceEl.value.trim();
+      if (!window.mermaid) {
+        previewEl.innerHTML = '<div class="fallback">Mermaid is not loaded. Please confirm vendor/mermaid/mermaid.min.js exists.</div>';
+        setStatus("Local Mermaid resource is not loaded.", true);
+        return;
+      }
+      if (!source) {
+        previewEl.innerHTML = '<div class="fallback">Enter Mermaid flowchart source.</div>';
+        setStatus("Nothing to render.", true);
+        return;
+      }
+
+      try {
+        const id = "flowchart-" + Date.now();
+        const result = await mermaid.render(id, source);
+        previewEl.innerHTML = result.svg;
+        setStatus("Rendered.");
+      } catch (error) {
+        previewEl.innerHTML = '<div class="fallback">' + escapeHtml(source) + '</div>';
+        setStatus("Mermaid render failed:\n" + (error && error.message ? error.message : String(error)), true);
+      }
+    }
+
+    async function copySource() {
+      const text = sourceEl.value;
+      try {
+        await navigator.clipboard.writeText(text);
+        editorStatusEl.textContent = "Mermaid source copied.";
+      } catch {
+        sourceEl.focus();
+        sourceEl.select();
+        document.execCommand("copy");
+        editorStatusEl.textContent = "Mermaid source copied.";
+      }
+    }
+
+    function serializeSvgForDownload(svg) {
+      const clonedSvg = svg.cloneNode(true);
+      clonedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      clonedSvg.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+
+      const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+      style.textContent = `
+        text, tspan, foreignObject, .nodeLabel {
+          font-family: "Times New Roman", Times, serif;
+          font-size: 34px;
+        }
+        .formula, .formula * {
+          color: #1d4ed8 !important;
+          fill: #1d4ed8 !important;
+          font-family: "Cambria Math", "Latin Modern Math", "STIX Two Math", "Times New Roman", serif !important;
+          font-style: italic;
+          font-weight: 700;
+        }
+        .math-word, .math-word * {
+          color: #9333ea !important;
+          fill: #9333ea !important;
+          font-weight: 700;
+        }
+      `;
+      clonedSvg.insertBefore(style, clonedSvg.firstChild);
+
+      const xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        + new XMLSerializer().serializeToString(clonedSvg);
+      const parsed = new DOMParser().parseFromString(xml, "image/svg+xml");
+      const parserError = parsed.querySelector("parsererror");
+      if (parserError) {
+        throw new Error(parserError.textContent || "Generated SVG is not valid XML.");
+      }
+      return xml;
+    }
+
+    function downloadSvg() {
+      const svg = previewEl.querySelector("svg");
+      if (!svg) {
+        setStatus("No SVG is available to download. Render the diagram first.", true);
+        return;
+      }
+      try {
+        const source = serializeSvgForDownload(svg);
+        const blob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "c-export-logic-flowchart.svg";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        setStatus("SVG downloaded. SVG is vector-based, so it can be scaled without pixelation.");
+      } catch (error) {
+        setStatus("SVG export failed:\n" + (error && error.message ? error.message : String(error)), true);
+      }
+    }
+
+    function resetSource() {
+      sourceEl.value = defaultMindmap;
+      localStorage.setItem(storageKey, defaultMindmap);
+      editorStatusEl.textContent = "Default flowchart restored.";
+      renderMindmap();
+    }
+
+    if (window.mermaid) {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "loose",
+        theme: "base",
+        flowchart: {
+          htmlLabels: true,
+          curve: "basis"
+        },
+        themeVariables: {
+          background: "#ffffff",
+          mainBkg: "#ffffff",
+          primaryColor: "#ffffff",
+          primaryTextColor: "#111111",
+          primaryBorderColor: "#111111",
+          secondaryColor: "#ffffff",
+          secondaryTextColor: "#111111",
+          secondaryBorderColor: "#111111",
+          tertiaryColor: "#ffffff",
+          tertiaryTextColor: "#111111",
+          tertiaryBorderColor: "#111111",
+          lineColor: "#111111",
+          edgeLabelBackground: "#ffffff",
+          clusterBkg: "#ffffff",
+          clusterBorder: "#111111",
+          nodeBorder: "#111111",
+          fontFamily: "Times New Roman, Times, serif",
+          fontSize: "34px"
+        }
+      });
+    }
+
+    sourceEl.value = localStorage.getItem(storageKey) || defaultMindmap;
+    sourceEl.addEventListener("input", () => {
+      localStorage.setItem(storageKey, sourceEl.value);
+      editorStatusEl.textContent = "Edit stored locally. Click Refresh Preview to update the diagram.";
+    });
+    document.getElementById("renderButton").addEventListener("click", renderMindmap);
+    document.getElementById("copyButton").addEventListener("click", copySource);
+    document.getElementById("downloadSvgButton").addEventListener("click", downloadSvg);
+    document.getElementById("resetButton").addEventListener("click", resetSource);
+
+    renderMindmap();
+  </script>
+</body>
+</html>
