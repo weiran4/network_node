@@ -230,8 +230,10 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertNotIn('createGValue("varG_A_A", "A", "A", 0, "TRUE")', draft)
         self.assertIn("T1_T2:", draft)
         self.assertIn("Internal-node voltage recovery after solved retained-node voltages are available", draft)
-        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code", draft)
-        self.assertIn("matrix_scalarMult_CODE(&Vk_code", draft)
+        self.assertIn("Diagonal Gkk scalar CODE path: Vk[k] = -(Gkr[k,*] * Vr + Ihisk[k]) / Gkk[k,k].", draft)
+        self.assertIn("vk_sum += get_CODE(&Gkr_code, k, j) * get_CODE(&Vr_code, j, 0);", draft)
+        self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code", draft)
+        self.assertNotIn("matrix_scalarMult_CODE(&Vk_code", draft)
         self.assertIn("X = get_CODE(&Vk_code, 0, 0);", draft)
         self.assertNotIn("This conditional GValue export assumes no runtime case switching", draft)
 

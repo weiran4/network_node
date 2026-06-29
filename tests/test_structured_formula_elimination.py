@@ -303,12 +303,31 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         self.assertIn('double varG_A_A = createGValue("varG_A_A", "A", "A", 0, "TRUE");', draft)
         self.assertIn('double varG_A_B = createGValue("varG_A_B", "A", "B", 0, "TRUE");', draft)
         self.assertIn('double varG_B_B = createGValue("varG_B_B", "B", "B", 0, "TRUE");', draft)
-        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);", draft)
+        self.assertNotIn("MATRIX_ W_code", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
         self.assertIn("varG_A_A = get_CODE(&Gred_code, 0, 0);", draft)
         self.assertIn("varG_A_B = get_CODE(&Gred_code, 0, 1);", draft)
         self.assertIn("varG_B_B = get_CODE(&Gred_code, 1, 1);", draft)
         self.assertNotIn("set_CODE(&Gred_code, 0, 0, Gc*Gv/(Gc + Gv));", draft)
         self.assertIn("double Gc = 0.0;", draft)
+
+    def test_diagonal_gkk_code_path_uses_scalar_schur_and_vk(self):
+        Gc, Gv = sp.symbols("Gc Gv")
+        nodes = ["A", "B", "X"]
+        G = sp.Matrix([[Gc, 0, -Gc], [0, Gv, -Gv], [-Gc, -Gv, Gc + Gv]])
+        structured = build_structured_formula(G, sp.zeros(3, 1), nodes, ["A", "B"], ["X"])
+        plan = build_dependency_stage_plan(structured, {"Gc": "RAM_CONSTANT", "Gv": "CODE_VARIABLE"})
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);", draft)
+        self.assertIn("vk_sum += get_CODE(&Gkr_code, k, j) * get_CODE(&Vr_code, j, 0);", draft)
+        self.assertNotIn("MATRIX_ W_code", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
 
     def test_dependency_stage_plan_places_history_source_per_step(self):
         G1, G2, h = sp.symbols("G1 G2 h")
@@ -336,10 +355,12 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
         self.assertIn("set(&Grk_code, 0, 0, Grk_A_k1);", draft)
-        self.assertIn("set(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
+        self.assertNotIn("set(&Gkr_code", draft)
         self.assertIn("set(&W_code, 0, 0, W_1_1);", draft)
         self.assertIn("matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
-        self.assertIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
+        self.assertIn("Symmetry reuse: W * Gkr = transpose(Grk * W).", draft)
+        self.assertIn("set(&tmp_W_Gkr_code, row, col, get(&tmp_Grk_W_code, col, row));", draft)
+        self.assertNotIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
         self.assertNotIn("set_CODE(&Grk_code", draft)
         self.assertNotIn("set_CODE(&Gkr_code", draft)
         self.assertNotIn("set_CODE(&W_code", draft)
@@ -417,7 +438,8 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
-        self.assertIn("matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);", draft)
+        self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);", draft)
         self.assertIn("varG_A_A = get_CODE(&Gred_code, 0, 0);", draft)
         self.assertIn("varG_A_B = -varG_A_A;", draft)
         self.assertIn("varG_B_B = varG_A_A;", draft)

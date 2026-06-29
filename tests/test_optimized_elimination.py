@@ -99,7 +99,6 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("cr_tx_G_eff = G3;", draft)
         self.assertNotIn("TODO", draft)
         self.assertIn("RAM-SIDE STATIC MATRIX PRECOMPUTE", draft)
-        self.assertIn("set(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
         self.assertIn("Gkr_k1_A = -cr_tx_G_eff;", draft)
         self.assertIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
         self.assertNotIn("set_CODE(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
@@ -206,7 +205,9 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertNotIn("set(&Gkr_code", draft)
         self.assertNotIn("set(&W_code", draft)
         self.assertIn("set_CODE(&Gkr_code", draft)
-        self.assertIn("set_CODE(&W_code", draft)
+        self.assertIn("set_CODE(&Gkk_code", draft)
+        self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertNotIn("set_CODE(&W_code", draft)
 
     def test_no_elimination_c_draft_declares_matrix_error_counter(self):
         G1, G2 = sp.symbols("G1 G2")
@@ -839,8 +840,9 @@ class OptimizedEliminationTests(unittest.TestCase):
         finally:
             optimized.sp.simplify = original_simplify
 
-        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", draft)
-        self.assertIn("matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);", draft)
+        self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", draft)
         self.assertNotIn("A**2/(A + G)", draft)
 
 
