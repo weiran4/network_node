@@ -108,7 +108,7 @@ class DummyNodeBlockModelTests(unittest.TestCase):
         )
 
         draft = result["structured"]["c_draft"]
-        self.assertIn("enum { NR = 2, NK = 1 }", draft)
+        self.assertIn("enum { RETAINED_NODES = 2, INTERNAL_NODES = 1 }", draft)
         self.assertEqual(result["internal_nodes"], ["k"])
         self.assertEqual(result["effective_internal_nodes"], ["k"])
         self.assertEqual(result["structured"]["dummy_node_blocks"]["dropped_before_schur"], True)

@@ -3098,6 +3098,8 @@
     let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
     const REDUCED_CACHE_VERSION = "reduced-safe-simplified-v1";
+    const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v2-no-stale-template";
+    const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v5-direct-residual-split";
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
     const pythonDraftCache = new Map();
@@ -3119,6 +3121,14 @@
         const oldest = cache.keys().next().value;
         cache.delete(oldest);
       }
+    }
+
+    function clearDerivedResultCaches() {
+      reducedCache.clear();
+      branchCurrentCache.clear();
+      pythonDraftCache.clear();
+      optimizedEliminationCache.clear();
+      multiCaseExportCache.clear();
     }
 
     function reducedCacheKey(payload) {
@@ -3317,6 +3327,25 @@
     function restoreCacheSnapshot(cache, entries = [], fields = []) {
       (Array.isArray(entries) ? entries : []).forEach(entry => {
         if (!entry?.key) return;
+        const value = { pending: null, restored: true };
+        fields.forEach(field => {
+          if (entry[field] !== undefined && entry[field] !== null) value[field] = entry[field];
+        });
+        if (Object.keys(value).length > 2) cacheSet(cache, entry.key, value);
+      });
+    }
+
+    function cacheKeyVersion(key) {
+      try {
+        return JSON.parse(key)?.version || "";
+      } catch {
+        return "";
+      }
+    }
+
+    function restoreVersionedCacheSnapshot(cache, entries = [], fields = [], expectedVersion = "") {
+      (Array.isArray(entries) ? entries : []).forEach(entry => {
+        if (!entry?.key || cacheKeyVersion(entry.key) !== expectedVersion) return;
         const value = { pending: null, restored: true };
         fields.forEach(field => {
           if (entry[field] !== undefined && entry[field] !== null) value[field] = entry[field];
@@ -6979,6 +7008,7 @@
 
     function applyProjectUiState(data) {
       const ui = data?.ui || data || {};
+      clearDerivedResultCaches();
       state.language = ui.language || data?.language || state.language || "zh";
       state.activeOutput = ui.activeOutput || data?.activeOutput || state.activeOutput || "formulas";
       state.showLocalLabels = ui.showLocalLabels ?? data?.showLocalLabels ?? state.showLocalLabels;
@@ -7017,8 +7047,8 @@
         restoreReducedCacheSnapshot(data.reducedEquationCache || []);
         restoreCacheSnapshot(branchCurrentCache, data.branchCurrentCache || [], ["html"]);
         restoreCacheSnapshot(pythonDraftCache, data.pythonDraftCache || [], ["result"]);
-        restoreCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"]);
-        restoreCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"]);
+        restoreVersionedCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"], OPTIMIZED_ELIMINATION_CACHE_VERSION);
+        restoreVersionedCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"], MULTI_CASE_EXPORT_CACHE_VERSION);
         render();
         return;
       }
@@ -7052,8 +7082,8 @@
       restoreReducedCacheSnapshot(data.reducedEquationCache || []);
       restoreCacheSnapshot(branchCurrentCache, data.branchCurrentCache || [], ["html"]);
       restoreCacheSnapshot(pythonDraftCache, data.pythonDraftCache || [], ["result"]);
-      restoreCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"]);
-      restoreCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"]);
+      restoreVersionedCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"], OPTIMIZED_ELIMINATION_CACHE_VERSION);
+      restoreVersionedCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"], MULTI_CASE_EXPORT_CACHE_VERSION);
       render();
     }
 
@@ -9450,6 +9480,7 @@
 
     function optimizedEliminationCacheKey(payload) {
       return JSON.stringify({
+        version: OPTIMIZED_ELIMINATION_CACHE_VERSION,
         language: state.language,
         display_mode: payload.display_mode,
         simplify_level: payload.simplify_level,
@@ -10946,7 +10977,7 @@
 
     function multiCaseExportCacheKey(payload) {
       return JSON.stringify({
-        version: "multi-case-runtime-mutable-v2-gred-source-reuse",
+        version: MULTI_CASE_EXPORT_CACHE_VERSION,
         case_id_symbol: payload.case_id_symbol,
         eligible_branches: payload.eligible_branches,
         runtime_case_groups: payload.runtime_case_groups?.map(group => ({

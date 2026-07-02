@@ -635,7 +635,11 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         draft = response["multi_case"]["c_draft"]
         self.assertIn("multcase_G_R1_A_A = 0.0;", draft)
         self.assertIn("multcase_G_R1_A_A = X;", draft)
-        self.assertIn("g_mat_over[0][0] = multcase_G_R1_A_A;", draft)
+        self.assertIn("case 0:", draft)
+        self.assertIn("/* No RAM-owned final G entries in this case. */", draft)
+        self.assertIn("case 1:", draft)
+        self.assertIn("g_mat_over[0][0] = X;", draft)
+        self.assertIn("g_mat_over[0][1] = -X;", draft)
 
     def test_rejects_case_that_changes_topology(self):
         bad_payload = _series_payload("X", internal=False)

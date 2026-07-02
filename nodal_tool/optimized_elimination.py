@@ -1649,18 +1649,24 @@ def _matrix_transpose_copy_lines(
 def _diagonal_gkk_scalar_gred_code_lines(has_direct: bool) -> list[str]:
     lines = [
         "    /* Diagonal Gkk scalar CODE path: Gred = Grr - sum_k Grk[i,k] * Gkr[k,j] / Gkk[k,k]. */",
-        "    for (int i = 0; i < NR; i++) {",
-        "        for (int j = 0; j < NR; j++) {",
-        "            double schur = get_CODE(&Grr_code, i, j);",
-        "            for (int k = 0; k < NK; k++) {",
-        "                schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);",
-        "            }",
+        "    {",
+        "        double inv_gkk_diag[NK];",
+        "        for (int k = 0; k < NK; k++) {",
+        "            inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);",
+        "        }",
+        "        for (int i = 0; i < NR; i++) {",
+        "            for (int j = i; j < NR; j++) {",
+        "                double schur = get_CODE(&Grr_code, i, j);",
+        "                for (int k = 0; k < NK; k++) {",
+        "                    schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) * inv_gkk_diag[k];",
+        "                }",
     ]
     if has_direct:
-        lines.append("            schur += get_CODE(&Gred_code, i, j);")
+        lines.append("                schur += get_CODE(&Gred_code, i, j);")
     lines.extend(
         [
-            "            set_CODE(&Gred_code, i, j, schur);",
+            "                set_CODE(&Gred_code, i, j, schur);",
+            "            }",
             "        }",
             "    }",
         ]
@@ -1668,20 +1674,66 @@ def _diagonal_gkk_scalar_gred_code_lines(has_direct: bool) -> list[str]:
     return lines
 
 
+def _upper_tri_matrix_subtract_code_lines(
+    dst: str,
+    lhs: str,
+    rhs: str,
+    dim: str = "NR",
+    *,
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}for (int row = 0; row < {dim}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim}; col++) {{",
+        f"{indent}        set_CODE(&{dst}, row, col, get_CODE(&{lhs}, row, col) - get_CODE(&{rhs}, row, col));",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
+
+
+def _upper_tri_matrix_product_code_lines(
+    dst: str,
+    lhs: str,
+    rhs: str,
+    dim: str = "NR",
+    inner_dim: str = "NK",
+    *,
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}/* Symmetric product: only upper triangle of {dst} is needed downstream. */",
+        f"{indent}for (int row = 0; row < {dim}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim}; col++) {{",
+        f"{indent}        double acc = 0.0;",
+        f"{indent}        for (int k = 0; k < {inner_dim}; k++) {{",
+        f"{indent}            acc += get_CODE(&{lhs}, row, k) * get_CODE(&{rhs}, k, col);",
+        f"{indent}        }}",
+        f"{indent}        set_CODE(&{dst}, row, col, acc);",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
+
+
 def _diagonal_gkk_scalar_ihisred_code_lines(has_direct: bool) -> list[str]:
     lines = [
         "    /* Diagonal Gkk scalar CODE path: Ihisred = Ihisr - sum_k Grk[i,k] * Ihisk[k] / Gkk[k,k]. */",
-        "    for (int i = 0; i < NR; i++) {",
-        "        double ihis = get_CODE(&Ihisr_code, i, 0);",
+        "    {",
+        "        double inv_gkk_diag[NK];",
         "        for (int k = 0; k < NK; k++) {",
-        "            ihis -= get_CODE(&Grk_code, i, k) * get_CODE(&Ihisk_code, k, 0) / get_CODE(&Gkk_code, k, k);",
+        "            inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);",
         "        }",
+        "        for (int i = 0; i < NR; i++) {",
+        "            double ihis = get_CODE(&Ihisr_code, i, 0);",
+        "            for (int k = 0; k < NK; k++) {",
+        "                ihis -= get_CODE(&Grk_code, i, k) * get_CODE(&Ihisk_code, k, 0) * inv_gkk_diag[k];",
+        "            }",
     ]
     if has_direct:
-        lines.append("        ihis += get_CODE(&Ihisred_code, i, 0);")
+        lines.append("            ihis += get_CODE(&Ihisred_code, i, 0);")
     lines.extend(
         [
-            "        set_CODE(&Ihisred_code, i, 0, ihis);",
+            "            set_CODE(&Ihisred_code, i, 0, ihis);",
+            "        }",
             "    }",
         ]
     )
@@ -1691,22 +1743,28 @@ def _diagonal_gkk_scalar_ihisred_code_lines(has_direct: bool) -> list[str]:
 def _diagonal_gkk_scalar_vk_code_lines(need_vr: bool, need_ihisk: bool) -> list[str]:
     lines = [
         "    /* Diagonal Gkk scalar CODE path: Vk[k] = -(Gkr[k,*] * Vr + Ihisk[k]) / Gkk[k,k]. */",
-        "    for (int k = 0; k < NK; k++) {",
-        "        double vk_sum = 0.0;",
+        "    {",
+        "        double inv_gkk_diag[NK];",
+        "        for (int k = 0; k < NK; k++) {",
+        "            inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);",
+        "        }",
+        "        for (int k = 0; k < NK; k++) {",
+        "            double vk_sum = 0.0;",
     ]
     if need_vr:
         lines.extend(
             [
-                "        for (int j = 0; j < NR; j++) {",
-                "            vk_sum += get_CODE(&Gkr_code, k, j) * get_CODE(&Vr_code, j, 0);",
-                "        }",
+                "            for (int j = 0; j < NR; j++) {",
+                "                vk_sum += get_CODE(&Gkr_code, k, j) * get_CODE(&Vr_code, j, 0);",
+                "            }",
             ]
         )
     if need_ihisk:
-        lines.append("        vk_sum += get_CODE(&Ihisk_code, k, 0);")
+        lines.append("            vk_sum += get_CODE(&Ihisk_code, k, 0);")
     lines.extend(
         [
-            "        set_CODE(&Vk_code, k, 0, -vk_sum / get_CODE(&Gkk_code, k, k));",
+            "            set_CODE(&Vk_code, k, 0, -vk_sum * inv_gkk_diag[k]);",
+            "        }",
             "    }",
         ]
     )
@@ -1788,11 +1846,19 @@ def _c_matrix_set_nonzero_lines(matrix: sp.Matrix, name: str, setter: str = "set
     return lines
 
 
-def _c_matrix_add_nonzero_lines(matrix: sp.Matrix, name: str, setter: str = "set_CODE", getter: str = "get_CODE") -> list[str]:
+def _c_matrix_add_nonzero_lines(
+    matrix: sp.Matrix,
+    name: str,
+    setter: str = "set_CODE",
+    getter: str = "get_CODE",
+    *,
+    upper_triangle_only: bool = False,
+) -> list[str]:
     matrix = sp.Matrix(matrix)
     lines: list[str] = []
     for row in range(matrix.rows):
-        for col in range(matrix.cols):
+        col_start = row if upper_triangle_only else 0
+        for col in range(col_start, matrix.cols):
             value = sp.simplify(matrix[row, col])
             if value != 0:
                 lines.append(
@@ -2005,6 +2071,8 @@ def _c_emit_rtds_stage_sections(
         code_g_matrices.append(code_Gred_direct)
     code_g_symbol_names = _matrix_symbol_names(*code_g_matrices)
     code_ihis_matrices = [Ihisred]
+    if _matrix_has_nonzero(Ihisred_direct):
+        code_ihis_matrices.append(Ihisred_direct)
     if need_Ihisr_code or partial_ihisred_code_path:
         code_ihis_matrices.append(Ihisr)
     if need_Ihisk_code:
@@ -2192,12 +2260,18 @@ def _c_emit_rtds_stage_sections(
     Gkk_alias_entries = _block_alias_entries(Gkk, "Gkk", external_nodes, node_display_names)
     W_alias_entries = _block_alias_entries(W, "W", external_nodes, node_display_names)
     W_formula_alias_entries = _runtime_w_alias_entries(W.rows or Gkk.rows) if (w_runtime_inverse or structured_w_builder) else W_alias_entries
+    need_W_scalar_aliases = bool(
+        dynamic_gred
+        and not full_gred_code_path
+        and not w_runtime_inverse
+        and not structured_w_builder
+    )
     block_alias_entries = [
         *(Grr_alias_entries if need_Grr_code or rectangular_gred_dyn_path else []),
         *(Grk_alias_entries if need_Grk_code or rectangular_gred_dyn_path or partial_ihisred_code_path else []),
         *(Gkr_alias_entries if need_Gkr_code or rectangular_gred_dyn_path else []),
         *(Gkk_alias_entries if need_Gkk_code else []),
-        *(W_alias_entries if need_W_code and not w_runtime_inverse and not structured_w_builder else []),
+        *(W_alias_entries if (need_W_code or need_W_scalar_aliases) and not w_runtime_inverse and not structured_w_builder else []),
     ]
     ram_precompute_alias_entries = [
         *(Grk_alias_entries if ram_precompute_grk_w else []),
@@ -2584,16 +2658,17 @@ def _c_emit_rtds_stage_sections(
             lines.extend(
                 [
                     *_diagonal_gkk_scalar_gred_code_lines(False),
-                    *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code") if _matrix_has_nonzero(code_Gred_direct) else []),
+                    *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code", upper_triangle_only=True) if _matrix_has_nonzero(code_Gred_direct) else []),
                     "    /* Stamp dynamic Gred entries in row-major upper-triangular order. */",
                 ]
             )
         else:
             lines.extend([
                 "    /* Full Gred CODE path: all reduced entries are CODE-owned, so a full Schur update is allowed. */",
-                "    matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);",
-                "    matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);",
-                *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code") if _matrix_has_nonzero(code_Gred_direct) else []),
+                *_upper_tri_matrix_product_code_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Gkr_code"),
+                "    /* Gred is symmetric; only the upper triangle is needed for dynamic GValue stamps. */",
+                *_upper_tri_matrix_subtract_code_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code"),
+                *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code", upper_triangle_only=True) if _matrix_has_nonzero(code_Gred_direct) else []),
                 "    /* Stamp dynamic Gred entries in row-major upper-triangular order. */",
             ])
         assigned_var_g_pairs: set[tuple[int, int]] = set()
@@ -2820,6 +2895,7 @@ def _c_emit_rtds_reduction_tail(
 
 def _join_c_draft_lines(lines: Sequence[str]) -> str:
     draft = "\n".join(lines)
+    draft = _use_readable_dimension_names(draft)
     draft = _ensure_static_blank_line(draft)
     include_lines: list[str] = []
     if "MATRIX_" in draft and "#include <matrixLIB.h>" not in draft:
@@ -2831,6 +2907,22 @@ def _join_c_draft_lines(lines: Sequence[str]) -> str:
         include_lines.append("#include <builtin_MATH.h>")
     if include_lines:
         return "\n".join(include_lines) + "\n" + draft
+    return draft
+
+
+def _use_readable_dimension_names(draft: str) -> str:
+    draft = re.sub(
+        r"enum \{ NR = (?P<nr>\d+), NK = (?P<nk>\d+) \};",
+        "enum { RETAINED_NODES = \\g<nr>, INTERNAL_NODES = \\g<nk> };\n"
+        "/* Dimension names:\n"
+        " * RETAINED_NODES is the number of external nodes kept in the reduced network.\n"
+        " * INTERNAL_NODES is the number of eliminated internal nodes used by Schur/Vk recovery.\n"
+        " */",
+        draft,
+        count=1,
+    )
+    draft = re.sub(r"\bNR\b", "RETAINED_NODES", draft)
+    draft = re.sub(r"\bNK\b", "INTERNAL_NODES", draft)
     return draft
 
 

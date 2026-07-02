@@ -187,11 +187,19 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         diagonal_block_end = draft.index("case 0:", diagonal_block_start)
         diagonal_block = draft[diagonal_block_start:diagonal_block_end]
         self.assertIn("case 6:", diagonal_block)
+        self.assertIn("double IC_his0 = 0.0;", draft)
+        self.assertNotIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
+        self.assertIn("get_CODE(&Grk_code, row, k) * get_CODE(&W_code, k, k)", diagonal_block)
+        self.assertIn("get_CODE(&Ihisk_code, k, 0) * get_CODE(&W_code, k, k)", draft)
+        self.assertEqual(diagonal_block.count("/ get_CODE(&Gkk_code, k, k)"), 0)
+        self.assertNotIn("/ gkk_diag", diagonal_block)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", diagonal_block)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", diagonal_block)
         fallback_block = draft[diagonal_block_end:]
         self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", fallback_block)
-        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", fallback_block)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", fallback_block)
+        self.assertIn("Symmetric product: only upper triangle of tmp_Grk_W_Gkr_code is needed downstream.", fallback_block)
+        self.assertIn("for (int col = row; col < node_active; col++)", fallback_block)
 
 
 if __name__ == "__main__":

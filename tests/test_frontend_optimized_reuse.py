@@ -28,6 +28,31 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("const migratedKey = migratedReducedCacheKey(entry.key);", restore_source)
         self.assertIn("if (migratedKey) cacheSet(reducedCache, migratedKey, value);", restore_source)
 
+    def test_project_import_clears_in_memory_derived_caches_before_restore(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function clearDerivedResultCaches", source)
+        for cache_name in [
+            "reducedCache",
+            "branchCurrentCache",
+            "pythonDraftCache",
+            "optimizedEliminationCache",
+            "multiCaseExportCache",
+        ]:
+            self.assertIn(f"{cache_name}.clear();", source)
+
+        start = source.index("function applyProjectUiState")
+        end = source.index("function appendCircuitState")
+        apply_source = source[start:end]
+        self.assertLess(
+            apply_source.index("clearDerivedResultCaches();"),
+            apply_source.index("restoreVersionedCacheSnapshot(optimizedEliminationCache"),
+        )
+        self.assertLess(
+            apply_source.index("clearDerivedResultCaches();"),
+            apply_source.index("restoreVersionedCacheSnapshot(multiCaseExportCache"),
+        )
+
     def test_background_optimized_precompute_skips_without_reduced_dependency(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
@@ -261,6 +286,15 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("case_id_symbol: payload.case_id_symbol", cache_key_source)
         self.assertIn("case_profiles", cache_key_source)
 
+    def test_multicase_cache_version_invalidates_stale_direct_residual_drafts(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v5-direct-residual-split";',
+            source,
+        )
+        self.assertNotIn("multi-case-runtime-mutable-v4-source-stage-split", source)
+
     def test_export_state_persists_optimized_and_multicase_caches(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
@@ -273,8 +307,8 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         load_start = source.index("function loadCircuitState")
         load_end = source.index("function appendCircuitState")
         load_source = source[load_start:load_end]
-        self.assertIn('restoreCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"])', load_source)
-        self.assertIn('restoreCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"])', load_source)
+        self.assertIn('restoreVersionedCacheSnapshot(optimizedEliminationCache, data.optimizedEliminationCache || [], ["result"], OPTIMIZED_ELIMINATION_CACHE_VERSION)', load_source)
+        self.assertIn('restoreVersionedCacheSnapshot(multiCaseExportCache, data.multiCaseExportCache || [], ["result"], MULTI_CASE_EXPORT_CACHE_VERSION)', load_source)
 
     def test_export_dialog_supports_native_save_as_picker(self):
         source = Path("index.html").read_text(encoding="utf-8")

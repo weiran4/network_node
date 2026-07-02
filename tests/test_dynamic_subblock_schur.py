@@ -234,7 +234,7 @@ class DynamicSubblockSchurTests(unittest.TestCase):
         self.assertIn("InjB = get_CODE(&Ihisred_dyn_code, 1, 0);", draft)
         self.assertIn("InjC = 0.0;", draft)
 
-    def test_c_draft_all_dynamic_gred_allows_full_schur(self):
+    def test_c_draft_all_dynamic_diagonal_gkk_uses_scalar_schur(self):
         Gv = sp.symbols("Gv")
         nodes = ["A", "B", "C", "X"]
         G = sp.Matrix(
@@ -250,9 +250,10 @@ class DynamicSubblockSchurTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
-        self.assertIn("Full Gred CODE path", draft)
+        self.assertIn("Diagonal Gkk scalar CODE path: Gred", draft)
         self.assertIn("MATRIX_ Gred_code", draft)
-        self.assertIn("matrix_subtract_CODE(&Gred_code", draft)
+        self.assertIn("for (int j = i; j < RETAINED_NODES; j++)", draft)
+        self.assertNotIn("matrix_subtract_CODE(&Gred_code", draft)
 
     def test_ram_and_code_owners_do_not_overlap(self):
         Gc, Gv = sp.symbols("Gc Gv")

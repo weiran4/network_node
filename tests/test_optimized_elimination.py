@@ -841,7 +841,9 @@ class OptimizedEliminationTests(unittest.TestCase):
             optimized.sp.simplify = original_simplify
 
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
-        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);", draft)
+        self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
+        self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) * inv_gkk_diag[k];", draft)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", draft)
         self.assertNotIn("A**2/(A + G)", draft)
 

@@ -42,6 +42,74 @@ def _runtime_request(case0: str, case1: str, *, deps: dict | None = None) -> dic
     }
 
 
+def _runtime_overlay_payload(runtime_expr: str) -> dict:
+    return {
+        "all_nodes": ["N1", "N2", "N3", "N5"],
+        "external_nodes": ["N1", "N2", "N3", "N5"],
+        "internal_nodes": [],
+        "ground_nodes": [],
+        "node_display_names": {"N1": "N1", "N2": "N2", "N3": "N3", "N5": "N5"},
+        "G_full": [
+            ["Ga", "-Ga", "0", "0"],
+            ["-Ga", f"Ga + Gb + {runtime_expr}", "-Gb", f"-({runtime_expr})"],
+            ["0", "-Gb", "Gb", "0"],
+            ["0", f"-({runtime_expr})", "0", runtime_expr],
+        ],
+        "Ihis_full": ["0", "0", "0", "0"],
+        "G_full_tagged": [
+            ["Ga", "-Ga", "0", "0"],
+            ["-Ga", f"Ga + Gb + {runtime_expr}", "-Gb", f"-({runtime_expr})"],
+            ["0", "-Gb", "Gb", "0"],
+            ["0", f"-({runtime_expr})", "0", runtime_expr],
+        ],
+        "Ihis_full_tagged": ["0", "0", "0", "0"],
+        "direct_retained_stamps": [],
+    }
+
+
+def _runtime_overlay_payload_with_direct_stamps(runtime_expr: str) -> dict:
+    payload = _runtime_overlay_payload(runtime_expr)
+    payload["direct_retained_stamps"] = [
+        {
+            "id": "B1",
+            "name": "R1",
+            "support_nodes": ["N1", "N2"],
+            "G": [
+                {"row": "N1", "col": "N1", "expr": "Ga", "tagged": "Ga"},
+                {"row": "N1", "col": "N2", "expr": "-Ga", "tagged": "-Ga"},
+                {"row": "N2", "col": "N1", "expr": "-Ga", "tagged": "-Ga"},
+                {"row": "N2", "col": "N2", "expr": "Ga", "tagged": "Ga"},
+            ],
+            "Ihis": [],
+        },
+        {
+            "id": "B2",
+            "name": "R2",
+            "support_nodes": ["N2", "N3"],
+            "G": [
+                {"row": "N2", "col": "N2", "expr": "Gb", "tagged": "Gb"},
+                {"row": "N2", "col": "N3", "expr": "-Gb", "tagged": "-Gb"},
+                {"row": "N3", "col": "N2", "expr": "-Gb", "tagged": "-Gb"},
+                {"row": "N3", "col": "N3", "expr": "Gb", "tagged": "Gb"},
+            ],
+            "Ihis": [],
+        },
+        {
+            "id": "B3",
+            "name": "R3",
+            "support_nodes": ["N2", "N5"],
+            "G": [
+                {"row": "N2", "col": "N2", "expr": runtime_expr, "tagged": runtime_expr},
+                {"row": "N2", "col": "N5", "expr": f"-({runtime_expr})", "tagged": f"-({runtime_expr})"},
+                {"row": "N5", "col": "N2", "expr": f"-({runtime_expr})", "tagged": f"-({runtime_expr})"},
+                {"row": "N5", "col": "N5", "expr": runtime_expr, "tagged": runtime_expr},
+            ],
+            "Ihis": [],
+        },
+    ]
+    return payload
+
+
 class RuntimeMutableCaseGroupTests(unittest.TestCase):
     def test_no_runtime_group_keeps_export_free_of_runtime_selectors(self):
         profiles = [
@@ -326,11 +394,202 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         self.assertIn("multcase_G_R11_A_A = G_dyn;", draft)
         self.assertIn("Gkk_k1_k1 = G2 + multcase_G_R11_A_A;", draft)
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
-        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) / get_CODE(&Gkk_code, k, k);", draft)
+        self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
+        self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) * inv_gkk_diag[k];", draft)
         self.assertNotIn("matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);", draft)
         self.assertFalse(any("runtime_R11_case_id" in line for line in draft.splitlines() if "createGValue" in line))
         self.assertNotIn("case 0:\n        varG", draft)
         self.assertEqual(response["multi_case"]["diagnostics"]["per_runtime_case_final_gred_expansion_count"], 0)
+
+    def test_runtime_case_keeps_fixed_overlay_in_ram_for_no_internal_network(self):
+        deps = _deps("Ga", "Gb", code=("Gc_0", "Gc_1"))
+        base_payload = _runtime_overlay_payload("Gc_0")
+        base_payload["symbol_dependency_table"] = dict(deps)
+        base_payload["symbol_dependency_table_tagged"] = dict(deps)
+        runtime_payloads = []
+        for expr in ["Gc_0", "Gc_1"]:
+            payload = _runtime_overlay_payload(expr)
+            payload["symbol_dependency_table"] = dict(deps)
+            payload["symbol_dependency_table_tagged"] = dict(deps)
+            runtime_payloads.append(payload)
+
+        response = build_multi_case_response({
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "case_profiles": [
+                {"name": "case 0", "case_map": {}, "payload": base_payload},
+            ],
+            "runtime_case_groups": [
+                {
+                    "branch_id": "B3",
+                    "name": "B3",
+                    "case_id_symbol": "runtime_R3_case_id",
+                    "cases": [
+                        {"index": 0, "name": "Case 0", "payloads": [runtime_payloads[0]]},
+                        {"index": 1, "name": "Case 1", "payloads": [runtime_payloads[1]]},
+                    ],
+                }
+            ],
+        })
+        draft = response["multi_case"]["c_draft"]
+
+        self.assertIn("g_mat_over[1][1] = Ga + Gb;", draft)
+        self.assertNotIn("g_mat_over[1][3] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[3][1] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[3][3] = -Ga - Gb", draft)
+        self.assertIn("multcase_G_B3_N2_N2 = Gc_0;", draft)
+        self.assertIn("multcase_G_B3_N2_N2 = Gc_1;", draft)
+        self.assertIn("varG_N2_N2 = multcase_G_B3_N2_N2;", draft)
+        self.assertIn("varG_N2_N5 = -multcase_G_B3_N2_N2;", draft)
+        self.assertIn("varG_N5_N5 = multcase_G_B3_N2_N2;", draft)
+        self.assertNotIn("multcase_G_B3_N2_N2 = Ga + Gb + Gc_0;", draft)
+        self.assertNotIn("multcase_G_B3_N2_N2 = Ga + Gb + Gc_1;", draft)
+
+    def test_runtime_overlay_direct_preview_uses_local_stamp_values(self):
+        deps = _deps("Ga", "Gb", code=("Gc_0", "Gc_1"))
+        base_payload = _runtime_overlay_payload_with_direct_stamps("Gc_0")
+        base_payload["symbol_dependency_table"] = dict(deps)
+        base_payload["symbol_dependency_table_tagged"] = dict(deps)
+        request = {
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "case_profiles": [
+                {
+                    "name": "case 0",
+                    "case_map": {},
+                    "payload": base_payload,
+                }
+            ],
+            "runtime_case_groups": [
+                {
+                    "branch_id": "B3",
+                    "name": "R3",
+                    "case_id_symbol": "runtime_R3_case_id",
+                    "cases": [
+                        {
+                            "index": 0,
+                            "name": "Case 0",
+                            "payloads": [_runtime_overlay_payload_with_direct_stamps("Gc_0")],
+                        },
+                        {
+                            "index": 1,
+                            "name": "Case 1",
+                            "payloads": [_runtime_overlay_payload_with_direct_stamps("Gc_1")],
+                        },
+                    ],
+                }
+            ],
+        }
+        for case in request["runtime_case_groups"][0]["cases"]:
+            payload = case["payloads"][0]
+            payload["symbol_dependency_table"] = dict(deps)
+            payload["symbol_dependency_table_tagged"] = dict(deps)
+
+        response = build_multi_case_response(request)
+        multi = response["multi_case"]
+        direct = multi["template_direct_retained"]
+        gdirect_text = str(direct["Gred_direct"])
+        ram_text = str(direct["Gred_direct_ram"])
+        code_text = str(direct["Gred_direct_code"])
+
+        self.assertIn("Ga + Gb + multcase_G_B3_N2_N2", gdirect_text)
+        self.assertIn("Ga + Gb", ram_text)
+        self.assertIn("multcase_G_B3_N2_N2", code_text)
+        self.assertNotIn("3*Ga", gdirect_text)
+        self.assertNotIn("3*Gb", gdirect_text)
+        self.assertNotIn("3*multcase_G_B3_N2_N2", gdirect_text)
+        self.assertNotIn("RETAINED_NODES", multi["c_draft"])
+        self.assertNotIn("INTERNAL_NODES", multi["c_draft"])
+
+    def test_init_case_mixed_expression_keeps_fixed_overlay_out_of_code_alias(self):
+        deps = _deps("Ga", "Gb", "Y", "Gc_0", code=("A", "Z", "Gc_1"))
+        profiles = []
+        for index, expr in enumerate(["Y + Gc_0", "A*Z + Y + Gc_1"]):
+            payload = _runtime_overlay_payload_with_direct_stamps(expr)
+            payload["symbol_dependency_table"] = dict(deps)
+            payload["symbol_dependency_table_tagged"] = dict(deps)
+            profiles.append({
+                "name": f"case {index}",
+                "case_map": {"B3": index},
+                "payload": payload,
+            })
+
+        response = build_multi_case_response({
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "case_profiles": profiles,
+        })
+        multi = response["multi_case"]
+        draft = multi["c_draft"]
+        direct = multi["template_direct_retained"]
+        gdirect_text = str(direct["Gred_direct"])
+        ram_text = str(direct["Gred_direct_ram"])
+        code_text = str(direct["Gred_direct_code"])
+
+        self.assertIn("Ga + Gb + multcase_G_B3_N2_N2", gdirect_text)
+        self.assertIn("Ga + Gb", ram_text)
+        self.assertIn("multcase_G_B3_N2_N2", code_text)
+        self.assertNotIn("3*Ga", gdirect_text)
+        self.assertNotIn("3*Gb", gdirect_text)
+        self.assertNotIn("3*multcase_G_B3_N2_N2", gdirect_text)
+        self.assertNotIn("3 · Ga", gdirect_text)
+        self.assertNotIn("3 · Gb", gdirect_text)
+
+        self.assertIn("g_mat_over[1][1] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[1][3] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[3][1] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[3][3] = -Ga - Gb", draft)
+        self.assertNotIn("multcase_G_B3_N2_N2 = Ga + Gb", draft)
+        self.assertNotIn("multcase_G_B3_N2_N2 = A*Z + Ga + Gb", draft)
+
+    def test_init_case_source_stamp_alias_keeps_case_specific_ram_terms_out_of_code(self):
+        deps_case0 = _deps("Ga", "Gb", code=("A", "Z", "Y", "Gc_0"))
+        deps_case1 = _deps("Ga", "Gb", "Y", code=("A", "Z", "Gc_1"))
+        profiles = []
+        for index, (expr, deps) in enumerate([
+            ("A*Z + Gc_0 + Y", deps_case0),
+            ("A*Z + Gc_1 + Y", deps_case1),
+        ]):
+            payload = _runtime_overlay_payload_with_direct_stamps(expr)
+            payload["symbol_dependency_table"] = dict(deps)
+            payload["symbol_dependency_table_tagged"] = dict(deps)
+            profiles.append({
+                "name": f"case {index}",
+                "case_map": {"B3": index},
+                "payload": payload,
+            })
+
+        response = build_multi_case_response({
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "case_profiles": profiles,
+        })
+        draft = response["multi_case"]["c_draft"]
+        direct = response["multi_case"]["template_direct_retained"]
+        gdirect_text = str(direct["Gred_direct"])
+
+        self.assertIn("Ga + Gb + multcase_G_B3_N2_N2", gdirect_text)
+        self.assertNotIn("3*Ga", gdirect_text)
+        self.assertNotIn("3*Gb", gdirect_text)
+        self.assertNotIn("3*multcase_G_B3_N2_N2", gdirect_text)
+
+        self.assertIn("g_mat_over[1][1] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[1][3] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[3][1] = Ga + Gb", draft)
+        self.assertNotIn("g_mat_over[3][3] = -Ga - Gb", draft)
+
+        self.assertIn("g_mat_over[1][1] = Ga + Gb + Y;", draft)
+        self.assertIn("g_mat_over[1][3] = -Y;", draft)
+        self.assertIn("g_mat_over[3][3] = Y;", draft)
+        self.assertIn("varG_N2_N2 = A*Z + Gc_0 + Y;", draft)
+        self.assertIn("varG_N2_N2 = A*Z + Gc_1;", draft)
+        self.assertIn("varG_N2_N5 = -A*Z - Gc_1;", draft)
+        self.assertNotIn("multcase_G_B3_N2_N2 = A*Z + Ga + Gb", draft)
+        self.assertNotIn("varG_N2_N2 = A*Z + Gc_1 + Y;", draft)
+        self.assertNotIn("multcase_G_B3_N2_N2 = A*Z + Gc_1 + Y;", draft)
+        self.assertNotIn("RETAINED_NODES", draft)
+        self.assertNotIn("INTERNAL_NODES", draft)
 
 
 if __name__ == "__main__":

@@ -221,6 +221,61 @@ def _ensure_static_blank_line(draft: str) -> str:
     return re.sub(r"(?m)^STATIC:\n(?!\n)", "STATIC:\n\n", draft)
 
 
+def _use_readable_dimension_names(draft: str) -> str:
+    draft = re.sub(
+        r"enum \{ NR = (?P<nr>\d+), NK = (?P<nk>\d+), NCASE = (?P<ncase>\d+) \};",
+        "enum { RETAINED_NODES = \\g<nr>, INTERNAL_NODES = \\g<nk>, CASE_COUNT = \\g<ncase> };\n"
+        "/* Dimension names:\n"
+        " * RETAINED_NODES is the number of external nodes kept in the exported network.\n"
+        " * INTERNAL_NODES is the number of eliminated internal nodes used by Schur/Vk recovery.\n"
+        " * CASE_COUNT is the number of explicit case profiles in this draft.\n"
+        " */",
+        draft,
+        count=1,
+    )
+    draft = re.sub(
+        r"enum \{ NR = (?P<nr>\d+), NK = (?P<nk>\d+) \};",
+        "enum { RETAINED_NODES = \\g<nr>, INTERNAL_NODES = \\g<nk> };\n"
+        "/* Dimension names:\n"
+        " * RETAINED_NODES is the number of external nodes kept in the exported network.\n"
+        " * INTERNAL_NODES is the number of eliminated internal nodes used by Schur/Vk recovery.\n"
+        " */",
+        draft,
+        count=1,
+    )
+    draft = re.sub(r"\bNR\b", "RETAINED_NODES", draft)
+    draft = re.sub(r"\bNK\b", "INTERNAL_NODES", draft)
+    draft = re.sub(r"\bNCASE\b", "CASE_COUNT", draft)
+    return draft
+
+
+def _strip_unused_dimension_enum_for_direct_gvalue_draft(draft: str) -> str:
+    """Remove retained/internal enum text when the draft has no matrix DAG."""
+    matrix_markers = (
+        "\n    MATRIX_",
+        "matrixDim(",
+        "matrix_register(",
+        "conditionMatrixForCODE(",
+        "matrix_mult_CODE(",
+        "matrix_subtract_CODE(",
+        "matrix_add_CODE(",
+        "MATH_matx_invert(",
+        "mat_2x2_sym_inv_code(",
+        "mat_3x3_sym_inv_code(",
+    )
+    if any(marker in draft for marker in matrix_markers):
+        return draft
+    draft = re.sub(
+        r"enum \{ RETAINED_NODES = \d+, INTERNAL_NODES = 0 \};\n"
+        r"/\* Dimension names:[\s\S]*?\*/\n\n",
+        "",
+        draft,
+        count=1,
+    )
+    draft = re.sub(r"enum \{ NR = \d+, NK = 0 \};\n\n", "", draft, count=1)
+    return draft
+
+
 def _reorder_rows(matrix: sp.Matrix, source_nodes: list[str], target_nodes: list[str]) -> sp.Matrix:
     matrix = sp.Matrix(matrix)
     if not target_nodes:
@@ -782,7 +837,7 @@ def _build_single_case_dummy_finalized_c_draft(item: dict) -> str:
         ])
     else:
         lines.append("    /* Dummy final nodes are removed from the solver dimension and are not recovered. */")
-    return _ensure_static_blank_line("\n".join(lines))
+    return _use_readable_dimension_names(_ensure_static_blank_line("\n".join(lines)))
 
 
 def _build_single_case_dummy_finalized_response(
@@ -925,6 +980,63 @@ def _matrix_set_lines(name: str, matrix: sp.Matrix, *, indent: str = "        ")
                 continue
             lines.append(f"{indent}set_CODE(&{name}, {row}, {col}, {_ccode(expr)});")
     return lines
+
+
+def _upper_tri_matrix_subtract_lines(
+    dst: str,
+    lhs: str,
+    rhs: str,
+    dim_expr: str,
+    *,
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}for (int row = 0; row < {dim_expr}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim_expr}; col++) {{",
+        f"{indent}        set_CODE(&{dst}, row, col, get_CODE(&{lhs}, row, col) - get_CODE(&{rhs}, row, col));",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
+
+
+def _upper_tri_matrix_add_lines(
+    dst: str,
+    lhs: str,
+    rhs: str,
+    dim_expr: str,
+    *,
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}for (int row = 0; row < {dim_expr}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim_expr}; col++) {{",
+        f"{indent}        set_CODE(&{dst}, row, col, get_CODE(&{lhs}, row, col) + get_CODE(&{rhs}, row, col));",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
+
+
+def _upper_tri_matrix_product_lines(
+    dst: str,
+    lhs: str,
+    rhs: str,
+    dim_expr: str,
+    inner_expr: str = "INTERNAL_NODES",
+    *,
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}/* Symmetric product: only upper triangle of {dst} is needed downstream. */",
+        f"{indent}for (int row = 0; row < {dim_expr}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim_expr}; col++) {{",
+        f"{indent}        double acc = 0.0;",
+        f"{indent}        for (int k = 0; k < {inner_expr}; k++) {{",
+        f"{indent}            acc += get_CODE(&{lhs}, row, k) * get_CODE(&{rhs}, k, col);",
+        f"{indent}        }}",
+        f"{indent}        set_CODE(&{dst}, row, col, acc);",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
 
 
 def _clear_matrix_lines(name: str, rows: int, cols: int, *, indent: str = "        ") -> list[str]:
@@ -1686,34 +1798,177 @@ def _try_runtime_additive_replacement(
     return sp.expand(residual_expr + sign * sp.Symbol(alias))
 
 
+def _stamp_branch_id(stamp: Mapping, branch_ids: Sequence[str], fallback_index: int) -> str:
+    branch_set = {str(branch_id) for branch_id in branch_ids}
+    for key in ("id", "branch_id", "branchId", "source_id", "sourceId", "name"):
+        value = stamp.get(key)
+        if value is not None and str(value) in branch_set:
+            return str(value)
+    fallback = f"__stamp_{fallback_index}"
+    return fallback if fallback in branch_set else ""
+
+
+def _direct_retained_local_entry_replacements(
+    *,
+    template_payload: dict,
+    sample_profiles: list[dict],
+    branch_ids: Sequence[str],
+    aliases: dict[str, dict],
+    grouped: dict[tuple[str, str, tuple[str, ...]], dict],
+    symbol_table: dict,
+    runtime_groups: Mapping[str, dict],
+    global_alias_cache: dict[tuple, str],
+    base_case_by_branch: Mapping[str, int],
+) -> dict[tuple[int, str, int], sp.Expr]:
+    node_index = {
+        str(node): index
+        for index, node in enumerate(template_payload.get("all_nodes") or [])
+    }
+    profile_stamps = [
+        ((profile.get("payload") or {}).get("direct_retained_stamps") or [])
+        for profile in sample_profiles
+    ]
+    if not profile_stamps or not profile_stamps[0]:
+        return {}
+    local_replacements: dict[tuple[int, str, int], sp.Expr] = {}
+
+    def replacement_for_values(
+        *,
+        branch_id: str,
+        kind: str,
+        key: str,
+        row: int,
+        col: int,
+        values: list[sp.Expr],
+    ) -> sp.Expr | None:
+        if all(_expr_equal_light(values[0], value) for value in values[1:]):
+            return None
+        if branch_id:
+            runtime_replacement = _try_runtime_additive_replacement(
+                aliases=aliases,
+                grouped=grouped,
+                symbol_table=symbol_table,
+                global_alias_cache=global_alias_cache,
+                sample_profiles=sample_profiles,
+                runtime_groups=runtime_groups,
+                key=key,
+                row=row,
+                col=col,
+                node_order=list(template_payload.get("all_nodes") or []),
+                values=values,
+                branch_id=branch_id,
+                kind=kind,
+                base_case=base_case_by_branch.get(branch_id, 0),
+            )
+            if runtime_replacement is not None:
+                return runtime_replacement
+            if _position_depends_only_on_branch(
+                sample_profiles,
+                values,
+                branch_id,
+                base_case_by_branch.get(branch_id, 0),
+            ):
+                sign, alias = _ensure_branch_profile_alias(
+                    aliases=aliases,
+                    grouped=grouped,
+                    symbol_table=symbol_table,
+                    sample_profiles=sample_profiles,
+                    runtime_groups=runtime_groups,
+                    branch_id=branch_id,
+                    kind=kind,
+                    key=key,
+                    row=row,
+                    col=col,
+                    node_order=list(template_payload.get("all_nodes") or []),
+                    profile_values=values,
+                    base_case=base_case_by_branch.get(branch_id, 0),
+                )
+                return sign * sp.Symbol(alias)
+        temp_replacements: dict[tuple[str, int, int], sp.Expr] = {}
+        _add_global_profile_alias(
+            aliases=aliases,
+            replacements=temp_replacements,
+            symbol_table=symbol_table,
+            global_alias_cache=global_alias_cache,
+            key=key,
+            row=row,
+            col=col,
+            node_order=list(template_payload.get("all_nodes") or []),
+            values=values,
+        )
+        return temp_replacements.get((key, row, col))
+
+    base_stamps = profile_stamps[0]
+    for stamp_index, base_stamp in enumerate(base_stamps):
+        if any(stamp_index >= len(stamps) for stamps in profile_stamps):
+            continue
+        branch_id = _stamp_branch_id(base_stamp, branch_ids, stamp_index)
+        for kind, key, col_default in (("G", "G_full", None), ("Ihis", "Ihis_full", 0)):
+            base_entries = base_stamp.get(kind) or []
+            for entry_index, base_entry in enumerate(base_entries):
+                values: list[sp.Expr] = []
+                compatible = True
+                for stamps in profile_stamps:
+                    stamp = stamps[stamp_index]
+                    entries = stamp.get(kind) or []
+                    if entry_index >= len(entries):
+                        compatible = False
+                        break
+                    entry = entries[entry_index]
+                    if str(entry.get("row")) != str(base_entry.get("row")):
+                        compatible = False
+                        break
+                    if kind == "G" and str(entry.get("col")) != str(base_entry.get("col")):
+                        compatible = False
+                        break
+                    values.append(_parse_expr(entry.get("expr", "0")))
+                if not compatible or not values:
+                    continue
+                row = node_index.get(str(base_entry.get("row")))
+                col = col_default if kind == "Ihis" else node_index.get(str(base_entry.get("col")))
+                if row is None or col is None:
+                    continue
+                replacement = replacement_for_values(
+                    branch_id=branch_id,
+                    kind="G" if kind == "G" else "Ihis",
+                    key=key,
+                    row=row,
+                    col=col,
+                    values=values,
+                )
+                if replacement is not None:
+                    local_replacements[(stamp_index, kind, entry_index)] = replacement
+    return local_replacements
+
+
 def _rewrite_direct_retained_stamps_with_aliases(
     template_payload: dict,
-    replacements: Mapping[tuple[str, int, int], sp.Expr],
+    local_replacements: Mapping[tuple[int, str, int], sp.Expr],
 ) -> None:
     node_index = {
         str(node): index
         for index, node in enumerate(template_payload.get("all_nodes") or [])
     }
     rewritten_stamps = []
-    for stamp in template_payload.get("direct_retained_stamps") or []:
+    for stamp_index, stamp in enumerate(template_payload.get("direct_retained_stamps") or []):
         next_stamp = json.loads(json.dumps(stamp))
-        for entry in next_stamp.get("G") or []:
+        for entry_index, entry in enumerate(next_stamp.get("G") or []):
             row = node_index.get(str(entry.get("row")))
             col = node_index.get(str(entry.get("col")))
             if row is None or col is None:
                 continue
-            replacement = replacements.get(("G_full", row, col))
+            replacement = local_replacements.get((stamp_index, "G", entry_index))
             if replacement is None:
                 continue
             text = _expr_to_payload_text(replacement)
             entry["expr"] = text
             if "tagged" in entry:
                 entry["tagged"] = text
-        for entry in next_stamp.get("Ihis") or []:
+        for entry_index, entry in enumerate(next_stamp.get("Ihis") or []):
             row = node_index.get(str(entry.get("row")))
             if row is None:
                 continue
-            replacement = replacements.get(("Ihis_full", row, 0))
+            replacement = local_replacements.get((stamp_index, "Ihis", entry_index))
             if replacement is None:
                 continue
             text = _expr_to_payload_text(replacement)
@@ -1777,6 +2032,19 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     global_alias_cache: dict[tuple, str] = {}
     pending_composite_entries: list[tuple[str, int, int, list[sp.Expr]]] = []
 
+    source_template_payload = json.loads(json.dumps(base_payload))
+    local_direct_replacements = _direct_retained_local_entry_replacements(
+        template_payload=source_template_payload,
+        sample_profiles=sample_profiles,
+        branch_ids=branch_ids,
+        aliases=aliases,
+        grouped=grouped,
+        symbol_table=symbol_table,
+        runtime_groups=runtime_groups,
+        global_alias_cache=global_alias_cache,
+        base_case_by_branch=base_case_by_branch,
+    )
+
     for key, matrices in matrices_by_key.items():
         base = matrices[0]
         kind = "G" if key == "G_full" else "Ihis"
@@ -1839,6 +2107,25 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                     pending_composite_entries.append((key, row, col, values))
                     continue
                 branch_id = candidates[0]
+                runtime_replacement = _try_runtime_additive_replacement(
+                    aliases=aliases,
+                    grouped=grouped,
+                    symbol_table=symbol_table,
+                    global_alias_cache=global_alias_cache,
+                    sample_profiles=sample_profiles,
+                    runtime_groups=runtime_groups,
+                    key=key,
+                    row=row,
+                    col=col,
+                    node_order=node_order,
+                    values=values,
+                    branch_id=branch_id,
+                    kind=kind,
+                    base_case=base_case_by_branch.get(branch_id, 0),
+                )
+                if runtime_replacement is not None:
+                    replacements[(key, row, col)] = runtime_replacement
+                    continue
                 sign, alias = _ensure_branch_profile_alias(
                     aliases=aliases,
                     grouped=grouped,
@@ -1923,7 +2210,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
         tagged_dep_table[alias] = _symbol_dependency_for_owner(info["owner"])
     template_payload["symbol_dependency_table"] = dep_table
     template_payload["symbol_dependency_table_tagged"] = tagged_dep_table
-    _rewrite_direct_retained_stamps_with_aliases(template_payload, replacements)
+    _rewrite_direct_retained_stamps_with_aliases(template_payload, local_direct_replacements)
 
     return {
         "template_payload": template_payload,
@@ -2091,7 +2378,7 @@ def _try_build_payload_symbol_mux_response(payload: dict) -> dict | None:
             "effective_internal_nodes": result.get("effective_internal_nodes") or [],
             "block_type": (result.get("structured") or {}).get("block_type"),
             "profile_count": len(profiles),
-            "c_draft": _ensure_static_blank_line(draft),
+            "c_draft": _strip_unused_dimension_enum_for_direct_gvalue_draft(_ensure_static_blank_line(draft)),
             "fast_path": "payload_symbol_mux",
         },
     }
@@ -2455,21 +2742,25 @@ def _case_group_switch_prefix(case_id_symbol: str, case_indices: Sequence[int]) 
     return [f"    case {index}:" for index in case_indices]
 
 
-def _diagonal_gkk_scalar_gred_lines(active_nr_expr: str, indent: int = 8) -> list[str]:
+def _diagonal_gkk_scalar_gred_lines(
+    active_nr_expr: str,
+    *,
+    internal_expr: str = "INTERNAL_NODES",
+    indent: int = 8,
+) -> list[str]:
     prefix = " " * indent
     return [
-        f"{prefix}/* Diagonal Gkk scalar Schur path: tmp_Grk_W[row,k] = Grk[row,k] / Gkk[k,k]. */",
+        f"{prefix}/* Diagonal Gkk scalar Schur path: reuse W[k,k] = 1/Gkk[k,k]. */",
         f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
-        f"{prefix}    for (int k = 0; k < NK; k++) {{",
-        f"{prefix}        double gkk_diag = get_CODE(&Gkk_code, k, k);",
-        f"{prefix}        double grk_w = get_CODE(&Grk_code, row, k) / gkk_diag;",
+        f"{prefix}    for (int k = 0; k < {internal_expr}; k++) {{",
+        f"{prefix}        double grk_w = get_CODE(&Grk_code, row, k) * get_CODE(&W_code, k, k);",
         f"{prefix}        set_CODE(&tmp_Grk_W_code, row, k, grk_w);",
         f"{prefix}    }}",
         f"{prefix}}}",
         f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
-        f"{prefix}    for (int col = 0; col < {active_nr_expr}; col++) {{",
+        f"{prefix}    for (int col = row; col < {active_nr_expr}; col++) {{",
         f"{prefix}        double schur_acc = 0.0;",
-        f"{prefix}        for (int k = 0; k < NK; k++) {{",
+        f"{prefix}        for (int k = 0; k < {internal_expr}; k++) {{",
         f"{prefix}            schur_acc += get_CODE(&tmp_Grk_W_code, row, k) * get_CODE(&Gkr_code, k, col);",
         f"{prefix}        }}",
         f"{prefix}        set_CODE(&Gred_code, row, col, get_CODE(&Grr_code, row, col) - schur_acc);",
@@ -2478,13 +2769,18 @@ def _diagonal_gkk_scalar_gred_lines(active_nr_expr: str, indent: int = 8) -> lis
     ]
 
 
-def _diagonal_gkk_scalar_ihis_lines(active_nr_expr: str, indent: int = 8) -> list[str]:
+def _diagonal_gkk_scalar_ihis_lines(
+    active_nr_expr: str,
+    *,
+    internal_expr: str = "INTERNAL_NODES",
+    indent: int = 8,
+) -> list[str]:
     prefix = " " * indent
     return [
         f"{prefix}/* Diagonal Gkk scalar Ihisred path: Ihisred = Ihisr - tmp_Grk_W * Ihisk. */",
         f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
         f"{prefix}    double ihis_acc = 0.0;",
-        f"{prefix}    for (int k = 0; k < NK; k++) {{",
+        f"{prefix}    for (int k = 0; k < {internal_expr}; k++) {{",
         f"{prefix}        ihis_acc += get_CODE(&tmp_Grk_W_code, row, k) * get_CODE(&Ihisk_code, k, 0);",
         f"{prefix}    }}",
         f"{prefix}    set_CODE(&Ihisred_code, row, 0, get_CODE(&Ihisr_code, row, 0) - ihis_acc);",
@@ -2492,16 +2788,21 @@ def _diagonal_gkk_scalar_ihis_lines(active_nr_expr: str, indent: int = 8) -> lis
     ]
 
 
-def _diagonal_gkk_scalar_vk_lines(active_nr_expr: str, indent: int = 8) -> list[str]:
+def _diagonal_gkk_scalar_vk_lines(
+    active_nr_expr: str,
+    *,
+    internal_expr: str = "INTERNAL_NODES",
+    indent: int = 8,
+) -> list[str]:
     prefix = " " * indent
     return [
         f"{prefix}/* Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W). */",
-        f"{prefix}for (int k = 0; k < NK; k++) {{",
+        f"{prefix}for (int k = 0; k < {internal_expr}; k++) {{",
         f"{prefix}    double core_v = 0.0;",
         f"{prefix}    for (int col = 0; col < {active_nr_expr}; col++) {{",
         f"{prefix}        core_v += get_CODE(&tmp_Grk_W_code, col, k) * get_CODE(&Vr_code, col, 0);",
         f"{prefix}    }}",
-        f"{prefix}    double hist_v = get_CODE(&Ihisk_code, k, 0) / get_CODE(&Gkk_code, k, k);",
+        f"{prefix}    double hist_v = get_CODE(&Ihisk_code, k, 0) * get_CODE(&W_code, k, k);",
         f"{prefix}    set_CODE(&Vk_code, k, 0, -(core_v + hist_v));",
         f"{prefix}}}",
     ]
@@ -2550,13 +2851,9 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
     gkk_template = sp.Matrix(gkk_template)
     if not profiles or gkk_template.rows != gkk_template.cols or gkk_template.rows == 0:
         return draft
-    diagonal_cases, fallback_cases = _multicase_diagonal_case_groups(
-        profiles=profiles,
-        aliases=aliases,
-        gkk_template=gkk_template,
-    )
-    if not diagonal_cases:
-        return draft
+
+    nr_exprs = list(dict.fromkeys([active_nr_expr, "NR", "RETAINED_NODES", "node_active"]))
+    internal_exprs = ["NK", "INTERNAL_NODES"]
 
     gred_old = "\n".join([
         "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
@@ -2564,6 +2861,50 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
         "    matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);",
         "    matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);",
     ])
+    gred_candidates = [gred_old]
+    for dim_expr in nr_exprs:
+        for comment in (
+            "    /* Full Gred CODE path: all reduced entries are CODE-owned, so a full Schur update is allowed. */",
+            "    /* Full Gred CODE path: compute the dense product, then write only the upper triangle used by GValue stamps. */",
+        ):
+            gred_candidates.append("\n".join([
+                "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+                comment,
+                "    matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);",
+                "    /* Gred is symmetric; only the upper triangle is needed for dynamic GValue stamps. */",
+                *_upper_tri_matrix_subtract_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code", dim_expr),
+            ]))
+            for internal_expr in internal_exprs:
+                gred_candidates.append("\n".join([
+                    "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+                    comment,
+                    *_upper_tri_matrix_product_lines(
+                        "tmp_Grk_W_Gkr_code",
+                        "tmp_Grk_W_code",
+                        "Gkr_code",
+                        dim_expr,
+                        internal_expr,
+                    ),
+                    *_upper_tri_matrix_subtract_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code", dim_expr),
+                ]))
+    gred_fallback = [
+        "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+        "    /* Full Gred CODE path: compute the dense product, then write only the upper triangle used by GValue stamps. */",
+        *_upper_tri_matrix_product_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Gkr_code", active_nr_expr),
+        *_upper_tri_matrix_subtract_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code", active_nr_expr),
+    ]
+    diagonal_cases, fallback_cases = _multicase_diagonal_case_groups(
+        profiles=profiles,
+        aliases=aliases,
+        gkk_template=gkk_template,
+    )
+    if not diagonal_cases:
+        for candidate in gred_candidates:
+            if candidate in draft:
+                draft = draft.replace(candidate, "\n".join(gred_fallback), 1)
+                break
+        return draft
+
     gred_new = "\n".join(
         ["    /* Case-resolved diagonal Gkk scalar Schur/Ihis path. */"]
         + _wrap_multicase_diagonal_scalar_block(
@@ -2571,11 +2912,22 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
             diagonal_cases=diagonal_cases,
             fallback_cases=fallback_cases,
             diagonal_lines=_diagonal_gkk_scalar_gred_lines(active_nr_expr),
-            fallback_lines=gred_old.splitlines(),
+            fallback_lines=gred_fallback,
         )
     )
-    if gred_old in draft:
-        draft = draft.replace(gred_old, gred_new, 1)
+    for candidate in gred_candidates:
+        if candidate in draft:
+            draft = draft.replace(candidate, gred_new, 1)
+            break
+    else:
+        gred_pattern = re.compile(
+            r"    matrix_mult_CODE\(&tmp_Grk_W_code, &Grk_code, &W_code\);\n"
+            r"    /\* Full Gred CODE path:[\s\S]*?"
+            r"(?=\n    /\* Stamp dynamic Gred entries)",
+        )
+        draft, replaced = gred_pattern.subn(gred_new, draft, count=1)
+        if replaced == 0:
+            return draft
 
     ihis_old = "\n".join([
         "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
@@ -2594,21 +2946,24 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
     if ihis_old in draft:
         draft = draft.replace(ihis_old, ihis_new, 1)
 
-    vk_old = "\n".join([
-        "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
-        "    for (int row = 0; row < NK; row++) {",
-        "        for (int col = 0; col < NR; col++) {",
-        "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
-        "        }",
-        "    }",
-        "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
-        "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
-        "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
-        "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
-    ])
+    vk_candidates = []
+    for internal_expr in internal_exprs:
+        for dim_expr in nr_exprs:
+            vk_candidates.append("\n".join([
+                "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
+                f"    for (int row = 0; row < {internal_expr}; row++) {{",
+                f"        for (int col = 0; col < {dim_expr}; col++) {{",
+                "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
+                "        }",
+                "    }",
+                "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+                "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
+                "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
+                "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+            ]))
     vk_fallback = [
         "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
-        "    for (int row = 0; row < NK; row++) {",
+        "    for (int row = 0; row < INTERNAL_NODES; row++) {",
         f"        for (int col = 0; col < {active_nr_expr}; col++) {{",
         "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
         "        }",
@@ -2628,10 +2983,13 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
             fallback_lines=vk_fallback,
         )
     )
-    if vk_old in draft:
-        draft = draft.replace(vk_old, vk_new, 1)
+    for candidate in vk_candidates:
+        if candidate in draft:
+            draft = draft.replace(candidate, vk_new, 1)
+            break
     else:
         draft = draft.replace("for (int col = 0; col < NR; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
+        draft = draft.replace("for (int col = 0; col < RETAINED_NODES; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
     return draft
 
 
@@ -2693,7 +3051,11 @@ def _replace_enum_for_retained_layouts(draft: str, profiles: list[dict], nk: int
         " */",
     ]
     enum_replacement = enum_line + "\n" + "\n".join(enum_comment)
-    return re.sub(r"enum \{ NR = \d+, NK = \d+ \};", enum_replacement, draft, count=1)
+    enum_pattern = (
+        r"enum \{ (?:NR = \d+, NK = \d+|RETAINED_NODES = \d+, INTERNAL_NODES = \d+) \};"
+        r"(?:\n/\* Dimension names:[\s\S]*?\*/)?"
+    )
+    return re.sub(enum_pattern, enum_replacement, draft, count=1)
 
 
 def _case_condition_from_ids(case_id_symbol: str, case_ids: Sequence[int]) -> str:
@@ -2737,9 +3099,21 @@ def _apply_active_matrix_dimensions(draft: str) -> str:
         "matrixDim(&tmp_Grk_W_Gkr_code, NR, NR)": "matrixDim(&tmp_Grk_W_Gkr_code, node_active, node_active)",
         "matrixDim(&tmp_Grk_W_Ihisk_code, NR, 1)": "matrixDim(&tmp_Grk_W_Ihisk_code, node_active, 1)",
         "matrixDim(&tmp_W_Gkr_code, NK, NR)": "matrixDim(&tmp_W_Gkr_code, NK, node_active)",
+        "matrixDim(&Grr_code, RETAINED_NODES, RETAINED_NODES)": "matrixDim(&Grr_code, node_active, node_active)",
+        "matrixDim(&Grk_code, RETAINED_NODES, INTERNAL_NODES)": "matrixDim(&Grk_code, node_active, INTERNAL_NODES)",
+        "matrixDim(&Gkr_code, INTERNAL_NODES, RETAINED_NODES)": "matrixDim(&Gkr_code, INTERNAL_NODES, node_active)",
+        "matrixDim(&Gred_code, RETAINED_NODES, RETAINED_NODES)": "matrixDim(&Gred_code, node_active, node_active)",
+        "matrixDim(&Ihisr_code, RETAINED_NODES, 1)": "matrixDim(&Ihisr_code, node_active, 1)",
+        "matrixDim(&Ihisred_code, RETAINED_NODES, 1)": "matrixDim(&Ihisred_code, node_active, 1)",
+        "matrixDim(&Vr_code, RETAINED_NODES, 1)": "matrixDim(&Vr_code, node_active, 1)",
+        "matrixDim(&tmp_Grk_W_code, RETAINED_NODES, INTERNAL_NODES)": "matrixDim(&tmp_Grk_W_code, node_active, INTERNAL_NODES)",
+        "matrixDim(&tmp_Grk_W_Gkr_code, RETAINED_NODES, RETAINED_NODES)": "matrixDim(&tmp_Grk_W_Gkr_code, node_active, node_active)",
+        "matrixDim(&tmp_Grk_W_Ihisk_code, RETAINED_NODES, 1)": "matrixDim(&tmp_Grk_W_Ihisk_code, node_active, 1)",
+        "matrixDim(&tmp_W_Gkr_code, INTERNAL_NODES, RETAINED_NODES)": "matrixDim(&tmp_W_Gkr_code, INTERNAL_NODES, node_active)",
     }
     for old, new in replacements.items():
         draft = draft.replace(old, new)
+    draft = draft.replace("< RETAINED_NODES;", "< node_active;")
     return draft
 
 
@@ -2955,6 +3329,30 @@ def _var_g_name(nodes: Sequence[str], row: int, col: int) -> str:
     return f"varG_{a}_{b}"
 
 
+def _split_expr_by_stage_light(expr: sp.Expr, symbol_table: dict[str, str]) -> tuple[sp.Expr, sp.Expr]:
+    """Split a small source-level final-G expression into RAM and CODE terms.
+
+    This helper is intentionally used only by no-internal conditional GValue
+    exports. It does not prove Schur equivalence or expand large reduced
+    expressions; it only separates additive source terms that are already final
+    GValue inputs.
+    """
+    expr = sp.sympify(expr)
+    if expr == 0:
+        return sp.Integer(0), sp.Integer(0)
+    expanded = sp.expand(expr) if int(sp.count_ops(expr)) <= 200 else expr
+    ram_terms: list[sp.Expr] = []
+    code_terms: list[sp.Expr] = []
+    for term in sp.Add.make_args(expanded):
+        if _expr_stage(term, symbol_table) == "RAM":
+            ram_terms.append(term)
+        else:
+            code_terms.append(term)
+    ram_expr = sp.Add(*ram_terms) if ram_terms else sp.Integer(0)
+    code_expr = sp.Add(*code_terms) if code_terms else sp.Integer(0)
+    return ram_expr, code_expr
+
+
 def _conditional_final_g_plans(
     *,
     case_id_symbol: str,
@@ -2962,20 +3360,35 @@ def _conditional_final_g_plans(
     aliases: dict[str, dict],
     template_gred: sp.Matrix,
     external_nodes: list[str],
+    split_ram_code_terms: bool = False,
 ) -> list[dict]:
     nr = len(external_nodes)
     entry_plans: list[dict] = []
     for row in range(nr):
         for col in range(row, nr):
             per_case = []
+            ram_cases = []
+            code_cases = []
             for index, profile in enumerate(profiles):
                 expr = _profile_final_expr(template_gred[row, col], profile, aliases, index)
-                stage = _expr_stage(expr, _profile_symbol_table(profile))
-                per_case.append({"index": index, "expr": expr, "stage": stage})
+                symbol_table = _profile_symbol_table(profile)
+                if split_ram_code_terms:
+                    ram_expr, code_expr = _split_expr_by_stage_light(expr, symbol_table)
+                    per_case.append({"index": index, "expr": ram_expr + code_expr, "stage": _expr_stage(expr, symbol_table)})
+                    if not _expr_equal_light(ram_expr, 0):
+                        ram_cases.append({"index": index, "expr": ram_expr, "stage": "RAM"})
+                    if not _expr_equal_light(code_expr, 0):
+                        code_cases.append({"index": index, "expr": code_expr, "stage": _expr_stage(code_expr, symbol_table)})
+                else:
+                    stage = _expr_stage(expr, symbol_table)
+                    item = {"index": index, "expr": expr, "stage": stage}
+                    per_case.append(item)
+                    if stage == "RAM":
+                        ram_cases.append(item)
+                    else:
+                        code_cases.append(item)
             if all(_expr_equal_light(item["expr"], 0) for item in per_case):
                 continue
-            ram_cases = [item for item in per_case if item["stage"] == "RAM"]
-            code_cases = [item for item in per_case if item["stage"] != "RAM"]
             entry_plans.append({
                 "row": row,
                 "col": col,
@@ -3041,6 +3454,7 @@ def _build_conditional_final_gvalue_draft(
         aliases=aliases,
         template_gred=template_gred,
         external_nodes=external_nodes,
+        split_ram_code_terms=True,
     )
 
     lines = [
@@ -3048,7 +3462,6 @@ def _build_conditional_final_gvalue_draft(
         "/* Multi-case alias-template C draft with case-conditional final GValues.",
         "   case_id is assumed fixed before simulation; runtime case switching is not supported.",
         "   Each case uses full values. No base + delta compensation is generated. */",
-        f"enum {{ NR = {nr}, NK = 0 }};",
         "",
         "STATIC:",
     ]
@@ -3084,8 +3497,8 @@ def _build_conditional_final_gvalue_draft(
         lines.append(f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node}\");")
     if nr:
         lines.extend([
-            "    for (int row = 0; row < NR; row++) {",
-            "        for (int col = 0; col < NR; col++) {",
+            f"    for (int row = 0; row < {nr}; row++) {{",
+            f"        for (int col = 0; col < {nr}; col++) {{",
             "            g_mat_over[row][col] = 0.0;",
             "        }",
             "    }",
@@ -3197,8 +3610,8 @@ def _conditional_ram_stamp_block(
     for index, node in enumerate(external_nodes):
         lines.append(f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node}\");")
     lines.extend([
-        "    for (int row = 0; row < NR; row++) {",
-        "        for (int col = 0; col < NR; col++) {",
+        f"    for (int row = 0; row < {nr}; row++) {{",
+        f"        for (int col = 0; col < {nr}; col++) {{",
         "            g_mat_over[row][col] = 0.0;",
         "        }",
         "    }",
@@ -3233,6 +3646,23 @@ def _conditional_ram_stamp_block(
         f"    setupGMatrix({nr});",
     ])
     return lines
+
+
+def _replace_ram_g_setup_with_conditional_ram_block(draft: str, ram_block: str) -> str:
+    start_marker = "    /* ************************************************************************\n     * RAM-SIDE G MATRIX VALUE SETUP"
+    end_marker = "    if (err > 0) {"
+    start = draft.find(start_marker)
+    if start < 0:
+        return draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
+    end = draft.find(end_marker, start)
+    if end < 0:
+        return draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
+    header_end = draft.find("*/", start)
+    if header_end < 0 or header_end > end:
+        return draft
+    header_end += 2
+    replacement = draft[start:header_end] + "\n\n\n" + ram_block + "\n\n"
+    return draft[:start] + replacement + draft[end:]
 
 
 def _case_switch_assignment_lines(case_id_symbol: str, case_indices: Sequence[int], assignments: Sequence[str]) -> list[str]:
@@ -3375,6 +3805,7 @@ def _apply_conditional_final_gvalues_to_structured_draft(
         aliases=aliases,
         template_gred=template_gred,
         external_nodes=external_nodes,
+        split_ram_code_terms=prune_code_matrix_writes,
     )
     gvalue_conditions: list[dict] = []
     for plan in entry_plans:
@@ -3405,7 +3836,7 @@ def _apply_conditional_final_gvalues_to_structured_draft(
         external_nodes=external_nodes,
         entry_plans=entry_plans,
     ))
-    draft = draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
+    draft = _replace_ram_g_setup_with_conditional_ram_block(draft, ram_block)
 
     plan_by_pair = {(int(plan["row"]), int(plan["col"])): plan for plan in entry_plans}
 
@@ -3695,7 +4126,18 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         except Exception:
             continue
 
-    if aliases and has_mixed_final_g:
+    has_runtime_mutable_g_alias = any(
+        bool(info.get("runtime_mutable"))
+        and str(info.get("kind") or "").upper().startswith("G")
+        for info in aliases.values()
+    )
+    no_internal_final_g_can_be_split = (
+        bool(aliases)
+        and not has_internal_recovery
+        and not has_runtime_mutable_g_alias
+        and _final_g_stage_analysis_is_within_budget(template_reduced.G_red)
+    )
+    if aliases and (has_mixed_final_g or no_internal_final_g_can_be_split):
         reuse_plan = []
         try:
             reuse_plan = structural_gred_entry_reuse_plan(
@@ -3717,11 +4159,17 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             reuse_plan=reuse_plan,
             reuse_plan_by_case=display_reuse_plan_by_case,
         )
-        warnings.append(
-            "Warning: final G entries have mixed RAM/CODE ownership across cases. "
-            "CODE-owned entries are enabled with case conditions. "
-            "case_id is fixed before simulation and must not change at runtime."
-        )
+        if has_mixed_final_g:
+            warnings.append(
+                "Warning: final G entries have mixed RAM/CODE ownership across cases. "
+                "CODE-owned entries are enabled with case conditions. "
+                "case_id is fixed before simulation and must not change at runtime."
+            )
+        elif not has_internal_recovery:
+            warnings.append(
+                "Info: no-internal multi-case final G entries were split into RAM and CODE terms. "
+                "RAM terms are stamped in RAM_PASS1; CODE terms are assigned directly to GValue handles."
+            )
     if "codegen_mode" not in locals():
         codegen_mode = "case-agnostic alias template"
     if "fast_path" not in locals():
@@ -3798,7 +4246,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 ],
                 "Ihisred_shape": [len(result.get("external_nodes") or []), 1],
             },
-            "c_draft": _ensure_static_blank_line(draft),
+            "c_draft": _strip_unused_dimension_enum_for_direct_gvalue_draft(_ensure_static_blank_line(draft)),
             "fast_path": fast_path,
         },
     }
@@ -3807,7 +4255,9 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
 def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) -> str:
     scalar_mux = _try_build_scalar_mux_c_draft(profile_results)
     if scalar_mux:
-        return _ensure_static_blank_line(scalar_mux)
+        return _strip_unused_dimension_enum_for_direct_gvalue_draft(
+            _use_readable_dimension_names(_ensure_static_blank_line(scalar_mux))
+        )
     base_result = profile_results[0]["result"]
     external_nodes = list(base_result.get("external_nodes") or [])
     internal_nodes = list(base_result.get("effective_internal_nodes") or [])
@@ -3919,9 +4369,9 @@ def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) 
         "    /* Shared Schur flow: Gred = Grr - Grk * W * Gkr. */",
         *(["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if nk else []),
         *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if nk else []),
-        *(["    matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);"] if nk else []),
-        *(["    matrix_subtract_CODE(&Gschur_code, &Grr_code, &tmp_Grk_W_Gkr_code);"] if nk else ["    /* No internal nodes: Gschur = Grr. */"]),
-        "    matrix_add_CODE(&Gfinal_code, &Gschur_code, &Gdirect_code);",
+        *(_upper_tri_matrix_product_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Gkr_code", "NR", "NK") if nk else []),
+        *(_upper_tri_matrix_subtract_lines("Gschur_code", "Grr_code", "tmp_Grk_W_Gkr_code", "NR") if nk else ["    /* No internal nodes: Gschur = Grr. */"]),
+        *_upper_tri_matrix_add_lines("Gfinal_code", "Gschur_code", "Gdirect_code", "NR"),
         "",
         "    /* Shared Ihis flow: Ihisred = Ihisr - Grk * W * Ihisk. */",
         *(["    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);"] if nk else []),
@@ -3948,7 +4398,7 @@ def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) 
             for index, node in enumerate(internal_nodes)
         ],
     ])
-    return _ensure_static_blank_line("\n".join(lines))
+    return _use_readable_dimension_names(_ensure_static_blank_line("\n".join(lines)))
 
 
 def _profiles_have_dummy_finalization(profiles: list[dict]) -> bool:
@@ -4487,7 +4937,7 @@ def _build_dummy_finalized_multi_case_c_draft(
         ])
     else:
         lines.append("    /* Dummy final nodes are removed from the solver dimension and are not recovered. */")
-    return _ensure_static_blank_line("\n".join(lines))
+    return _use_readable_dimension_names(_ensure_static_blank_line("\n".join(lines)))
 
 
 def _dummy_finalized_formula_cost(final_results: list[dict]) -> int:
