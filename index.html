@@ -4252,6 +4252,21 @@
       return target?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
     }
 
+    function hasReadableTextSelection() {
+      const selection = window.getSelection?.();
+      if (!selection || selection.isCollapsed || !String(selection.toString() || "").trim()) return false;
+      const elementForNode = node => {
+        if (!node) return null;
+        return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+      };
+      const selectionRange = selection.rangeCount ? selection.getRangeAt(0) : null;
+      const anchorEl = elementForNode(selection.anchorNode);
+      const focusEl = elementForNode(selection.focusNode);
+      const commonEl = elementForNode(selectionRange?.commonAncestorContainer);
+      const isCanvasSelection = element => element?.closest?.("svg") === canvas || element === canvas;
+      return !isCanvasSelection(anchorEl) && !isCanvasSelection(focusEl) && !isCanvasSelection(commonEl);
+    }
+
     function selectedBranchIdsForDrag(id) {
       const group = state.groups.find(item => item.ids.includes(id));
       if (group) return group.ids.filter(branchId => findBranch(branchId));
@@ -5545,6 +5560,7 @@
     function constantGEditor(branch, compact = false) {
       const checked = branchGIsConstant(branch);
       const inferred = [...branchConstantGSymbols(branch)].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+      const hasMultipleCases = Array.isArray(branch.switchCases) && branch.switchCases.length > 1;
       const help = compact
         ? "勾选时会把当前 G 表达式中的符号默认视为常数；下方可补充常数符号。"
         : "按变量名判断常数。若 G[0][0] = X + Y + Z 且只填 Z，则只有 Z 可进入 RAM；X/Y 留在 CODE。";
@@ -5564,7 +5580,27 @@
           <div class="modal-help">${escapeHtml(tr("当前识别为常数的 G 符号"))}: ${escapeHtml(inferred.join(", ") || tr("无"))}</div>
         `;
       }
+      const caseBatchControls = hasMultipleCases ? `
+        <div class="field-caption">${escapeHtml(optText("多工况批量设置", "Multi-case batch settings"))}</div>
+        <div class="field">
+          <label>${escapeHtml(optText("定制 case", "Customize case"))}</label>
+          <select data-field="switchActive">
+            ${branch.switchCases.map((item, index) => `
+              <option value="${index}" ${index === (branch.activeSwitchCase || 0) ? "selected" : ""}>${escapeHtml(displayCaseName(item, index))}</option>
+            `).join("")}
+          </select>
+        </div>
+        <div class="row">
+          <button class="text-button" type="button" data-case-gconst-action="allConstant">${escapeHtml(optText("全部设为常数", "All constant"))}</button>
+          <button class="text-button" type="button" data-case-gconst-action="allVariable">${escapeHtml(optText("全部设为变量", "All variable"))}</button>
+        </div>
+        <div class="row">
+          <button class="text-button" type="button" data-case-gconst-action="applyCurrent">${escapeHtml(optText("将当前设置应用到全部 case", "Apply current settings to all cases"))}</button>
+        </div>
+        <div class="modal-help">${escapeHtml(optText("仍可切换到单个 case 后手动定制。", "You can still switch to one case and customize it manually."))}</div>
+      ` : "";
       return `
+        ${caseBatchControls}
         ${checkboxField("G 是否为常数？", "gIsConstant", checked, help)}
         ${editableField("常数 G 符号", "constantGSymbols", branchConstantGSymbolsText(branch), false)}
         <div class="modal-help">${escapeHtml(tr("可选：主要用于 G 表达式里常数和变量混合的情况；普通单支路通常不用填写。"))}</div>
@@ -7537,9 +7573,9 @@
       );
     }
 
-    function copySelectedBranches() {
+    function copySelectedBranches(options = {}) {
       const ids = selectedBranchSet();
-      if (!ids.size) return;
+      if (!ids.size) return 0;
       const branches = state.branches.filter(branch => ids.has(branch.id));
       state.clipboard = {
         branches: structuredClone(branches),
@@ -7548,8 +7584,18 @@
         copiedAt: Date.now()
       };
       state.pasteCount = 0;
-      statusEl.textContent = optText(`已复制 ${branches.length} 个元件`, `Copied ${branches.length} elements`);
+      if (!options.silent) {
+        statusEl.textContent = optText(`已复制 ${branches.length} 个元件`, `Copied ${branches.length} elements`);
+      }
       document.getElementById("pasteTool").disabled = false;
+      return branches.length;
+    }
+
+    function cutSelectedBranches() {
+      const count = copySelectedBranches({ silent: true });
+      if (!count) return;
+      deleteSelection();
+      statusEl.textContent = optText(`已剪切 ${count} 个元件`, `Cut ${count} elements`);
     }
 
     function pasteCopiedBranches() {
@@ -14334,6 +14380,7 @@
           event.stopPropagation();
         });
       });
+      bindCaseGConstButtons(state.selectedId);
     }
 
     function bindAutoAlignPortsButton(branchId) {
@@ -14344,6 +14391,27 @@
     function bindPackagedGConstButtons(branchId) {
       editor.querySelectorAll("[data-packaged-gconst-all]").forEach(button => {
         const action = () => setPackagedGConstAll(branchId, button.getAttribute("data-packaged-gconst-all") === "1");
+        button.addEventListener("pointerdown", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          button.dataset.pointerHandled = "1";
+          action();
+        });
+        button.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (button.dataset.pointerHandled === "1") {
+            delete button.dataset.pointerHandled;
+            return;
+          }
+          action();
+        });
+      });
+    }
+
+    function bindCaseGConstButtons(branchId) {
+      editor.querySelectorAll("[data-case-gconst-action]").forEach(button => {
+        const action = () => applyCaseGConstBatch(branchId, button.dataset.caseGconstAction);
         button.addEventListener("pointerdown", event => {
           event.preventDefault();
           event.stopPropagation();
@@ -14396,6 +14464,34 @@
         inner.gIsConstant = Boolean(isConstant);
       });
       render();
+    }
+
+    function applyCaseGConstBatch(branchId, action) {
+      const branch = findBranch(branchId);
+      if (!branch || isRuntimeMutableCaseGroup(branch)) return;
+      normalizeSwitchCases(branch);
+      if (!Array.isArray(branch.switchCases) || branch.switchCases.length <= 1) return;
+      commitHistory();
+      if (action === "applyCurrent") {
+        const isConstant = branchGIsConstant(branch);
+        const symbols = branchConstantGSymbolsText(branch);
+        branch.gIsConstant = Boolean(isConstant);
+        branch.constantGSymbols = symbols;
+        branch.switchCases.forEach(item => {
+          item.gIsConstant = Boolean(isConstant);
+          item.constantGSymbols = symbols;
+        });
+      }
+      else {
+        const isConstant = action === "allConstant";
+        branch.gIsConstant = isConstant;
+        branch.constantGSymbols = "";
+        branch.switchCases.forEach(item => {
+          item.gIsConstant = isConstant;
+          item.constantGSymbols = "";
+        });
+      }
+      renderAfterSidePanelEdit();
     }
 
     function alignPortRoots(branchId) {
@@ -16418,6 +16514,7 @@ function startResizeDrag(branch, handle, event) {
 
     document.addEventListener("keydown", event => {
       if (isTextEditingTarget(event.target)) return;
+      if ((event.ctrlKey || event.metaKey) && hasReadableTextSelection() && (event.key.toLowerCase() === "c" || event.key.toLowerCase() === "x")) return;
       if (event.key === "Escape") {
         event.preventDefault();
         clearSelection();
@@ -16451,6 +16548,11 @@ function startResizeDrag(branch, handle, event) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
         event.preventDefault();
         copySelectedBranches();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "x") {
+        event.preventDefault();
+        cutSelectedBranches();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {

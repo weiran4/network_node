@@ -346,6 +346,29 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn('optText("导入失败"', source)
         self.assertIn('optText("已调整画布顺序"', source)
 
+    def test_canvas_supports_cut_shortcut_without_text_editor_interception(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function cutSelectedBranches", source)
+        self.assertIn('copySelectedBranches({ silent: true })', source)
+        self.assertIn('event.key.toLowerCase() === "x"', source)
+        self.assertIn("if (isTextEditingTarget(event.target)) return;", source)
+        self.assertIn('optText(`已剪切 ${count} 个元件`', source)
+        self.assertIn('`Cut ${count} elements`', source)
+
+    def test_canvas_copy_shortcuts_do_not_intercept_selected_output_text(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function hasReadableTextSelection", source)
+        keydown_start = source.index('document.addEventListener("keydown"')
+        keydown_end = source.index("function escapeHtml", keydown_start)
+        keydown_source = source[keydown_start:keydown_end]
+        self.assertIn('if ((event.ctrlKey || event.metaKey) && hasReadableTextSelection() && (event.key.toLowerCase() === "c" || event.key.toLowerCase() === "x")) return;', keydown_source)
+        self.assertLess(
+            keydown_source.index('if ((event.ctrlKey || event.metaKey) && hasReadableTextSelection()'),
+            keydown_source.index('if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c")'),
+        )
+
     def test_formula_output_cards_do_not_force_max_content_width(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
@@ -437,6 +460,31 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("const activeCase = activeSwitchCase(branch);", update_source)
         self.assertIn("activeCase.gIsConstant", update_source)
         self.assertIn("activeCase.constantGSymbols", update_source)
+
+    def test_multi_case_g_constant_editor_has_batch_controls(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        editor_start = source.index("function constantGEditor")
+        editor_end = source.index("function transformerTerminalDisplayName")
+        editor_source = source[editor_start:editor_end]
+        self.assertIn("branch.switchCases.length > 1", editor_source)
+        self.assertIn("定制 case", editor_source)
+        self.assertIn('select data-field="switchActive"', editor_source)
+        self.assertIn("displayCaseName(item, index)", editor_source)
+        self.assertIn('data-case-gconst-action="allConstant"', editor_source)
+        self.assertIn('data-case-gconst-action="allVariable"', editor_source)
+        self.assertIn('data-case-gconst-action="applyCurrent"', editor_source)
+        self.assertIn("isRuntimeMutableCaseGroup(branch)", editor_source)
+
+        self.assertIn("function bindCaseGConstButtons", source)
+        self.assertIn("function applyCaseGConstBatch", source)
+        batch_start = source.index("function applyCaseGConstBatch")
+        batch_end = source.index("function alignPortRoots")
+        batch_source = source[batch_start:batch_end]
+        self.assertIn("branch.switchCases.forEach", batch_source)
+        self.assertIn("item.gIsConstant = Boolean(isConstant);", batch_source)
+        self.assertIn('item.constantGSymbols = "";', batch_source)
+        self.assertIn("renderAfterSidePanelEdit();", batch_source)
 
     def test_packaged_network_cases_have_edit_mode_and_boundary_guard(self):
         source = Path("index.html").read_text(encoding="utf-8")
