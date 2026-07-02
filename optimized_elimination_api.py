@@ -1668,16 +1668,31 @@ def _ensure_branch_profile_alias(
     return sign, grouped[group_key]["alias"]
 
 
-def _positive_negative_parts(expr: sp.Expr) -> tuple[sp.Expr, sp.Expr]:
-    positive = sp.Integer(0)
-    negative = sp.Integer(0)
-    for term in sp.Add.make_args(sp.expand(sp.sympify(expr))):
-        coeff, _base = sp.sympify(term).as_coeff_Mul()
-        if coeff < 0:
-            negative += -term
-        else:
-            positive += term
-    return sp.expand(positive), sp.expand(negative)
+def _common_additive_terms(values: Sequence[sp.Expr]) -> sp.Expr:
+    expanded_values = [sp.expand(sp.sympify(value)) for value in values]
+    if not expanded_values:
+        return sp.Integer(0)
+    common_counts: dict[str, tuple[sp.Expr, int]] = {}
+    for term in sp.Add.make_args(expanded_values[0]):
+        key = sp.srepr(term)
+        expr, count = common_counts.get(key, (sp.sympify(term), 0))
+        common_counts[key] = (expr, count + 1)
+    for value in expanded_values[1:]:
+        counts: dict[str, int] = {}
+        for term in sp.Add.make_args(value):
+            key = sp.srepr(term)
+            counts[key] = counts.get(key, 0) + 1
+        next_common: dict[str, tuple[sp.Expr, int]] = {}
+        for key, (expr, count) in common_counts.items():
+            if key in counts:
+                next_common[key] = (expr, min(count, counts[key]))
+        common_counts = next_common
+        if not common_counts:
+            break
+    result = sp.Integer(0)
+    for expr, count in common_counts.values():
+        result += expr * count
+    return sp.expand(result)
 
 
 def _try_runtime_additive_replacement(
@@ -1719,55 +1734,36 @@ def _try_runtime_additive_replacement(
     })
     if not local_cases:
         return None
-    deltas: dict[int, sp.Expr] = {}
-    for case_index in local_cases:
-        reference_delta = None
-        for init_index, base_value in base_by_init.items():
+    residual_by_init: dict[int, sp.Expr] = {}
+    case_values: dict[int, sp.Expr] = {}
+    for init_index, base_value in base_by_init.items():
+        values_by_case: dict[int, sp.Expr] = {}
+        for case_index in local_cases:
             case_value = case_by_init.get(init_index, {}).get(case_index)
             if case_value is None:
                 if case_index == base_case:
                     case_value = base_value
                 else:
                     return None
-            delta = sp.expand(case_value - base_value)
-            if reference_delta is None:
-                reference_delta = delta
-            elif not _expr_equal_light(reference_delta, delta):
+            values_by_case[case_index] = sp.sympify(case_value)
+        residual = _common_additive_terms([values_by_case[index] for index in local_cases])
+        residual_by_init[init_index] = residual
+        for case_index, case_value in values_by_case.items():
+            alias_value = sp.expand(case_value - residual)
+            if case_index in case_values and not _expr_equal_light(case_values[case_index], alias_value):
                 return None
-        deltas[case_index] = sp.sympify(reference_delta if reference_delta is not None else 0)
-    if all(_expr_equal_light(delta, 0) for delta in deltas.values()):
+            case_values[case_index] = alias_value
+    if all(_expr_equal_light(case_values[case_index], case_values[local_cases[0]]) for case_index in local_cases[1:]):
         return None
-
-    negative_parts = []
-    for case_index, delta in deltas.items():
-        if case_index == base_case or _expr_equal_light(delta, 0):
-            continue
-        _positive, negative = _positive_negative_parts(delta)
-        negative_parts.append(negative)
-    if negative_parts:
-        base_runtime_value = negative_parts[0]
-        if any(not _expr_equal_light(base_runtime_value, item) for item in negative_parts[1:]):
-            return None
-    else:
-        base_runtime_value = sp.Integer(0)
-
-    case_values = {
-        case_index: sp.expand(base_runtime_value + delta)
-        for case_index, delta in deltas.items()
-    }
-    residual_by_init = {
-        init_index: sp.expand(base_value - base_runtime_value)
-        for init_index, base_value in base_by_init.items()
-    }
     for profile, value in zip(sample_profiles, values):
         init_index = int(profile.get("_init_profile_index", 0) or 0)
         local_case = _profile_case_index(profile, branch_id, base_case)
-        expected = sp.expand(residual_by_init.get(init_index, sp.Integer(0)) + case_values.get(local_case, base_runtime_value))
+        expected = sp.expand(residual_by_init.get(init_index, sp.Integer(0)) + case_values.get(local_case, sp.Integer(0)))
         if not _expr_equal_light(expected, value):
             return None
 
     profile_values = [
-        case_values.get(_profile_case_index(profile, branch_id, base_case), base_runtime_value)
+        case_values.get(_profile_case_index(profile, branch_id, base_case), sp.Integer(0))
         for profile in sample_profiles
     ]
     sign, alias = _ensure_branch_profile_alias(
@@ -3605,36 +3601,46 @@ def _conditional_ram_stamp_block(
     if not nr or not any(plan["ram_cases"] for plan in entry_plans):
         return ["    /* No RAM-side G entries: no fixed G overlay is registered. */"]
     lines = [
-        "    /* Case-conditional RAM final-G stamp. CODE-owned cases do not receive a RAM base. */",
-    ]
-    for index, node in enumerate(external_nodes):
-        lines.append(f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node}\");")
-    lines.extend([
-        f"    for (int row = 0; row < {nr}; row++) {{",
-        f"        for (int col = 0; col < {nr}; col++) {{",
-        "            g_mat_over[row][col] = 0.0;",
-        "        }",
-        "    }",
+        "    /* Case-conditional RAM final-G stamp. Each init-time case gets its own compact RAM overlay. */",
         f"    switch ({case_id_symbol}) {{",
-    ])
+    ]
     for index, _profile in enumerate(profiles):
         lines.append(f"    case {index}:")
-        any_ram = False
+        ram_items: list[tuple[int, int, sp.Expr]] = []
         for plan in entry_plans:
             ram_case = next((item for item in plan["ram_cases"] if item["index"] == index), None)
             if ram_case is None:
                 if any(item["index"] == index for item in plan["code_cases"]):
                     lines.append(f"        /* CODE-owned case: no RAM stamp for {plan['var']}. */")
                 continue
-            value = _ccode(ram_case["expr"])
-            row = plan["row"]
-            col = plan["col"]
-            lines.append(f"        g_mat_over[{row}][{col}] = {value};")
-            if row != col:
-                lines.append(f"        g_mat_over[{col}][{row}] = {value};")
-            any_ram = True
-        if not any_ram:
+            expr = sp.sympify(ram_case["expr"])
+            if expr == 0:
+                continue
+            ram_items.append((int(plan["row"]), int(plan["col"]), expr))
+        if not ram_items:
             lines.append("        /* No RAM-owned final G entries in this case. */")
+            lines.append("        break;")
+            continue
+        used_indices = sorted({idx for row, col, _expr in ram_items for idx in (row, col)})
+        local_index = {global_index: local for local, global_index in enumerate(used_indices)}
+        dim = len(used_indices)
+        for local, global_index in enumerate(used_indices):
+            lines.append(f"        g_mat_nods[{local}] = getNodeNum(comp, \"{external_nodes[global_index]}\");")
+        lines.extend([
+            f"        for (int row = 0; row < {dim}; row++) {{",
+            f"            for (int col = 0; col < {dim}; col++) {{",
+            "                g_mat_over[row][col] = 0.0;",
+            "            }",
+            "        }",
+        ])
+        for row, col, expr in ram_items:
+            local_row = local_index[row]
+            local_col = local_index[col]
+            value = _ccode(expr)
+            lines.append(f"        g_mat_over[{local_row}][{local_col}] = {value};")
+            if local_row != local_col:
+                lines.append(f"        g_mat_over[{local_col}][{local_row}] = {value};")
+        lines.append(f"        setupGMatrix({dim});")
         lines.append("        break;")
     lines.extend([
         "    default:",
@@ -3643,7 +3649,6 @@ def _conditional_ram_stamp_block(
         f"                       {case_id_symbol}, Name);",
         "        break;",
         "    }",
-        f"    setupGMatrix({nr});",
     ])
     return lines
 

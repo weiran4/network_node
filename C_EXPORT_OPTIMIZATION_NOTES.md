@@ -96,6 +96,31 @@ reduction then runs once on the alias-template network.
 
 No base-plus-delta compensation is used by default.
 
+### Runtime-Mutable Alias Safety
+
+Runtime-mutable case groups are resolved in CODE, but they still follow the
+same full-value rule. When a source entry has common additive terms across all
+runtime cases, keep those common terms as the residual and put only the
+case-varying part into the `multcase_*` alias:
+
+```text
+case 0: A*Z + Y + Gc_0
+case 1: A*Z + Y + Gc_1
+
+residual: A*Z + Y
+alias:    Gc_0 / Gc_1
+final:    A*Z + Y + multcase_*
+```
+
+Do not create complement expressions such as:
+
+```text
+Gc_0 + Gc_1 - multcase_*
+```
+
+Those are another form of base/delta compensation and can make no-internal
+multi-case direct stamps mathematically hard to audit.
+
 ### Dummy / N-Dummy Finalization
 
 Dummy constructs are used to keep multi-case topology compatible. They should

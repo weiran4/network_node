@@ -7894,16 +7894,37 @@
       exportDialog.classList.remove("open");
     }
 
-    function openOutputDialog() {
+    let outputDialogObserver = null;
+
+    function syncOutputDialogBody() {
+      if (!outputDialog.classList.contains("open")) return;
       outputDialogBody.innerHTML = outputText.innerHTML;
       outputDialogBody.className = `modal-output-body ${outputText.classList.contains("code") ? "code" : ""}`;
+      scheduleOutputMinimapUpdate();
+    }
+
+    function openOutputDialog() {
       outputDialog.classList.add("open");
+      syncOutputDialogBody();
+      if (outputDialogObserver) outputDialogObserver.disconnect();
+      outputDialogObserver = new MutationObserver(syncOutputDialogBody);
+      outputDialogObserver.observe(outputText, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["class"]
+      });
       updateOutputFullscreenButton();
       scheduleOutputMinimapUpdate();
     }
 
     function closeOutputDialog() {
       outputDialog.classList.remove("open");
+      if (outputDialogObserver) {
+        outputDialogObserver.disconnect();
+        outputDialogObserver = null;
+      }
       outputDialogModal.classList.remove("fullscreen");
       outputDialogModal.classList.remove("has-minimap");
       outputDialogMinimapContent.innerHTML = "";

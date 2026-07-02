@@ -438,6 +438,8 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         self.assertNotIn("g_mat_over[1][3] = Ga + Gb", draft)
         self.assertNotIn("g_mat_over[3][1] = Ga + Gb", draft)
         self.assertNotIn("g_mat_over[3][3] = -Ga - Gb", draft)
+        self.assertIn("setupGMatrix(3);", draft)
+        self.assertNotIn("setupGMatrix(4);", draft)
         self.assertIn("multcase_G_B3_N2_N2 = Gc_0;", draft)
         self.assertIn("multcase_G_B3_N2_N2 = Gc_1;", draft)
         self.assertIn("varG_N2_N2 = multcase_G_B3_N2_N2;", draft)
@@ -582,6 +584,14 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         self.assertIn("g_mat_over[1][1] = Ga + Gb + Y;", draft)
         self.assertIn("g_mat_over[1][3] = -Y;", draft)
         self.assertIn("g_mat_over[3][3] = Y;", draft)
+        self.assertIn("setupGMatrix(3);", draft)
+        self.assertIn("setupGMatrix(4);", draft)
+        ram_switch = draft.split("Case-conditional RAM final-G stamp", 1)[1]
+        case0_block = ram_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
+        case1_block = ram_switch.split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertIn('g_mat_nods[2] = getNodeNum(comp, "N3");', case0_block)
+        self.assertNotIn('getNodeNum(comp, "N5")', case0_block)
+        self.assertIn('g_mat_nods[3] = getNodeNum(comp, "N5");', case1_block)
         self.assertIn("varG_N2_N2 = A*Z + Gc_0 + Y;", draft)
         self.assertIn("varG_N2_N2 = A*Z + Gc_1;", draft)
         self.assertIn("varG_N2_N5 = -A*Z - Gc_1;", draft)
@@ -590,6 +600,54 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         self.assertNotIn("multcase_G_B3_N2_N2 = A*Z + Gc_1 + Y;", draft)
         self.assertNotIn("RETAINED_NODES", draft)
         self.assertNotIn("INTERNAL_NODES", draft)
+
+    def test_runtime_mutable_source_stamp_does_not_use_complement_alias(self):
+        deps = _deps("Ga", "Gb", "Y", code=("A", "Z", "Gc_0", "Gc_1"))
+        base_payload = _runtime_overlay_payload_with_direct_stamps("A*Z + Gc_0 + Y")
+        base_payload["symbol_dependency_table"] = dict(deps)
+        base_payload["symbol_dependency_table_tagged"] = dict(deps)
+        runtime_payloads = []
+        for expr in ["A*Z + Gc_0 + Y", "A*Z + Gc_1 + Y"]:
+            payload = _runtime_overlay_payload_with_direct_stamps(expr)
+            payload["symbol_dependency_table"] = dict(deps)
+            payload["symbol_dependency_table_tagged"] = dict(deps)
+            runtime_payloads.append(payload)
+
+        response = build_multi_case_response({
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "case_profiles": [
+                {"name": "case 0", "case_map": {}, "payload": base_payload},
+            ],
+            "runtime_case_groups": [
+                {
+                    "branch_id": "B3",
+                    "name": "R3",
+                    "case_id_symbol": "runtime_R3_case_id",
+                    "cases": [
+                        {"index": 0, "name": "Case 0", "payloads": [runtime_payloads[0]]},
+                        {"index": 1, "name": "Case 1", "payloads": [runtime_payloads[1]]},
+                    ],
+                }
+            ],
+        })
+
+        draft = response["multi_case"]["c_draft"]
+        direct = response["multi_case"]["template_direct_retained"]
+        gdirect_text = str(direct["Gred_direct"])
+        code_text = str(direct["Gred_direct_code"])
+
+        self.assertNotIn("Gc_0 + Gc_1 -", draft)
+        self.assertNotIn("Gc_0 + Gc_1 -", gdirect_text)
+        self.assertNotIn("Gc_0 + Gc_1 -", code_text)
+        self.assertNotIn("Gc_0 + Gc_1 -", str(response["multi_case"]["aliases"]))
+        self.assertNotIn("multcase_G_B3_N2_N5", draft)
+        self.assertIn("multcase_G_B3_N2_N2 = Gc_0;", draft)
+        self.assertIn("multcase_G_B3_N2_N2 = Gc_1;", draft)
+        self.assertIn("G_N2_N2 = A*Z + multcase_G_B3_N2_N2;", draft)
+        self.assertIn("varG_N2_N2 = G_N2_N2;", draft)
+        self.assertIn("varG_N2_N5 = -G_N2_N2;", draft)
+        self.assertIn("varG_N5_N5 = G_N2_N2;", draft)
 
 
 if __name__ == "__main__":
