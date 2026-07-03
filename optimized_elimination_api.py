@@ -29,6 +29,11 @@ from nodal_tool.dummy_node_block_model import (
 )
 
 
+def _dump_json(response: dict) -> None:
+    """Write CLI JSON using ASCII-safe escapes for Windows code pages."""
+    json.dump(response, sys.stdout, ensure_ascii=True)
+
+
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
 _SYMPY_FUNCTIONS = {
     "Abs",
@@ -6622,12 +6627,12 @@ def main() -> None:
         response = build_multi_case_response(payload)
     else:
         response = build_optimized_response(payload)
-    json.dump(response, sys.stdout, ensure_ascii=False)
+    _dump_json(response)
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        json.dump({"ok": False, "error": str(exc)}, sys.stdout, ensure_ascii=False)
+        _dump_json({"ok": False, "error": str(exc)})
         sys.exit(1)

@@ -11,6 +11,11 @@ from nodal_tool.blackbox_validation import BlackBoxBranchObserver, validate_blac
 from nodal_tool.ground import apply_ground_constraint, validate_ground_partition
 
 
+def _dump_json(response: dict) -> None:
+    """Write CLI JSON using ASCII-safe escapes for Windows code pages."""
+    json.dump(response, sys.stdout, ensure_ascii=True)
+
+
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
 _SYMPY_FUNCTIONS = {
     "Abs",
@@ -239,7 +244,7 @@ def _blackbox_validation_response(payload: dict) -> dict:
 def main() -> None:
     payload = json.load(sys.stdin)
     if payload.get("mode") == "validate_blackbox_observers":
-        json.dump(_blackbox_validation_response(payload), sys.stdout, ensure_ascii=False)
+        _dump_json(_blackbox_validation_response(payload))
         return
 
     all_nodes = list(payload["all_nodes"])
@@ -338,12 +343,12 @@ def main() -> None:
             }
         )
 
-    json.dump(response, sys.stdout, ensure_ascii=False)
+    _dump_json(response)
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        json.dump({"ok": False, "error": str(exc)}, sys.stdout, ensure_ascii=False)
+        _dump_json({"ok": False, "error": str(exc)})
         sys.exit(1)

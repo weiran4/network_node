@@ -390,6 +390,53 @@ objects. Strip an unused `NR/NK` enum before renaming dimensions. If later code
 references `NR` or `NK`, keep the readable `RETAINED_NODES/INTERNAL_NODES` enum
 and comments.
 
+### Matrix Runtime Init Must Have Live MATRIX Users
+
+`initializeMatricesForCode()` and `rtds_matrix_code_ready` are only needed when
+the generated CODE/T1_T2 sections use runtime `MATRIX_` objects or
+`conditionMatrixForCODE`. A no-internal-node path that writes RAM `g_mat_over`
+and assigns CODE `GValue`/`Inj` scalars directly should not emit this ready block.
+
+This is more than cosmetic: a stray ready block suggests a matrix DAG exists
+when the draft is actually scalar-only, and it makes code review harder. Keep the
+block for Schur/Vk/Ihis matrix paths; strip it for direct no-elimination drafts.
+
+### API Error JSON Must Be Encoding-Safe
+
+The command-line API scripts are subprocess boundaries. On Windows, another
+machine may run Python with a non-UTF-8 stdout code page. If an API catches a
+math/topology error and writes Chinese text with `ensure_ascii=False`, stdout can
+raise `UnicodeEncodeError` while trying to report the original error. The browser
+then receives a traceback or partial JSON and reports a misleading JSON parse
+failure.
+
+Keep CLI JSON output ASCII-safe with `ensure_ascii=True`. `JSON.parse` restores
+the original Chinese string in the browser, while the subprocess transport only
+contains `\uXXXX` escapes. Treat a clean singular-Gkk warning and a broken JSON
+traceback as two different layers: the former is a circuit/elimination issue; the
+latter is an API transport bug.
+
+### Singular `Gkk` Is A Topology Warning, Not A Formatting Bug
+
+Schur elimination solves the internal-node equation:
+
+```text
+Gkk * Vk = -(Gkr * Vr + Ihisk)
+```
+
+Therefore the eliminated internal block `Gkk` must be invertible. If `Gkk` is
+singular, the selected internal nodes contain at least one voltage mode that is
+not uniquely determined by the retained nodes and sources. Typical causes are a
+floating common mode, an ideal voltage-source/constraint loop, or a missing
+ground/reference path.
+
+Debugging rule: do not hide this warning by forcing an inverse. The user-facing
+message should explain the physical fix:
+
+- keep one of the nodes as retained/external reference,
+- add a real ground/reference/admittance path, or
+- use a future MNA/constraint-aware reduction path for ideal source constraints.
+
 ## Safety Rules
 
 - Do not use large expanded final `Gred` expressions to infer core/direct or

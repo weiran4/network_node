@@ -12,6 +12,11 @@ from nodal_tool.blackbox_validation import (
 )
 
 
+def _dump_json(response: dict) -> None:
+    """Write CLI JSON using ASCII-safe escapes for Windows code pages."""
+    json.dump(response, sys.stdout, ensure_ascii=True)
+
+
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
 _SYMPY_FUNCTIONS = {
     "Abs",
@@ -77,7 +82,7 @@ def main() -> None:
     observers = [_observer_from_payload(item) for item in payload.get("observers", [])]
 
     result = validate_blackbox_observers(G_bb, Ihis_bb, nodes, observers)
-    json.dump(
+    _dump_json(
         {
             "ok": True,
             "status": result.status,
@@ -100,9 +105,7 @@ def main() -> None:
                 }
                 for row in result.observer_rows
             ],
-        },
-        sys.stdout,
-        ensure_ascii=False,
+        }
     )
 
 
@@ -110,5 +113,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        json.dump({"ok": False, "error": str(exc)}, sys.stdout, ensure_ascii=False)
+        _dump_json({"ok": False, "error": str(exc)})
         sys.exit(1)

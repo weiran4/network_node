@@ -212,6 +212,8 @@ process.stdout.write(JSON.stringify(cases));
         self.assertIn("g_mat_over[1][0] = -ramG_N2_N2;", draft)
         self.assertIn("g_mat_over[1][1] = ramG_N2_N2;", draft)
         self.assertNotIn("No RAM-side G entries", draft)
+        self.assertNotIn("rtds_matrix_code_ready", draft)
+        self.assertNotIn("initializeMatricesForCode", draft)
 
     def test_no_internal_direct_retained_branch_splits_partial_ram_and_code_terms(self):
         response = build_optimized_response(make_test6_payload(ram_symbols=("X", "Y")))
@@ -260,6 +262,8 @@ process.stdout.write(JSON.stringify(cases));
         self.assertIn("varG_N4_N4 = G_N2_N2;", draft)
         self.assertNotIn("set_CODE(&G_code", draft)
         self.assertNotIn("get_CODE(&G_code", draft)
+        self.assertNotIn("rtds_matrix_code_ready", draft)
+        self.assertNotIn("initializeMatricesForCode", draft)
 
     def test_no_internal_direct_retained_branch_splits_long_expression_terms(self):
         response = build_optimized_response(

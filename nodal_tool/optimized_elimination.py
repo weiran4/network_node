@@ -2263,8 +2263,7 @@ def _c_emit_rtds_stage_sections(
             "   No Schur complement is required: use the original G matrix and Ihis vector directly. */",
             "STATIC:",
             "    /* Runtime matrix objects */",
-            "    /* Runtime state */",
-            "    int rtds_matrix_code_ready = 0;",
+            "    /* No runtime MATRIX_ objects are required on this no-elimination path. */",
             *_c_declaration_group("User G/CODE symbols", no_elim_g_symbol_names),
             *_c_declaration_group("User Ihis/history symbols", no_elim_ihis_symbol_names),
             *_c_declaration_group("CODE G scalar aliases", code_g_temp_names_no_elim),
@@ -2330,12 +2329,6 @@ def _c_emit_rtds_stage_sections(
             "",
             "CODE:",
             "BEGIN_T0:",
-            "    if (!rtds_matrix_code_ready) {",
-            "        initializeMatricesForCode();",
-            *_c_condition_lines(no_elim_code_names),
-            "        rtds_matrix_code_ready = 1;",
-            "    }",
-            "",
         ])
         if dynamic_gred_no_elim:
             lines.extend([
