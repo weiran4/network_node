@@ -416,6 +416,15 @@ contains `\uXXXX` escapes. Treat a clean singular-Gkk warning and a broken JSON
 traceback as two different layers: the former is a circuit/elimination issue; the
 latter is an API transport bug.
 
+### Backend Error Display Must Respect UI Language
+
+Some backend errors intentionally use a bilingual form such as
+`Chinese explanation / English explanation` so one API response can serve both
+language modes. The frontend must not render raw `error.message` directly in
+math/codegen tabs. Route backend errors through `localizedBackendErrorMessage()`:
+Chinese mode keeps the full message, while English mode extracts the text after
+` / `. This keeps JSON transport fixes separate from display-language fixes.
+
 ### Singular `Gkk` Is A Topology Warning, Not A Formatting Bug
 
 Schur elimination solves the internal-node equation:

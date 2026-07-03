@@ -408,7 +408,7 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn('alert(tr("选中的部分没有外部边界节点，不能打包成可连接的 Y 节点黑盒。"));', source)
         self.assertIn('alert(subsystem.warnings.map(item => tr(item)).join("\\n"));', source)
         self.assertIn('alert(optText(', source)
-        self.assertIn('`Pack failed: ${error.message || String(error)}`', source)
+        self.assertIn('`Pack failed: ${localizedBackendErrorMessage(error)}`', source)
         self.assertIn('`Local G matrix must be ${ports.length} x ${ports.length} and match port order ${ports.join(", ")}.`', source)
         self.assertIn('`Observed branch ${index + 1}: V_${ref} in the formula has no matching packaged node.`', source)
         self.assertIn('"连接节点：依次点击两个端子": "Wire nodes: click two terminals in sequence"', source)
@@ -830,6 +830,24 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
 
         self.assertIn("state.internalNodes = state.internalNodes.filter(item => item !== id);\n          }\n          invalidateMathCaches();", source)
         self.assertIn("state.nodeOrder = Array.from(list.querySelectorAll(\".node-order-item[data-node-id]\")).map(row => row.dataset.nodeId);\n          invalidateMathCaches();", source)
+
+    def test_backend_error_messages_use_display_language(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function localizedBackendErrorMessage(error)", source)
+        self.assertIn('const bilingualSeparator = " / ";', source)
+        self.assertIn("raw.lastIndexOf(bilingualSeparator)", source)
+        self.assertIn("return translateText(raw);", source)
+
+        optimized_start = source.index("async function renderOptimizedEliminationAsync")
+        optimized_source = source[optimized_start:source.index("function packagedObserverEntries", optimized_start)]
+        self.assertIn("localizedBackendErrorMessage(error)", optimized_source)
+        self.assertNotIn("error.message || String(error)", optimized_source)
+
+        reduced_start = source.index("async function renderReducedEquationsAsync")
+        reduced_source = source[reduced_start:source.index("function currentReducedHtml", reduced_start)]
+        self.assertIn("localizedBackendErrorMessage(error)", reduced_source)
+        self.assertNotIn("节点消去失败：${escapeHtml(error.message", reduced_source)
 
 
 if __name__ == "__main__":

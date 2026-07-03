@@ -8312,7 +8312,7 @@
           }
         } catch (error) {
           if (token === pythonDraftRenderToken && state.activeOutput === "python") {
-            outputText.textContent = `${pythonDraft(null, payload)}\n# Node reduction failed: ${error.message || String(error)}\n`;
+            outputText.textContent = `${pythonDraft(null, payload)}\n# Node reduction failed: ${localizedBackendErrorMessage(error)}\n`;
           }
         }
         return;
@@ -8336,7 +8336,7 @@
         }
       } catch (error) {
         if (token === pythonDraftRenderToken && state.activeOutput === "python") {
-          outputText.textContent = `${pythonDraft(null, payload)}\n# Node reduction failed: ${error.message || String(error)}\n`;
+          outputText.textContent = `${pythonDraft(null, payload)}\n# Node reduction failed: ${localizedBackendErrorMessage(error)}\n`;
         }
       }
     }
@@ -8391,7 +8391,7 @@
           outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(optText("正在生成多Case集合 C导出...", "Generating multi-case collection C export..."))}</div></div>`;
           renderMultiCaseCExportAsync(token, payload);
         } catch (error) {
-          outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(error.message || String(error))}</div></div>`;
+          outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(localizedBackendErrorMessage(error))}</div></div>`;
         }
         return;
       }
@@ -8567,7 +8567,7 @@
       const target = document.getElementById("reducedBranchCurrents");
       if (target) {
         const prefix = state.language === "en" ? "Reduced branch current failed" : "支路电流消去失败";
-        target.innerHTML = `<div class="formula-name">${escapeHtml(tr("支路电流消去版本"))}</div><div class="formula-empty">${escapeHtml(prefix)}：${escapeHtml(error.message || String(error))}</div>`;
+        target.innerHTML = `<div class="formula-name">${escapeHtml(tr("支路电流消去版本"))}</div><div class="formula-empty">${escapeHtml(prefix)}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
       }
     }
 
@@ -9281,6 +9281,18 @@
       return state.language === "en" ? en : zh;
     }
 
+    function localizedBackendErrorMessage(error) {
+      const raw = String(error?.message || error || "");
+      if (state.language !== "en") return raw;
+      const bilingualSeparator = " / ";
+      const separatorIndex = raw.lastIndexOf(bilingualSeparator);
+      if (separatorIndex >= 0) {
+        const english = raw.slice(separatorIndex + bilingualSeparator.length).trim();
+        if (english) return english;
+      }
+      return translateText(raw);
+    }
+
     function optimizedBlockTypeLabel(type) {
       const labels = {
         pure_diagonal: optText("纯对角", "pure diagonal"),
@@ -9319,7 +9331,7 @@
           if (token === reducedRenderToken) outputText.innerHTML = html;
         } catch (error) {
           if (token === reducedRenderToken) {
-            outputText.innerHTML = `<div class="formula-empty">节点消去失败：${escapeHtml(error.message || String(error))}</div>`;
+            outputText.innerHTML = `<div class="formula-empty">${escapeHtml(optText("节点消去失败", "Node reduction failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
           }
         }
         return;
@@ -9337,7 +9349,7 @@
             <div class="formula-list">
               <div class="formula-card">
                 <div class="formula-name">${escapeHtml(tr("节点方程消去版本"))}</div>
-                <div class="formula-empty">${escapeHtml(message)} ${escapeHtml(error.message || String(error))}</div>
+                <div class="formula-empty">${escapeHtml(message)} ${escapeHtml(localizedBackendErrorMessage(error))}</div>
                 <pre class="code">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
               </div>
             </div>
@@ -9360,7 +9372,7 @@
         }
       } catch (error) {
         if (token === reducedRenderToken) {
-          outputText.innerHTML = `<div class="formula-empty">节点消去失败：${escapeHtml(error.message || String(error))}</div>`;
+          outputText.innerHTML = `<div class="formula-empty">${escapeHtml(optText("节点消去失败", "Node reduction failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
         }
       }
     }
@@ -11087,7 +11099,7 @@
         const result = await pending;
         if (token === multiCaseExportRenderToken) outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(multiCaseEligibleBranches())}${renderMultiCaseCExportResult(result)}</div>`;
       } catch (error) {
-        if (token === multiCaseExportRenderToken) outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(multiCaseEligibleBranches())}<div class="formula-empty">${escapeHtml(optText("多Case C导出失败", "Multi-case C export failed"))}：${escapeHtml(error.message || String(error))}</div></div>`;
+        if (token === multiCaseExportRenderToken) outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(multiCaseEligibleBranches())}<div class="formula-empty">${escapeHtml(optText("多Case C导出失败", "Multi-case C export failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div></div>`;
       }
     }
 
@@ -11111,7 +11123,7 @@
           const result = await cachedEntry.pending;
           if (token === optimizedEliminationRenderToken) outputText.innerHTML = renderOptimizedEliminationResult(result, payload);
         } catch (error) {
-          if (token === optimizedEliminationRenderToken) outputText.innerHTML = `<div class="formula-empty">${optText("优化消元失败", "Optimized elimination failed")}：${escapeHtml(error.message || String(error))}</div>`;
+          if (token === optimizedEliminationRenderToken) outputText.innerHTML = `<div class="formula-empty">${optText("优化消元失败", "Optimized elimination failed")}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
         }
         return;
       }
@@ -11138,7 +11150,7 @@
         const result = await pending;
         if (token === optimizedEliminationRenderToken) outputText.innerHTML = renderOptimizedEliminationResult(result, payload);
       } catch (error) {
-        if (token === optimizedEliminationRenderToken) outputText.innerHTML = `<div class="formula-empty">${optText("优化消元失败", "Optimized elimination failed")}：${escapeHtml(error.message || String(error))}</div>`;
+        if (token === optimizedEliminationRenderToken) outputText.innerHTML = `<div class="formula-empty">${optText("优化消元失败", "Optimized elimination failed")}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
       }
     }
 
@@ -13246,8 +13258,8 @@
         render();
       } catch (error) {
         statusEl.textContent = optText(
-          `打包黑盒重算失败：${error.message || String(error)}`,
-          `Packed box recompute failed: ${error.message || String(error)}`
+          `打包黑盒重算失败：${localizedBackendErrorMessage(error)}`,
+          `Packed box recompute failed: ${localizedBackendErrorMessage(error)}`
         );
         render();
       }
@@ -13729,8 +13741,8 @@
           } else if (button.dataset.packageCaseOverlayAction === "finish") {
             finishPackageCaseEdit().catch(error => {
               alert(optText(
-                `Pack 工况保存失败：${error.message || String(error)}`,
-                `Pack case save failed: ${error.message || String(error)}`
+                `Pack 工况保存失败：${localizedBackendErrorMessage(error)}`,
+                `Pack case save failed: ${localizedBackendErrorMessage(error)}`
               ));
             });
           } else {
@@ -14832,7 +14844,7 @@
         })
         .catch(error => {
           const nextTarget = document.getElementById("blackBoxValidationResult");
-          if (nextTarget) nextTarget.innerHTML = `<div class="validation-warning">${escapeHtml(error.message || String(error))}</div>`;
+          if (nextTarget) nextTarget.innerHTML = `<div class="validation-warning">${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
         });
     }
 
@@ -16783,16 +16795,16 @@ function startResizeDrag(branch, handle, event) {
       if (state.packageCaseEdit) {
         finishPackageCaseEdit().catch(error => {
           alert(optText(
-            `Pack 工况保存失败：${error.message || String(error)}`,
-            `Pack case save failed: ${error.message || String(error)}`
+            `Pack 工况保存失败：${localizedBackendErrorMessage(error)}`,
+            `Pack case save failed: ${localizedBackendErrorMessage(error)}`
           ));
         });
         return;
       }
       packSelectedAsYBox().catch(error => {
         alert(optText(
-          `打包失败：${error.message || String(error)}`,
-          `Pack failed: ${error.message || String(error)}`
+          `打包失败：${localizedBackendErrorMessage(error)}`,
+          `Pack failed: ${localizedBackendErrorMessage(error)}`
         ));
       });
     });
