@@ -1,3 +1,4 @@
+import re
 import unittest
 import json
 import io
@@ -236,7 +237,17 @@ class OptimizedEliminationTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
-        self.assertRegex(draft, r"double sourceG_tmp\d+ = 1\.0/\(G11\*G22 \+ G11\*Gc - pow\(G12, 2\.0\) \+ G22\*Gc \+ pow\(Gc, 2\.0\)\);")
+        source_declared = set(re.findall(r"^\s*double (source(?:G|Ihis|GI)_tmp\d+) = 0\.0;", draft, re.MULTILINE))
+        self.assertTrue(source_declared)
+        for name in source_declared:
+            self.assertEqual(
+                len(re.findall(rf"^\s*double {re.escape(name)}\b", draft, re.MULTILINE)),
+                1,
+                msg=f"{name} should be declared once and assigned later without redeclaring",
+            )
+        self.assertRegex(draft, r"sourceG_tmp\d+ = 1\.0/\(G11\*G22 \+ G11\*Gc - pow\(G12, 2\.0\) \+ G22\*Gc \+ pow\(Gc, 2\.0\)\);")
+        self.assertIn("Repeated source-level subexpressions for this generated block.", draft)
+        self.assertNotIn("is a repeated source subexpression", draft)
         self.assertNotRegex(
             draft,
             r"double sourceIhis_tmp\d+ = 1\.0/\(G11\*G22 \+ G11\*Gc - pow\(G12, 2\.0\) \+ G22\*Gc \+ pow\(Gc, 2\.0\)\);",
@@ -288,7 +299,7 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
         self.assertNotIn("set_CODE(&W_code", draft)
 
-    def test_no_elimination_c_draft_declares_matrix_error_counter(self):
+    def test_no_elimination_c_draft_omits_unused_matrix_error_counter(self):
         G1, G2 = sp.symbols("G1 G2")
         G = sp.Matrix([[G1, -G1], [-G1, G1 + G2]])
         structured = build_structured_formula(G, sp.zeros(2, 1), ["A", "B"], ["A", "B"], [])
@@ -297,7 +308,9 @@ class OptimizedEliminationTests(unittest.TestCase):
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
         self.assertIn("STATIC:\n\n", draft)
-        self.assertIn("RAM_PASS1:\n    int err = 0;", draft)
+        self.assertIn("RAM_PASS1:", draft)
+        self.assertNotIn("RAM_PASS1:\n    int err = 0;", draft)
+        self.assertNotIn("RTDS matrix allocation failed", draft)
         self.assertNotIn("STATIC:\n    int err", draft)
 
     def test_dependency_stage_plan_accepts_borrowed_reduced_model_without_structured_inverse(self):

@@ -3098,7 +3098,7 @@
     let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
     const REDUCED_CACHE_VERSION = "reduced-safe-simplified-v1";
-    const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v3-source-cse-reuse";
+    const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v5-source-cse-static-assign";
     const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v5-direct-residual-split";
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
@@ -10029,6 +10029,14 @@
 
     function localizedBackendWarning(message) {
       const text = String(message || "");
+      const reducedZeroMatch = text.match(/^约化提示：保留节点\s+(.+?)\s+的 Gred 行\/列和 Ihisred 都化简为 0。/);
+      if (reducedZeroMatch) {
+        const node = reducedZeroMatch[1] || "-";
+        return optText(
+          text,
+          `Reduction note: retained node ${node} has a zero Gred row/column and a zero Ihisred entry. This means the node is electrically decoupled or floating in the reduced network, so its voltage is not determined by the current reduced equation. If this node must participate in the external solve, keep a neighboring reference node, add a ground/reference admittance or external constraint, or adjust the internal/external partition. If it is only an observation node or an intentionally retained open port, this can be ignored.`
+        );
+      }
       if (text === "Info: active DummyBranch case is finalized before optimized C stamping; dummy leaf nodes are not solver nodes.") {
         return optText(
           "提示：当前 DummyBranch 工况会在优化 C stamp 前完成最终维度裁剪；dummy leaf 节点不会进入求解器节点。",
@@ -11963,7 +11971,7 @@
       return `
         <div class="formula-card validation-warning">
           <div class="formula-name">${escapeHtml(tr("提示"))}</div>
-          <div class="formula-empty">${warnings.map(escapeHtml).join("<br>")}</div>
+          <div class="formula-empty">${warnings.map(localizedBackendWarning).map(escapeHtml).join("<br>")}</div>
         </div>
       `;
     }
@@ -14502,6 +14510,10 @@
           item.gIsConstant = isConstant;
           item.constantGSymbols = "";
         });
+      }
+      const visibleConstantCheckbox = editor.querySelector('input[data-field="gIsConstant"]');
+      if (visibleConstantCheckbox) {
+        visibleConstantCheckbox.checked = Boolean(branchGIsConstant(branch));
       }
       renderAfterSidePanelEdit();
     }

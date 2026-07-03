@@ -97,6 +97,22 @@ Safety rules:
   Saved JSON files can otherwise keep showing a stale `optimizedEliminationCache`
   or `multiCaseExportCache` result even though the backend generator has been
   fixed.
+- Keep CSE comments at group level. Do not emit `sourceG_tmpN is a repeated
+  source subexpression` before every temporary; it makes long RAM/CODE blocks
+  hard to read. Per-variable comments should be reserved for semantic aliases
+  such as `ramG_* represents G[...]` or `Ihis_* represents Ihisred[...]`.
+- Source-level CSE temporaries returned by the scalar assignment planner are
+  declared in `STATIC` or `LOCAL_STATIC` when they must be reused across
+  RAM/CODE sections. The generated RAM/CODE body must then emit plain
+  assignments such as `sourceG_tmp0 = ...;`, not `double sourceG_tmp0 = ...;`.
+  Tests should scan generated drafts for duplicate `double source*tmpN`
+  declarations; otherwise C drafts can look valid in one stage but fail in C
+  compilation after temp lifting.
+- The post-processing passes that hoist RAM/CODE shared temps and dedupe same
+  CODE-stage temps must accept both legacy local declarations
+  (`double sourceG_tmp0 = rhs;`) and the current predeclared assignment form
+  (`sourceG_tmp0 = rhs;`). If they only match the legacy form, cross-stage reuse
+  silently stops working after temp declarations are lifted to STATIC.
 
 Same-stage CODE source temp reuse:
 
@@ -437,6 +453,24 @@ and assigns CODE `GValue`/`Inj` scalars directly should not emit this ready bloc
 This is more than cosmetic: a stray ready block suggests a matrix DAG exists
 when the draft is actually scalar-only, and it makes code review harder. Keep the
 block for Schur/Vk/Ihis matrix paths; strip it for direct no-elimination drafts.
+
+The same rule applies to allocation error counters. If a draft only uses
+`g_mat_over/setupGMatrix` plus scalar `GValue`/`Inj` assignments and emits no
+`err += matrixDim(...)`, then it should not emit `int err = 0` or the
+`RTDS matrix allocation failed` check. Keep that check only on paths with live
+runtime `MATRIX_` allocation.
+
+### Frontend Warnings Must Use the Language Layer
+
+Backend warnings are often rendered by specific frontend tabs rather than the
+generic error path. Those renderers must call the same localization helper used
+by optimized export warnings. A common miss is a frontend-rendered reduced
+diagnostic, such as a retained node with zero `Gred` row/column and zero
+`Ihisred`, staying Chinese-only in English mode.
+
+Rule of thumb: if a warning is shown inside a formula card, route it through
+`localizedBackendWarning(...)` or `optText(...)` at the render site. Do not rely
+on the backend string being magically translated.
 
 ### API Error JSON Must Be Encoding-Safe
 

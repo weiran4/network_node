@@ -1336,10 +1336,11 @@ def _c_scalar_assignment_cse(
     temp_names: list[str] = []
     compute_lines: list[str] = []
 
+    if source_temps:
+        compute_lines.append(f"{indent}/* Repeated source-level subexpressions for this generated block. */")
     for name, expr in source_temps:
         temp_names.append(name)
-        compute_lines.append(f"{indent}/* {name} is a repeated source subexpression. */")
-        compute_lines.append(f"{indent}double {name} = {_ccode(expr)};")
+        compute_lines.append(f"{indent}{name} = {_ccode(expr)};")
 
     for key in sorted(temp_keys, key=lambda item: groups[item]["first_index"]):
         group = groups[key]
@@ -2274,7 +2275,6 @@ def _c_emit_rtds_stage_sections(
             *_c_declaration_group("RAM G stamp scalar aliases", ram_g_temp_names_no_elim),
             "",
             "RAM_PASS1:",
-            "    int err = 0;",
             *_c_section_warning(
                 "RAM-SIDE G MATRIX VALUE SETUP",
                 [
@@ -2304,10 +2304,6 @@ def _c_emit_rtds_stage_sections(
                 else "    /* No RAM-side G entries: no fixed G overlay is registered. */"
             ),
             "",
-            "    if (err > 0) {",
-            '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
-            '                       "RTDS matrix allocation failed for component %s.", Name);',
-            "    }",
             *_c_register_lines(no_elim_code_names),
         ])
         if dynamic_gred_no_elim:
@@ -3018,8 +3014,8 @@ def _c_emit_rtds_reduction_tail(
     ]
 
 
-_SOURCE_TEMP_DECL_RE = re.compile(
-    r"^(?P<indent>\s*)double\s+(?P<name>source(?:G|Ihis)_tmp\d+)\s*=\s*(?P<rhs>[^;\n]+);$"
+_SOURCE_TEMP_ASSIGN_RE = re.compile(
+    r"^(?P<indent>\s*)(?:(?P<decl>double)\s+)?(?P<name>source(?:G|Ihis)_tmp\d+)\s*=\s*(?P<rhs>[^;\n]+);$"
 )
 
 
@@ -3049,7 +3045,7 @@ def _lift_repeated_ram_code_source_temps(draft: str) -> str:
         line_offsets.append(cursor)
         cursor += len(line) + 1
     for line_no, line in enumerate(lines_for_scan):
-        match = _SOURCE_TEMP_DECL_RE.match(line)
+        match = _SOURCE_TEMP_ASSIGN_RE.match(line)
         if not match:
             continue
         rhs = match.group("rhs").strip()
@@ -3104,7 +3100,7 @@ def _lift_repeated_ram_code_source_temps(draft: str) -> str:
             declaration_inserted = True
             continue
 
-        match = _SOURCE_TEMP_DECL_RE.match(line)
+        match = _SOURCE_TEMP_ASSIGN_RE.match(line)
         if match and match.group("name") in name_to_shared:
             rhs = match.group("rhs").strip()
             shared_name = name_to_shared[match.group("name")]
@@ -3153,7 +3149,7 @@ def _dedupe_same_code_source_temps(draft: str) -> str:
         offset = line_offsets[line_no]
         if offset < code_pos or offset >= code_end:
             continue
-        match = _SOURCE_TEMP_DECL_RE.match(line)
+        match = _SOURCE_TEMP_ASSIGN_RE.match(line)
         if not match:
             continue
         rhs = match.group("rhs").strip()
@@ -3172,7 +3168,7 @@ def _dedupe_same_code_source_temps(draft: str) -> str:
 
     output: list[str] = []
     for line_no, line in enumerate(lines):
-        declaration = _SOURCE_TEMP_DECL_RE.match(line)
+        declaration = _SOURCE_TEMP_ASSIGN_RE.match(line)
         if declaration and declaration.group("name") in replacements:
             continue
         if line_no in remove_lines:

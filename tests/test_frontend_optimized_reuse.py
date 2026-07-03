@@ -299,7 +299,7 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         source = Path("index.html").read_text(encoding="utf-8")
 
         self.assertIn(
-            'const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v3-source-cse-reuse";',
+            'const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v5-source-cse-static-assign";',
             source,
         )
         self.assertNotIn("optimized-c-export-v2-no-stale-template", source)
