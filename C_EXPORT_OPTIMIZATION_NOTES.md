@@ -390,6 +390,15 @@ objects. Strip an unused `NR/NK` enum before renaming dimensions. If later code
 references `NR` or `NK`, keep the readable `RETAINED_NODES/INTERNAL_NODES` enum
 and comments.
 
+Important exception: retained-profile multi-case drafts need their profile enum
+whenever generated code references `PACK_CASE_n`, `RETAINED_NODES_CASE_n`,
+`retained_profile`, or `node_active`. This is true even when
+`INTERNAL_NODES = 0` and no runtime `MATRIX_` objects are required. The cleanup
+pass must not assume that a no-elimination path can drop every enum; if the old
+`NR/NK` enum has already been removed, retained-layout compaction must insert a
+fresh `PACK_CASE_n / RETAINED_NODES_CASE_n / INTERNAL_NODES` enum before the
+`STATIC` section.
+
 ### Matrix Runtime Init Must Have Live MATRIX Users
 
 `initializeMatricesForCode()` and `rtds_matrix_code_ready` are only needed when

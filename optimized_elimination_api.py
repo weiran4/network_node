@@ -3677,7 +3677,21 @@ def _replace_enum_for_retained_layouts(draft: str, profiles: list[dict], nk: int
         r"enum \{ (?:NR = \d+, NK = \d+|RETAINED_NODES = \d+, INTERNAL_NODES = \d+) \};"
         r"(?:\n/\* Dimension names:[\s\S]*?\*/)?"
     )
-    return re.sub(enum_pattern, enum_replacement, draft, count=1)
+    draft_with_enum, replacement_count = re.subn(enum_pattern, enum_replacement, draft, count=1)
+    if replacement_count:
+        return draft_with_enum
+
+    # No-elimination retained-profile paths may have had the old NR/NK enum
+    # removed before profile compaction runs.  If generated code still uses
+    # PACK_CASE_n / RETAINED_NODES_CASE_n, the profile enum is required.
+    insertion = enum_replacement + "\n\n"
+    lifecycle_marker = "/* RTDS lifecycle placement"
+    if lifecycle_marker in draft:
+        return draft.replace(lifecycle_marker, insertion + lifecycle_marker, 1)
+    static_marker = "STATIC:"
+    if static_marker in draft:
+        return draft.replace(static_marker, insertion + static_marker, 1)
+    return insertion + draft
 
 
 def _case_condition_from_ids(case_id_symbol: str, case_ids: Sequence[int]) -> str:
