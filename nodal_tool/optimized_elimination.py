@@ -3120,9 +3120,76 @@ def _lift_repeated_ram_code_source_temps(draft: str) -> str:
     return "\n".join(output)
 
 
+def _dedupe_same_code_source_temps(draft: str) -> str:
+    """Reuse exact sourceG/sourceIhis temps inside a plain CODE block.
+
+    Source-level G and Ihis CSE are intentionally built independently.  When G
+    is CODE-owned, both CSE lists live in CODE, so the RAM/CODE hoist above does
+    not see duplicates such as the same denominator emitted once as sourceG_tmp0
+    and once as sourceIhis_tmp0.  This pass only merges exact text matches in a
+    switch-free CODE block; it performs no algebraic equivalence checking and
+    never crosses case scopes.
+    """
+    code_pos = draft.find("\nCODE:")
+    if code_pos < 0:
+        return draft
+    t1_pos = draft.find("\nT1_T2:", code_pos)
+    code_end = t1_pos if t1_pos >= 0 else len(draft)
+    code_body = draft[code_pos:code_end]
+    if re.search(r"\bswitch\s*\(", code_body):
+        return draft
+
+    lines = draft.splitlines()
+    line_offsets: list[int] = []
+    cursor = 0
+    for line in lines:
+        line_offsets.append(cursor)
+        cursor += len(line) + 1
+
+    canonical_by_rhs: dict[str, dict] = {}
+    replacements: dict[str, str] = {}
+    remove_lines: set[int] = set()
+    for line_no, line in enumerate(lines):
+        offset = line_offsets[line_no]
+        if offset < code_pos or offset >= code_end:
+            continue
+        match = _SOURCE_TEMP_DECL_RE.match(line)
+        if not match:
+            continue
+        rhs = match.group("rhs").strip()
+        if not _source_temp_rhs_is_liftable(rhs):
+            continue
+        name = match.group("name")
+        canonical = canonical_by_rhs.get(rhs)
+        if canonical is None:
+            canonical_by_rhs[rhs] = {"name": name, "line_no": line_no}
+            continue
+        replacements[name] = canonical["name"]
+        remove_lines.add(line_no)
+
+    if not replacements:
+        return draft
+
+    output: list[str] = []
+    for line_no, line in enumerate(lines):
+        declaration = _SOURCE_TEMP_DECL_RE.match(line)
+        if declaration and declaration.group("name") in replacements:
+            continue
+        if line_no in remove_lines:
+            continue
+        updated = line
+        offset = line_offsets[line_no]
+        if code_pos <= offset < code_end:
+            for old_name, shared_name in replacements.items():
+                updated = re.sub(rf"\b{re.escape(old_name)}\b", shared_name, updated)
+        output.append(updated)
+    return "\n".join(output)
+
+
 def _join_c_draft_lines(lines: Sequence[str]) -> str:
     draft = "\n".join(lines)
     draft = _lift_repeated_ram_code_source_temps(draft)
+    draft = _dedupe_same_code_source_temps(draft)
     draft = _use_readable_dimension_names(draft)
     draft = _ensure_static_blank_line(draft)
     include_lines: list[str] = []

@@ -93,10 +93,38 @@ Safety rules:
   `g_mat_over` writes must reference those names. If a temp is declared but no
   stamp uses it, the RAM/CODE split is probably passing through two different
   emitters.
+- When C draft semantics change, bump the matching frontend cache version.
+  Saved JSON files can otherwise keep showing a stale `optimizedEliminationCache`
+  or `multiCaseExportCache` result even though the backend generator has been
+  fixed.
+
+Same-stage CODE source temp reuse:
+
+- Optimized C export runs source-level CSE separately for G and Ihis. If a source
+  G entry is CODE-owned, the same repeated denominator can be emitted twice in
+  the same `CODE` section, for example once as `sourceG_tmp0` and again as
+  `sourceIhis_tmp0`.
+- Single-case export can merge these when the emitted RHS text is exactly
+  identical in the same CODE body.
+- Multi-case export often emits G aliases and Ihis aliases in separate CODE-side
+  `switch` blocks. It may still merge them, but only when all of these match:
+  the same local case selector scope, the same case index, and the exact same
+  RHS text. The lifted name should be persistent for the CODE section, for
+  example `sourceGI_C1_case1_tmp0`.
+- Do not share across different case indices, different local selectors, or
+  different runtime conditions.
+- Do not prove equality with algebra here. The pass should only remove duplicate
+  same-stage declarations and rewrite later uses to the first temp name. If the
+  expressions differ textually, keep the existing code.
 
 This is intentionally different from dense `Gred` CSE. It reduces repeated
 source expressions in examples such as `Trf_Ctest.json` without revisiting the
 historical slow path caused by expanded dense matrices.
+
+Debug lesson: a helper-level test is not enough for this case. `Trf_Ctest.json`
+must be regenerated through the same multi-case export path used by the UI,
+because repeated source temps can be split across the G-alias switch and the
+Ihis-alias switch even when each individual helper looks correct.
 
 ### Multi-Case RAM Overlay Deduplication
 

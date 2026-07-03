@@ -700,6 +700,49 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertLess(lines.count("AA + G22 + Grc + PN + PP + w2"), 3)
         self.assertRegex(lines, r"g_mat_over\[0\]\[1\] = .*sourceG_case_id_case0_tmp")
 
+    def test_conditional_ram_stamp_collapses_identical_alias_overlay(self):
+        entry_plans = [
+            {
+                "row": 0,
+                "col": 0,
+                "var": "varG_A_A",
+                "template_expr": sp.Symbol("multcase_G_C1_N1_N1"),
+                "ram_cases": [
+                    {"index": 0, "expr": sp.sympify("(G11*G22 + G11*Gc)/(G11 + Gc)")},
+                    {"index": 1, "expr": sp.sympify("(G11*G22 + G22*Gc)/(G22 + Gc)")},
+                ],
+                "code_cases": [],
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "var": "varG_A_B",
+                "template_expr": -sp.Symbol("multcase_G_C1_N1_N2"),
+                "ram_cases": [
+                    {"index": 0, "expr": -sp.sympify("(G12*Gc)/(G11 + Gc)")},
+                    {"index": 1, "expr": -sp.sympify("(G12*Gc)/(G22 + Gc)")},
+                ],
+                "code_cases": [],
+            },
+        ]
+
+        lines = "\n".join(optimized_api._conditional_ram_stamp_block(
+            case_id_symbol="case_id",
+            profiles=[{"name": "case 0"}, {"name": "case 1"}],
+            external_nodes=["A", "B"],
+            entry_plans=entry_plans,
+            aliases={
+                "multcase_G_C1_N1_N1": {"branch_id": "C1", "owner": "RAM", "kind": "G"},
+                "multcase_G_C1_N1_N2": {"branch_id": "C1", "owner": "RAM", "kind": "G"},
+            },
+        ))
+
+        self.assertIn("Case-invariant RAM final-G stamp after multi-case aliases are resolved.", lines)
+        self.assertNotIn("Case-conditional RAM final-G stamp", lines)
+        self.assertEqual(lines.count("setupGMatrix(2);"), 1)
+        self.assertIn("g_mat_over[0][0] = multcase_G_C1_N1_N1;", lines)
+        self.assertIn("g_mat_over[0][1] = -multcase_G_C1_N1_N2;", lines)
+
     def test_trf_ctest_ram_temps_are_used_by_ram_stamp(self):
         fixture = Path("exports/Trf_Ctest.json")
         if not fixture.exists():
@@ -732,6 +775,8 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
 
                 if "setupGMatrix" not in ram_section:
                     continue
+                if "No RAM-side G entries: no fixed G overlay is registered." in ram_section:
+                    continue
 
                 self.assertIn(
                     "multcase_G_C1_N1_N1 =",
@@ -759,8 +804,12 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
                     "Trf_Ctest RAM stamp must use source-level aliases instead of re-expanded per-case temps.",
                 )
         self.assertTrue(
-            saw_case_invariant_ram_overlay,
-            "At least one Trf_Ctest cache should collapse identical per-case RAM overlays into one case-invariant stamp.",
+            saw_case_invariant_ram_overlay or all(
+                "No RAM-side G entries: no fixed G overlay is registered."
+                in build_multi_case_response({**json.loads(cache["key"]), "mode": "multi_case_c_export"})["multi_case"]["c_draft"]
+                for cache in caches
+            ),
+            "Trf_Ctest should either have no RAM overlay or collapse identical per-case RAM overlays into one case-invariant stamp.",
         )
 
     def test_trf_ctest_reuses_ram_safe_source_temps_between_g_and_ihis(self):

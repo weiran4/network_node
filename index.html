@@ -3098,7 +3098,7 @@
     let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
     const REDUCED_CACHE_VERSION = "reduced-safe-simplified-v1";
-    const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v2-no-stale-template";
+    const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v3-source-cse-reuse";
     const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v5-direct-residual-split";
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
@@ -4166,7 +4166,7 @@
         nodes: Object.fromEntries(ports.map(id => [id, `c${n}_${id.toLowerCase()}`])),
         portLayout: layout,
         gMatrix: `[${ports.map(() => zeroRow).join(", ")}]`,
-        gIsConstant: false,
+        gIsConstant: true,
         constantGSymbols: "",
         ihisVector: `[${ports.map(() => "[0]").join(", ")}]`,
         currents

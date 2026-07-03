@@ -204,6 +204,48 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertNotRegex(draft, r"CODE:[\s\S]*double sourceIhis_tmp\d+ = 1\.0/\(G11 \+ Gc\);")
         self.assertLessEqual(draft.count("1.0/(G11 + Gc)"), 1)
 
+    def test_no_elimination_c_draft_reuses_source_temps_when_g_is_code_owned(self):
+        G11, G12, G22, Gc, Ihis_p, Ihis_s = sp.symbols("G11 G12 G22 Gc Ihis_p Ihis_s")
+        den = G11 * G22 + G11 * Gc - G12**2 + G22 * Gc + Gc**2
+        common = 1 / den
+        nodes = ["P1", "P2"]
+        G = sp.Matrix(
+            [
+                [Gc * common * (G11 * G22 + G11 * Gc - G12**2), -Gc * common * (G11 * G22 + G11 * Gc - G12**2)],
+                [-Gc * common * (G11 * G22 + G11 * Gc - G12**2), Gc * common * (G11 * G22 + G11 * Gc - G12**2)],
+            ]
+        )
+        Ihis = sp.Matrix(
+            [
+                [common * (G22 * Gc * Ihis_p + Gc**2 * Ihis_p - G12 * Gc * Ihis_s)],
+                [-common * (G22 * Gc * Ihis_p + Gc**2 * Ihis_p - G12 * Gc * Ihis_s)],
+            ]
+        )
+        structured = build_structured_formula(G, Ihis, nodes, nodes, [])
+        plan = build_dependency_stage_plan(
+            structured,
+            {
+                "G11": "CODE_VARIABLE",
+                "G12": "CODE_VARIABLE",
+                "G22": "CODE_VARIABLE",
+                "Gc": "CODE_VARIABLE",
+                "Ihis_p": "STEP_HISTORY",
+                "Ihis_s": "STEP_HISTORY",
+            },
+        )
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertRegex(draft, r"double sourceG_tmp\d+ = 1\.0/\(G11\*G22 \+ G11\*Gc - pow\(G12, 2\.0\) \+ G22\*Gc \+ pow\(Gc, 2\.0\)\);")
+        self.assertNotRegex(
+            draft,
+            r"double sourceIhis_tmp\d+ = 1\.0/\(G11\*G22 \+ G11\*Gc - pow\(G12, 2\.0\) \+ G22\*Gc \+ pow\(Gc, 2\.0\)\);",
+        )
+        self.assertLessEqual(
+            draft.count("1.0/(G11*G22 + G11*Gc - pow(G12, 2.0) + G22*Gc + pow(Gc, 2.0))"),
+            1,
+        )
+
     def test_structured_c_draft_declares_matrix_error_counter(self):
         G1, G2 = sp.symbols("G1 G2")
         nodes = ["A", "X", "B"]

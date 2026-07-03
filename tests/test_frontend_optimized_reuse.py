@@ -295,6 +295,15 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         )
         self.assertNotIn("multi-case-runtime-mutable-v4-source-stage-split", source)
 
+    def test_optimized_cache_version_invalidates_stale_source_cse_drafts(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v3-source-cse-reuse";',
+            source,
+        )
+        self.assertNotIn("optimized-c-export-v2-no-stale-template", source)
+
     def test_export_state_persists_optimized_and_multicase_caches(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
@@ -485,6 +494,15 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("item.gIsConstant = Boolean(isConstant);", batch_source)
         self.assertIn('item.constantGSymbols = "";', batch_source)
         self.assertIn("renderAfterSidePanelEdit();", batch_source)
+
+    def test_custom_n_port_defaults_to_constant_g(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("function createCustomNPort")
+        end = source.index("function openCustomNPortDialog")
+        create_source = source[start:end]
+        self.assertIn("gIsConstant: true,", create_source)
+        self.assertNotIn("gIsConstant: false,", create_source)
 
     def test_packaged_network_cases_have_edit_mode_and_boundary_guard(self):
         source = Path("index.html").read_text(encoding="utf-8")

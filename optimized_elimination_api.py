@@ -3011,6 +3011,68 @@ def _lift_repeated_ram_safe_source_temps_from_text(
     return draft
 
 
+def _lift_repeated_code_source_temps_from_text(draft: str) -> str:
+    """Lift exact repeated CODE-side sourceG temps to persistent sourceGI temps.
+
+    Multi-case G aliases and Ihis aliases are emitted in separate CODE-side
+    switch blocks.  When both blocks independently CSE the same source entry
+    expression for the same local selector/case, keep one assignment and reuse
+    it.  This is intentionally textual: no algebraic equivalence checking and
+    no cross-selector or cross-case sharing.
+    """
+    code_pos = draft.find("CODE:")
+    if code_pos < 0:
+        return draft
+    assignment_re = re.compile(
+        r"(?m)^(?P<indent>\s*)double\s+"
+        r"(?P<name>sourceG_(?P<scope>.+?)_case(?P<case>\d+)_tmp\d+)"
+        r"\s*=\s*(?P<rhs>[^;\n]+);\s*$"
+    )
+    groups: dict[tuple[str, int, str], list[re.Match[str]]] = {}
+    for match in assignment_re.finditer(draft):
+        if match.start() < code_pos:
+            continue
+        rhs = match.group("rhs").strip()
+        if "sourceG_" in rhs or "sourceGI_" in rhs:
+            continue
+        groups.setdefault((match.group("scope"), int(match.group("case")), rhs), []).append(match)
+
+    replacements: list[tuple[int, int, str]] = []
+    name_replacements: dict[str, str] = {}
+    declarations: list[str] = []
+    used_names = _declared_c_names(draft)
+    for (scope, case_index, rhs), matches in groups.items():
+        if len(matches) < 2:
+            continue
+        base_name = f"sourceGI_{scope}_case{case_index}_tmp0"
+        shared_name = base_name
+        suffix = 1
+        while shared_name in used_names:
+            shared_name = f"{base_name}_{suffix}"
+            suffix += 1
+        used_names.add(shared_name)
+        declarations.append(f"    double {shared_name} = 0.0;")
+        first = min(matches, key=lambda item: item.start())
+        for match in matches:
+            local_name = match.group("name")
+            line_end = match.end()
+            if line_end < len(draft) and draft[line_end:line_end + 1] == "\n":
+                line_end += 1
+            replacement = f"{match.group('indent')}{shared_name} = {rhs};\n" if match is first else ""
+            replacements.append((match.start(), line_end, replacement))
+            name_replacements[local_name] = shared_name
+
+    if not replacements:
+        return draft
+    for start, end, replacement in sorted(replacements, reverse=True):
+        draft = draft[:start] + replacement + draft[end:]
+    for local_name, shared_name in name_replacements.items():
+        draft = re.sub(rf"\b{re.escape(local_name)}\b", shared_name, draft)
+    if declarations:
+        draft = _insert_after_label(draft, "STATIC:", declarations)
+    return draft
+
+
 def _conditional_ram_case_assignments(entry_plans: Sequence[Mapping], case_index: int) -> list[tuple[str, sp.Expr]]:
     assignments: list[tuple[str, sp.Expr]] = []
     for plan in entry_plans:
@@ -4367,7 +4429,9 @@ def _conditional_ram_stamp_block(
             )
             if alias_stamp is not None:
                 alias_assignment, stamp_expr = alias_stamp
-                _append_ram_alias_assignment(ram_alias_assignments, alias_assignment)
+                alias_name, _alias_expr = alias_assignment
+                if alias_name not in (aliases or {}):
+                    _append_ram_alias_assignment(ram_alias_assignments, alias_assignment)
                 expr = stamp_expr
             ram_items.append((int(plan["row"]), int(plan["col"]), expr))
         if not ram_items:
@@ -4826,6 +4890,7 @@ def _apply_conditional_final_gvalues_to_structured_draft(
                 draft,
                 _multi_case_symbol_table(profiles),
             )
+            draft = _lift_repeated_code_source_temps_from_text(draft)
             return draft, gvalue_conditions
 
     grouped_assignments: dict[tuple[int, ...], list[str]] = {}
@@ -4870,6 +4935,7 @@ def _apply_conditional_final_gvalues_to_structured_draft(
         draft,
         _multi_case_symbol_table(profiles),
     )
+    draft = _lift_repeated_code_source_temps_from_text(draft)
     return draft, gvalue_conditions
 
 
