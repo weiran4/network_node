@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2746,7 +2746,7 @@
       <div class="toolbar" role="toolbar" aria-label="工具">
         <div class="toolbar-group">
           <span class="toolbar-label">语言</span>
-          <button class="tool text-tool" id="languageTool" title="切换到英文" aria-label="切换到英文">EN</button>
+          <button class="tool text-tool" id="languageTool" title="Switch to Chinese" aria-label="Switch to Chinese">中</button>
         </div>
         <div class="toolbar-group">
           <span class="toolbar-label">历史</span>
@@ -3066,7 +3066,7 @@
       activeCanvasId: "canvas1",
       nextCanvas: 2,
       canvasTabDrag: null,
-      language: "zh",
+      language: "en",
       activeOutput: "formulas",
       optimizedEliminationDisplay: "compact",
       optimizedEliminationSimplify: "light",
@@ -7045,7 +7045,7 @@
     function applyProjectUiState(data) {
       const ui = data?.ui || data || {};
       clearDerivedResultCaches();
-      state.language = ui.language || data?.language || state.language || "zh";
+      state.language = ui.language || data?.language || state.language || "en";
       state.activeOutput = ui.activeOutput || data?.activeOutput || state.activeOutput || "formulas";
       state.showLocalLabels = ui.showLocalLabels ?? data?.showLocalLabels ?? state.showLocalLabels;
       state.showReducedBranchCurrents = ui.showReducedBranchCurrents ?? data?.showReducedBranchCurrents ?? state.showReducedBranchCurrents;
