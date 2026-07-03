@@ -413,9 +413,9 @@ class MultiCaseDummyCExportTests(unittest.TestCase):
 
         draft = response["multi_case"]["c_draft"]
         self.assertEqual(spy.call_count, 1)
-        self.assertIn("multcase_G_combined_N1_N1", draft)
-        self.assertIn("multcase_G_combined_N1_N1 = G_A;", draft)
-        self.assertIn("multcase_G_combined_N1_N1 = G_B;", draft)
+        self.assertNotIn("multcase_G_combined_N1_N1 =", draft)
+        self.assertIn("g_mat_over[0][0] = -pow(G_A, 2.0)/(G_A + 1.0/R) + G_A;", draft)
+        self.assertIn("g_mat_over[0][0] = -pow(G_B, 2.0)/(G_B + 1.0/R) + G_B;", draft)
         self.assertIn("N2 =", draft)
 
 

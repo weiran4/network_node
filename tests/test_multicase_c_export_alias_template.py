@@ -1,5 +1,6 @@
 import unittest
 import json
+import re
 import time
 from pathlib import Path
 
@@ -174,9 +175,10 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         draft = response["multi_case"]["c_draft"]
         self.assertEqual(response["multi_case"]["codegen_mode"], "case-agnostic alias template")
         self.assertIn("STATIC:\n\n", draft)
-        self.assertIn("multcase_G_R1_A_A", draft)
         self.assertIn("multcase_G_R1_A_A = X;", draft)
         self.assertIn("multcase_G_R1_A_A = X + Y;", draft)
+        self.assertIn("g_mat_over[0][0] = multcase_G_R1_A_A;", draft)
+        self.assertIn("g_mat_over[0][1] = -multcase_G_R1_A_A;", draft)
         self.assertNotIn("X + Y - X", draft)
         self.assertNotIn("base + delta", draft)
         self.assertLessEqual(draft.count("Gred ="), 1)
@@ -280,11 +282,11 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         draft = response["multi_case"]["c_draft"]
         self.assertIn("BEGIN_T0:", draft)
         self.assertIn("g_mat_over[0][1] = -G_const;", draft)
-        self.assertNotIn("multcase_G_R1_A_A = G_const;", draft)
-        self.assertNotIn("multcase_G_R1_A_A = G_dynamic;", draft)
-        self.assertIn("varG_A_A = G_dynamic;", draft)
-        self.assertIn("varG_A_B = -G_dynamic;", draft)
-        self.assertIn("varG_B_B = G_dynamic;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_const;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_dynamic;", draft)
+        self.assertIn("varG_A_A = multcase_G_R1_A_A;", draft)
+        self.assertIn("varG_A_B = -multcase_G_R1_A_A;", draft)
+        self.assertIn("varG_B_B = multcase_G_R1_A_A;", draft)
         self.assertNotIn("set_CODE(&G_code", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
 
@@ -563,6 +565,245 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("case 0:\n        multcase_G_C1_A_A = AA + G22 + G_rc + w2;\n        multcase_G_C1_B_B = BB + G22 + G_rc + w2;\n        multcase_G_C1_C_C = CC + G22 + G_rc + w2;", lines)
         self.assertIn("case 1:\n        multcase_G_C1_A_A = Dabc + G22 + G_rc + w2;\n        multcase_G_C1_B_B = Dabc + G22 + G_rc + w2;\n        multcase_G_C1_C_C = Dabc + G22 + G_rc + w2;", lines)
 
+    def test_source_level_code_alias_assignments_use_budgeted_cse(self):
+        aliases = {
+            "multcase_G_C1_A_RC": {
+                "branch_id": "C1",
+                "owner": "CODE",
+                "case_values": {
+                    "0": "G12*Grc/(AA + G22 + Grc + w2 + PP + PN) + AP*G12/(AA + G22 + Grc + w2 + PP + PN)",
+                    "1": "G12*Grc/(Dabc + G22 + Grc + w2 + PP + PN) + AP*G12/(Dabc + G22 + Grc + w2 + PP + PN)",
+                },
+            },
+            "multcase_G_C1_B_RC": {
+                "branch_id": "C1",
+                "owner": "CODE",
+                "case_values": {
+                    "0": "-G12*Grc/(AA + G22 + Grc + w2 + PP + PN) + BP*G12/(AA + G22 + Grc + w2 + PP + PN)",
+                    "1": "-G12*Grc/(Dabc + G22 + Grc + w2 + PP + PN) + BP*G12/(Dabc + G22 + Grc + w2 + PP + PN)",
+                },
+            },
+            "multcase_G_C1_C_RC": {
+                "branch_id": "C1",
+                "owner": "CODE",
+                "case_values": {
+                    "0": "CP*G12/(AA + G22 + Grc + w2 + PP + PN)",
+                    "1": "CP*G12/(Dabc + G22 + Grc + w2 + PP + PN)",
+                },
+            },
+        }
+
+        lines = "\n".join(_alias_assignment_lines(aliases, "CODE"))
+
+        self.assertIn("double sourceG_C1_case0_tmp", lines)
+        self.assertIn("double sourceG_C1_case1_tmp", lines)
+        self.assertLess(lines.count("AA + G22 + Grc + PN + PP + w2"), 3)
+        self.assertLess(lines.count("Dabc + G22 + Grc + PN + PP + w2"), 3)
+        self.assertIn("multcase_G_C1_B_RC = ", lines)
+
+    def test_source_level_final_gvalue_writes_use_budgeted_cse(self):
+        entry_plans = [
+            {
+                "row": 0,
+                "col": 0,
+                "var": "varG_A_A",
+                "code_cases": [
+                    {
+                        "index": 0,
+                        "expr": sp.sympify("G12*Grc/(AA + G22 + Grc + w2 + PP + PN) + AP*G12/(AA + G22 + Grc + w2 + PP + PN)"),
+                    }
+                ],
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "var": "varG_A_B",
+                "code_cases": [
+                    {
+                        "index": 0,
+                        "expr": sp.sympify("-G12*Grc/(AA + G22 + Grc + w2 + PP + PN) + BP*G12/(AA + G22 + Grc + w2 + PP + PN)"),
+                    }
+                ],
+            },
+            {
+                "row": 1,
+                "col": 1,
+                "var": "varG_B_B",
+                "code_cases": [
+                    {
+                        "index": 0,
+                        "expr": sp.sympify("CP*G12/(AA + G22 + Grc + w2 + PP + PN)"),
+                    }
+                ],
+            },
+        ]
+
+        lines = "\n".join(optimized_api._final_g_code_case_lines(
+            case_id_symbol="case_id",
+            entry_plans=entry_plans,
+            matrix_name=None,
+        ))
+
+        self.assertIn("double sourceG_case_id_case0_tmp", lines)
+        self.assertLess(lines.count("AA + G22 + Grc + PN + PP + w2"), 3)
+        self.assertIn("varG_A_B = ", lines)
+
+    def test_source_level_ram_stamp_writes_use_budgeted_cse(self):
+        shared_den = "AA + G22 + Grc + w2 + PP + PN"
+        entry_plans = [
+            {
+                "row": 0,
+                "col": 0,
+                "var": "varG_A_A",
+                "ram_cases": [
+                    {
+                        "index": 0,
+                        "expr": sp.sympify(f"G12*Grc/({shared_den}) + AP*G12/({shared_den})"),
+                    }
+                ],
+                "code_cases": [],
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "var": "varG_A_B",
+                "ram_cases": [
+                    {
+                        "index": 0,
+                        "expr": sp.sympify(f"-G12*Grc/({shared_den}) + BP*G12/({shared_den})"),
+                    }
+                ],
+                "code_cases": [],
+            },
+            {
+                "row": 1,
+                "col": 1,
+                "var": "varG_B_B",
+                "ram_cases": [
+                    {
+                        "index": 0,
+                        "expr": sp.sympify(f"CP*G12/({shared_den})"),
+                    }
+                ],
+                "code_cases": [],
+            },
+        ]
+
+        lines = "\n".join(optimized_api._conditional_ram_stamp_block(
+            case_id_symbol="case_id",
+            profiles=[{"name": "case 0"}],
+            external_nodes=["A", "B"],
+            entry_plans=entry_plans,
+        ))
+
+        self.assertIn("double sourceG_case_id_case0_tmp", lines)
+        self.assertLess(lines.count("AA + G22 + Grc + PN + PP + w2"), 3)
+        self.assertRegex(lines, r"g_mat_over\[0\]\[1\] = .*sourceG_case_id_case0_tmp")
+
+    def test_trf_ctest_ram_temps_are_used_by_ram_stamp(self):
+        fixture = Path("exports/Trf_Ctest.json")
+        if not fixture.exists():
+            self.skipTest("exports/Trf_Ctest.json is not available")
+        data = json.loads(fixture.read_text(encoding="utf-8"))
+        caches = data.get("multiCaseExportCache") or []
+        self.assertTrue(caches, "Trf_Ctest.json should carry multi-case export caches")
+        saw_case_invariant_ram_overlay = False
+        for cache_index, cache in enumerate(caches):
+            with self.subTest(cache_index=cache_index):
+                payload = json.loads(cache["key"])
+                payload["mode"] = "multi_case_c_export"
+
+                response = build_multi_case_response(payload)
+                draft = response["multi_case"]["c_draft"]
+                ram_section = draft.split("RAM_PASS1:", 1)[1].split("GVALUES:", 1)[0]
+
+                case_id_symbol = payload.get("case_id_symbol") or "case_id"
+                case_scope = re.escape(str(case_id_symbol))
+                ram_temp_names = set(re.findall(rf"\bdouble\s+(sourceG_{case_scope}_\w+)\s*=", ram_section))
+                ram_alias_names = set(re.findall(r"\b(multcase_G_\w+)\s*=", ram_section))
+
+                for name in sorted(ram_temp_names | ram_alias_names):
+                    usage_lines = [
+                        line for line in ram_section.splitlines()
+                        if re.search(rf"\b{re.escape(name)}\b", line)
+                        and not re.match(rf"\s*(?:double\s+)?{re.escape(name)}\s*=", line)
+                    ]
+                    self.assertTrue(usage_lines, f"{name} is computed in RAM but never used")
+
+                if "setupGMatrix" not in ram_section:
+                    continue
+
+                self.assertIn(
+                    "multcase_G_C1_N1_N1 =",
+                    ram_section,
+                    "Every Trf_Ctest RAM stamp cache must resolve complex source entries into reusable aliases first.",
+                )
+                self.assertIn("g_mat_over[0][0] = multcase_G_C1_N1_N1;", ram_section)
+                self.assertIn("g_mat_over[0][1] = -multcase_G_C1_N1_N2;", ram_section)
+                self.assertIn("g_mat_over[3][3] = multcase_G_C1_N4_N4;", ram_section)
+                if "Case-invariant RAM final-G stamp after multi-case aliases are resolved." in ram_section:
+                    saw_case_invariant_ram_overlay = True
+                    self.assertNotIn(
+                        "Case-conditional RAM final-G stamp",
+                        ram_section,
+                        "Identical RAM overlays should not be duplicated once every entry is expressed through multcase aliases.",
+                    )
+                    self.assertEqual(
+                        ram_section.count("setupGMatrix(4);"),
+                        1,
+                        "The identical 4-node RAM overlay should be registered once, not once per case.",
+                    )
+                self.assertNotRegex(
+                    ram_section,
+                    r"g_mat_over\[[^\n]+sourceG_C1_case\d+_tmp",
+                    "Trf_Ctest RAM stamp must use source-level aliases instead of re-expanded per-case temps.",
+                )
+        self.assertTrue(
+            saw_case_invariant_ram_overlay,
+            "At least one Trf_Ctest cache should collapse identical per-case RAM overlays into one case-invariant stamp.",
+        )
+
+    def test_trf_ctest_reuses_ram_safe_source_temps_between_g_and_ihis(self):
+        fixture = Path("exports/Trf_Ctest.json")
+        if not fixture.exists():
+            self.skipTest("exports/Trf_Ctest.json is not available")
+        data = json.loads(fixture.read_text(encoding="utf-8"))
+        caches = data.get("multiCaseExportCache") or []
+        self.assertTrue(caches, "Trf_Ctest.json should carry multi-case export caches")
+
+        saw_shared_source_temp = False
+        for cache_index, cache in enumerate(caches):
+            with self.subTest(cache_index=cache_index):
+                payload = json.loads(cache["key"])
+                payload["mode"] = "multi_case_c_export"
+
+                response = build_multi_case_response(payload)
+                draft = response["multi_case"]["c_draft"]
+                if "1.0/(G11 + Gc)" not in draft:
+                    continue
+
+                saw_shared_source_temp = True
+                self.assertIn(
+                    "sourceGI_C1_case1_tmp0",
+                    draft,
+                    "RAM-safe source CSE shared by G and Ihis should be lifted to a persistent sourceGI temp.",
+                )
+                self.assertNotRegex(
+                    draft,
+                    r"CODE:[\s\S]*double\s+sourceG_C1_case1_tmp0\s*=\s*1\.0/\(G11 \+ Gc\)",
+                    "CODE Ihis should reuse the RAM-safe sourceGI temp instead of redeclaring a local sourceG temp.",
+                )
+                self.assertNotIn(
+                    "double sourceG_case_id_case1_tmp0 = 1.0/(G11 + Gc);",
+                    draft,
+                    "RAM G should use the lifted sourceGI temp instead of keeping a local sourceG temp.",
+                )
+
+        self.assertTrue(
+            saw_shared_source_temp,
+            "Trf_Ctest should include at least one case where G and Ihis share a RAM-safe source CSE.",
+        )
+
     def test_mult_case_test_fixture_uses_alias_template_not_single_profile_fallback(self):
         data = json.loads(Path("exports/mult_case_test.json").read_text(encoding="utf-8"))
         branches = {branch["id"]: branch for branch in data["branches"]}
@@ -608,16 +849,14 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(multi["profile_count"], 4)
         self.assertNotIn("RAM-switch multi-case C draft", draft)
         self.assertNotIn("NCASE = 1", draft)
-        self.assertIn("multcase_G_B11_N1_N1", draft)
-        self.assertIn("multcase_G_B12_N2_N3", draft)
-        self.assertIn("switch (case_id)", draft)
-        self.assertIn("switch (B11_case_id)", draft)
-        self.assertIn("switch (B12_case_id)", draft)
-        self.assertIn("case 3:", draft)
         self.assertIn("multcase_G_B11_N1_N1 = G1;", draft)
         self.assertIn("multcase_G_B11_N1_N1 = G2;", draft)
         self.assertIn("multcase_G_B12_N2_N3 = G3;", draft)
         self.assertIn("multcase_G_B12_N2_N3 = G4;", draft)
+        self.assertIn("switch (case_id)", draft)
+        self.assertIn("case 3:", draft)
+        self.assertIn("g_mat_over[0][0] = multcase_G_B11_N1_N1;", draft)
+        self.assertIn("g_mat_over[1][2] = -multcase_G_B12_N2_N3;", draft)
         self.assertNotIn("G2 - G1", draft)
         self.assertNotIn("G4 - G3", draft)
 
@@ -636,10 +875,9 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("multcase_G_R1_A_A = 0.0;", draft)
         self.assertIn("multcase_G_R1_A_A = X;", draft)
         self.assertIn("case 0:", draft)
-        self.assertIn("/* No RAM-owned final G entries in this case. */", draft)
+        self.assertIn("g_mat_over[0][0] = multcase_G_R1_A_A;", draft)
         self.assertIn("case 1:", draft)
-        self.assertIn("g_mat_over[0][0] = X;", draft)
-        self.assertIn("g_mat_over[0][1] = -X;", draft)
+        self.assertIn("g_mat_over[0][1] = -multcase_G_R1_A_A;", draft)
 
     def test_rejects_case_that_changes_topology(self):
         bad_payload = _series_payload("X", internal=False)

@@ -217,6 +217,215 @@ def _ccode(expr: object) -> str:
     return re.sub(r"(?<![eE][+-])(?<![\w.])(\d+)(?![\w.])", r"\1.0", code)
 
 
+def _source_level_cse_assignments(
+    assignments: Sequence[tuple[str, object]],
+    *,
+    temp_prefix: str,
+) -> tuple[list[tuple[str, sp.Expr]], list[tuple[str, sp.Expr]]]:
+    """Budgeted source-entry CSE for C assignment groups.
+
+    This is intentionally a shallow source/Gfull optimization.  It never calls
+    cancel/factor/simplify and is skipped for tiny or oversized groups, so dense
+    Gred expressions cannot pull codegen into the historical slow path.
+    """
+    parsed: list[tuple[str, sp.Expr]] = [
+        (lhs, expr if isinstance(expr, sp.Expr) else _parse_expr(str(expr)))
+        for lhs, expr in assignments
+    ]
+    if len(parsed) < 2:
+        return [], parsed
+    exprs = [expr for _lhs, expr in parsed]
+    total_ops = sum(int(sp.count_ops(expr)) for expr in exprs)
+    total_chars = sum(len(str(expr)) for expr in exprs)
+    if total_ops < 24 and total_chars < 180:
+        return [], parsed
+    if len(parsed) > 80 or total_ops > 1800 or total_chars > 12000:
+        return [], parsed
+
+    replacements, reduced_exprs = sp.cse(
+        exprs,
+        symbols=sp.numbered_symbols(temp_prefix),
+        order="none",
+    )
+    used_symbols = set().union(*(sp.sympify(expr).free_symbols for expr in reduced_exprs))
+    live_replacements: list[tuple[sp.Symbol, sp.Expr]] = []
+    for symbol, expr in reversed(replacements):
+        if symbol not in used_symbols:
+            continue
+        parsed_expr = sp.sympify(expr)
+        live_replacements.append((symbol, parsed_expr))
+        used_symbols.update(parsed_expr.free_symbols)
+    live_replacements.reverse()
+    replacements = live_replacements
+    parsed_replacements = [(str(symbol), sp.sympify(expr)) for symbol, expr in replacements]
+    if not any(int(sp.count_ops(expr)) >= 2 or len(str(expr)) >= 20 for _symbol, expr in parsed_replacements):
+        return [], parsed
+    reduced = [
+        (lhs, sp.sympify(expr))
+        for (lhs, _original), expr in zip(parsed, reduced_exprs)
+    ]
+    return parsed_replacements, reduced
+
+
+def _emit_source_level_cse_assignment_lines(
+    assignments: Sequence[tuple[str, object]],
+    *,
+    temp_prefix: str,
+    indent: int,
+    substitutions: Mapping[sp.Expr, sp.Symbol] | None = None,
+) -> tuple[list[str], bool]:
+    if substitutions:
+        assignments = [
+            (lhs, _apply_source_temp_substitutions(expr, substitutions))
+            for lhs, expr in assignments
+        ]
+    temps, reduced = _source_level_cse_assignments(assignments, temp_prefix=temp_prefix)
+    prefix = " " * indent
+    lines = [f"{prefix}double {name} = {_ccode(expr)};" for name, expr in temps]
+    lines.extend(f"{prefix}{lhs} = {_ccode(expr)};" for lhs, expr in reduced)
+    return lines, bool(temps)
+
+
+def _resolved_cse_temps(temps: Sequence[tuple[str, sp.Expr]]) -> list[tuple[str, sp.Expr, sp.Expr]]:
+    """Return local CSE temps together with their fully expanded-by-temp expression.
+
+    "Expanded" here only means replacing earlier CSE symbols with their original
+    CSE expressions.  It deliberately avoids algebraic expansion/simplification.
+    """
+    resolved_by_symbol: dict[sp.Symbol, sp.Expr] = {}
+    out: list[tuple[str, sp.Expr, sp.Expr]] = []
+    for name, expr in temps:
+        parsed = sp.sympify(expr)
+        resolved = parsed.xreplace(resolved_by_symbol)
+        symbol = sp.Symbol(str(name))
+        resolved_by_symbol[symbol] = resolved
+        out.append((str(name), parsed, resolved))
+    return out
+
+
+def _source_expr_key(expr: sp.Expr) -> str:
+    return sp.srepr(sp.sympify(expr))
+
+
+def _apply_source_temp_substitutions(
+    expr: object,
+    substitutions: Mapping[sp.Expr, sp.Symbol] | None,
+) -> sp.Expr:
+    parsed = expr if isinstance(expr, sp.Expr) else _parse_expr(str(expr))
+    if not substitutions:
+        return sp.sympify(parsed)
+    # Larger expressions first prevents a small denominator replacement from
+    # hiding a larger reusable term such as Gc/(G11 + Gc).
+    ordered = sorted(
+        substitutions.items(),
+        key=lambda item: (int(sp.count_ops(item[0])), len(str(item[0]))),
+        reverse=True,
+    )
+    out = sp.sympify(parsed)
+    for source_expr, symbol in ordered:
+        out = out.xreplace({sp.sympify(source_expr): symbol})
+    return out
+
+
+def _emit_source_level_ram_stamp_lines(
+    ram_items: Sequence[tuple[int, int, sp.Expr]],
+    *,
+    local_index: dict[int, int],
+    temp_prefix: str,
+    indent: int,
+    alias_assignments: Sequence[tuple[str, sp.Expr]] | None = None,
+    substitutions: Mapping[sp.Expr, sp.Symbol] | None = None,
+) -> list[str]:
+    """Emit RAM g_mat_over writes with the same bounded source-entry CSE as CODE.
+
+    The placeholders are only used to keep reduced expressions in order; they are
+    not emitted as C variables.  This keeps the optimization scoped to one RAM
+    case block and avoids dense Gred algebra.
+    """
+    alias_assignments = [
+        (lhs, _apply_source_temp_substitutions(expr, substitutions))
+        for lhs, expr in (alias_assignments or [])
+    ]
+    placeholder_assignments = [
+        (f"__ram_stamp_{index}", _apply_source_temp_substitutions(expr, substitutions))
+        for index, (_row, _col, expr) in enumerate(ram_items)
+    ]
+    temps, reduced = _source_level_cse_assignments(
+        [*alias_assignments, *placeholder_assignments],
+        temp_prefix=temp_prefix,
+    )
+    alias_count = len(alias_assignments)
+    reduced_aliases = reduced[:alias_count]
+    reduced_stamps = reduced[alias_count:]
+    prefix = " " * indent
+    lines = [f"{prefix}double {name} = {_ccode(expr)};" for name, expr in temps]
+    lines.extend(f"{prefix}{lhs} = {_ccode(expr)};" for lhs, expr in reduced_aliases)
+    for (row, col, _expr), (_placeholder, reduced_expr) in zip(ram_items, reduced_stamps):
+        local_row = local_index[row]
+        local_col = local_index[col]
+        value = _ccode(reduced_expr)
+        lines.append(f"{prefix}g_mat_over[{local_row}][{local_col}] = {value};")
+        if local_row != local_col:
+            lines.append(f"{prefix}g_mat_over[{local_col}][{local_row}] = {value};")
+    return lines
+
+
+def _signed_single_symbol(expr: sp.Expr) -> tuple[int, str] | None:
+    expr = sp.sympify(expr)
+    if isinstance(expr, sp.Symbol):
+        return 1, expr.name
+    negated = -expr
+    if isinstance(negated, sp.Symbol):
+        return -1, negated.name
+    return None
+
+
+def _ram_stamp_alias_assignment(
+    *,
+    template_expr: sp.Expr,
+    ram_expr: sp.Expr,
+) -> tuple[tuple[str, sp.Expr], sp.Expr] | None:
+    """Materialize a simple template alias before RAM stamping.
+
+    If a template entry is ``-multcase_G_*`` and the concrete RAM value is
+    ``-x``, assign ``multcase_G_* = x`` and stamp ``-multcase_G_*``.  This is
+    source-level aliasing, not base+delta compensation.
+    """
+    signed = _signed_single_symbol(template_expr)
+    if signed is None:
+        return None
+    sign, alias_name = signed
+    if not alias_name.startswith("multcase_G_"):
+        return None
+    ram_expr = sp.sympify(ram_expr)
+    if int(sp.count_ops(ram_expr)) <= 3 and len(str(ram_expr)) <= 32:
+        return None
+    alias_symbol = sp.Symbol(alias_name)
+    alias_value = sp.Integer(sign) * ram_expr
+    stamp_expr = sp.Integer(sign) * alias_symbol
+    return (alias_name, alias_value), stamp_expr
+
+
+def _append_ram_alias_assignment(
+    assignments: list[tuple[str, sp.Expr]],
+    assignment: tuple[str, sp.Expr],
+) -> None:
+    name, expr = assignment
+    for existing_name, existing_expr in assignments:
+        if existing_name == name:
+            if not _expr_equal_light(existing_expr, expr):
+                return
+            return
+    assignments.append((name, expr))
+
+
+def _source_cse_scope_name(selector_name: str) -> str:
+    scope = _c_identifier_name(selector_name, "case")
+    if scope.endswith("_case_id"):
+        return scope[: -len("_case_id")]
+    return scope
+
+
 def _ensure_static_blank_line(draft: str) -> str:
     return re.sub(r"(?m)^STATIC:\n(?!\n)", "STATIC:\n\n", draft)
 
@@ -1209,9 +1418,21 @@ def _expr_stage(expr: sp.Expr, symbol_table: dict[str, str]) -> str:
     return "RAM"
 
 
+def _multi_case_symbol_table(profiles: Sequence[Mapping]) -> dict[str, str]:
+    symbol_table: dict[str, str] = {}
+    for profile in profiles or []:
+        payload = profile.get("payload") or {}
+        symbol_table.update(payload.get("symbol_dependency_table_tagged") or payload.get("symbol_dependency_table") or {})
+    return symbol_table
+
+
 def _promote_owner(owners: Iterable[str]) -> str:
     order = {"RAM": 0, "CODE": 1, "CODE_PER_STEP": 2}
     return max((owner for owner in owners), key=lambda owner: order.get(owner, 0), default="RAM")
+
+
+def _owner_rank(owner: str) -> int:
+    return {"RAM": 0, "CODE": 1, "CODE_PER_STEP": 2}.get(str(owner or "RAM"), 0)
 
 
 def _stage_for_owner(owner: str) -> str:
@@ -2497,42 +2718,419 @@ def _multicase_local_case_lines(case_id_symbol: str, profiles: list[dict], branc
     return lines
 
 
-def _alias_assignment_lines(aliases: dict[str, dict], wanted_owner: str, case_id_symbol: str = "case_id") -> list[str]:
-    selected = [
-        (alias, info)
-        for alias, info in aliases.items()
-        if info.get("owner") == wanted_owner
-    ]
-    if not selected:
-        return []
-    lines = [f"    /* Resolve {wanted_owner} multi-case effective aliases as full values, never deltas. */"]
+def _alias_local_case_name(alias: str, info: Mapping, case_id_symbol: str) -> str:
+    branch_id = info.get("branch_id") or alias
+    selector = info.get("selector")
+    if selector == "global":
+        return case_id_symbol
+    if selector == "runtime":
+        return str(info.get("case_id_symbol") or f"runtime_{_c_identifier_name(branch_id, 'branch')}_case_id")
+    return f"{_c_identifier_name(branch_id, 'branch')}_case_id"
+
+
+def _group_alias_entries(
+    aliases: dict[str, dict],
+    wanted_owner: str,
+    case_id_symbol: str,
+) -> dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]]:
     grouped: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
-    for alias, info in selected:
-        branch_id = info["branch_id"]
-        selector = info.get("selector")
-        if selector == "global":
-            local_name = case_id_symbol
-        elif selector == "runtime":
-            local_name = str(info.get("case_id_symbol") or f"runtime_{_c_identifier_name(branch_id, 'branch')}_case_id")
-        else:
-            local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
+    for alias, info in aliases.items():
+        if info.get("owner") != wanted_owner:
+            continue
+        local_name = _alias_local_case_name(alias, info, case_id_symbol)
         case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
         grouped.setdefault(local_name, []).append((alias, info, case_values))
+    return grouped
+
+
+def _alias_case_assignments(
+    entries: Sequence[tuple[str, dict, dict[int, sp.Expr]]],
+    case_index: int,
+) -> list[tuple[str, sp.Expr]]:
+    assignments: list[tuple[str, sp.Expr]] = []
+    for alias, _info, case_values in entries:
+        default_expr = case_values[min(case_values)] if case_values else sp.Integer(0)
+        assignments.append((alias, case_values.get(case_index, default_expr)))
+    return assignments
+
+
+def _shared_source_temp_plan(
+    aliases: dict[str, dict],
+    *,
+    case_id_symbol: str,
+    symbol_table: Mapping[str, str] | None,
+) -> dict[str, dict[int, list[tuple[str, sp.Expr]]]]:
+    """Find RAM-safe source CSE temps shared by RAM G and CODE/Ihis aliases.
+
+    This is intentionally structural: sp.cse finds repeated source subtrees and
+    we only share the exact same resolved CSE expression.  Runtime-mutable case
+    selectors are skipped because RAM-assigned temps would not refresh at runtime.
+    """
+    symbol_table = dict(symbol_table or {})
+    ram_groups = _group_alias_entries(aliases, "RAM", case_id_symbol)
+    code_groups: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
+    for owner in ("CODE", "CODE_PER_STEP"):
+        for local_name, entries in _group_alias_entries(aliases, owner, case_id_symbol).items():
+            code_groups.setdefault(local_name, []).extend(entries)
+    plan: dict[str, dict[int, list[tuple[str, sp.Expr]]]] = {}
+    for local_name, ram_entries in ram_groups.items():
+        if local_name.startswith("runtime_") or local_name not in code_groups:
+            continue
+        code_entries = code_groups[local_name]
+        case_indices = sorted(
+            {case_index for _alias, _info, values in [*ram_entries, *code_entries] for case_index in values}
+        )
+        if not case_indices:
+            continue
+        scope = _source_cse_scope_name(local_name)
+        for case_index in case_indices:
+            ram_assignments = _alias_case_assignments(ram_entries, case_index)
+            code_assignments = _alias_case_assignments(code_entries, case_index)
+            ram_temps, _ram_reduced = _source_level_cse_assignments(
+                ram_assignments,
+                temp_prefix=f"__ram_shared_probe_{scope}_case{case_index}_tmp",
+            )
+            code_temps, _code_reduced = _source_level_cse_assignments(
+                code_assignments,
+                temp_prefix=f"__code_shared_probe_{scope}_case{case_index}_tmp",
+            )
+            if not ram_temps or not code_temps:
+                continue
+            ram_by_key: dict[str, sp.Expr] = {}
+            for _name, _expr, resolved in _resolved_cse_temps(ram_temps):
+                if _expr_stage(resolved, symbol_table) != "RAM":
+                    continue
+                ram_by_key.setdefault(_source_expr_key(resolved), resolved)
+            shared_exprs: list[sp.Expr] = []
+            seen: set[str] = set()
+            for _name, _expr, resolved in _resolved_cse_temps(code_temps):
+                key = _source_expr_key(resolved)
+                if key not in ram_by_key or key in seen:
+                    continue
+                if _expr_stage(resolved, symbol_table) != "RAM":
+                    continue
+                seen.add(key)
+                shared_exprs.append(ram_by_key[key])
+            if not shared_exprs:
+                continue
+            case_items: list[tuple[str, sp.Expr]] = []
+            for index, expr in enumerate(shared_exprs):
+                case_items.append((f"sourceGI_{scope}_case{case_index}_tmp{index}", expr))
+            plan.setdefault(local_name, {})[case_index] = case_items
+    return plan
+
+
+def _shared_source_temp_declaration_lines(
+    shared_plan: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]],
+    declared: set[str],
+) -> list[str]:
+    lines: list[str] = []
+    for case_map in shared_plan.values():
+        for items in case_map.values():
+            for name, _expr in items:
+                if name in declared:
+                    continue
+                lines.append(f"    double {name} = 0.0;")
+                declared.add(name)
+    return lines
+
+
+def _shared_source_temp_substitutions(
+    shared_plan: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None,
+    local_name: str,
+    case_index: int,
+) -> dict[sp.Expr, sp.Symbol]:
+    items = ((shared_plan or {}).get(local_name) or {}).get(int(case_index)) or []
+    return {sp.sympify(expr): sp.Symbol(name) for name, expr in items}
+
+
+def _shared_source_temp_substitutions_for_profile(
+    shared_plan: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None,
+    local_case_indices: Mapping[str, int],
+) -> dict[sp.Expr, sp.Symbol]:
+    substitutions: dict[sp.Expr, sp.Symbol] = {}
+    for local_name, case_index in local_case_indices.items():
+        substitutions.update(_shared_source_temp_substitutions(shared_plan, local_name, int(case_index)))
+    return substitutions
+
+
+def _local_case_indices_for_profile(
+    *,
+    case_id_symbol: str,
+    profile_index: int,
+    profile: Mapping,
+    branch_ids: Sequence[str],
+) -> dict[str, int]:
+    indices = {case_id_symbol: int(profile_index)}
+    for branch_id in branch_ids:
+        local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
+        indices[local_name] = int(_profile_case_index(profile, branch_id, 0))
+    return indices
+
+
+def _shared_source_temp_assignment_lines(
+    shared_plan: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]],
+) -> list[str]:
+    if not shared_plan:
+        return []
+    lines = ["    /* Resolve RAM-safe source temporaries shared by G and Ihis aliases. */"]
+    for local_name, case_map in shared_plan.items():
+        if not case_map:
+            continue
+        lines.append(f"    switch ({local_name}) {{")
+        for case_index in sorted(case_map):
+            lines.append(f"    case {case_index}:")
+            emitted: dict[sp.Expr, sp.Symbol] = {}
+            for name, expr in case_map[case_index]:
+                rhs = _apply_source_temp_substitutions(expr, emitted)
+                lines.append(f"        {name} = {_ccode(rhs)};")
+                emitted[sp.sympify(expr)] = sp.Symbol(name)
+            lines.append("        break;")
+        default_index = min(case_map)
+        lines.append("    default:")
+        emitted = {}
+        for name, expr in case_map[default_index]:
+            rhs = _apply_source_temp_substitutions(expr, emitted)
+            lines.append(f"        {name} = {_ccode(rhs)};")
+            emitted[sp.sympify(expr)] = sp.Symbol(name)
+        lines.append("        break;")
+        lines.append("    }")
+    return lines
+
+
+def _apply_shared_source_temp_text_reuse(
+    draft: str,
+    shared_plan: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None,
+) -> str:
+    """Rewrite existing local sourceG temps to persistent sourceGI temps.
+
+    Some multi-case drafts are produced by patching an existing structured draft,
+    so the alias-resolution blocks already contain local sourceG_* CSE temps.
+    Rebuilding that whole block would be fragile; this pass only rewrites a
+    local temp when its emitted RHS is exactly the same C expression as a
+    RAM-safe sourceGI temp.  It does no algebraic equivalence checking.
+    """
+    if not shared_plan:
+        return draft
+    for local_name, case_map in shared_plan.items():
+        scope = _source_cse_scope_name(local_name)
+        for case_index, items in case_map.items():
+            for shared_name, expr in items:
+                rhs = re.escape(_ccode(expr))
+                pattern = re.compile(
+                    rf"(?m)^(?P<indent>\s*)double\s+"
+                    rf"(?P<local>sourceG_{re.escape(scope)}_case{int(case_index)}_tmp\d+)"
+                    rf"\s*=\s*{rhs};\s*$"
+                )
+                while True:
+                    match = pattern.search(draft)
+                    if not match:
+                        break
+                    local_temp = match.group("local")
+                    draft = draft[: match.start()] + draft[match.end() + (1 if draft[match.end():match.end()+1] == "\n" else 0):]
+                    draft = re.sub(rf"\b{re.escape(local_temp)}\b", shared_name, draft)
+    return draft
+
+
+def _lift_repeated_ram_safe_source_temps_from_text(
+    draft: str,
+    symbol_table: Mapping[str, str] | None,
+) -> str:
+    """Lift exact RAM/CODE repeated sourceG temps to persistent sourceGI temps.
+
+    This is a conservative post-pass for structured multi-case drafts.  It uses
+    the existing RAM_PASS1 line as proof that the exact RHS is available before
+    CODE for that same local case.  It does no algebraic equivalence checking and
+    skips RHS values that depend on another local sourceG temp.
+    """
+    code_pos = draft.find("CODE:")
+    if code_pos < 0:
+        return draft
+    _ = symbol_table  # Kept for API symmetry with source-temp planning callers.
+    assignment_re = re.compile(
+        r"(?m)^(?P<indent>\s*)double\s+"
+        r"(?P<name>sourceG_(?P<scope>.+?)_case(?P<case>\d+)_tmp\d+)"
+        r"\s*=\s*(?P<rhs>[^;\n]+);\s*$"
+    )
+    groups: dict[tuple[int, str], list[re.Match[str]]] = {}
+    for match in assignment_re.finditer(draft):
+        rhs = match.group("rhs").strip()
+        if "sourceG_" in rhs or "sourceGI_" in rhs:
+            continue
+        groups.setdefault((int(match.group("case")), rhs), []).append(match)
+
+    replacements: list[tuple[int, int, str]] = []
+    name_replacements: dict[str, str] = {}
+    declarations: list[str] = []
+    used_names = _declared_c_names(draft)
+    for (case_index, rhs), matches in groups.items():
+        has_ram = any(match.start() < code_pos for match in matches)
+        has_code = any(match.start() > code_pos for match in matches)
+        if not has_ram or not has_code:
+            continue
+        scopes = [match.group("scope") for match in matches]
+        preferred_scope = next((scope for scope in scopes if scope != "case_id"), scopes[0])
+        base_name = f"sourceGI_{preferred_scope}_case{case_index}_tmp0"
+        shared_name = base_name
+        suffix = 1
+        while shared_name in used_names:
+            if all(re.search(rf"\b{re.escape(match.group('name'))}\b", draft) is None for match in matches):
+                break
+            shared_name = f"{base_name}_{suffix}"
+            suffix += 1
+        if shared_name in used_names:
+            continue
+        used_names.add(shared_name)
+        declarations.append(f"    double {shared_name} = 0.0;")
+        first_ram = min((match for match in matches if match.start() < code_pos), key=lambda item: item.start())
+        for match in matches:
+            local_name = match.group("name")
+            line_end = match.end()
+            if line_end < len(draft) and draft[line_end:line_end + 1] == "\n":
+                line_end += 1
+            if match is first_ram:
+                replacement = f"{match.group('indent')}{shared_name} = {rhs};\n"
+            else:
+                replacement = ""
+            replacements.append((match.start(), line_end, replacement))
+            name_replacements[local_name] = shared_name
+
+    if not replacements:
+        return draft
+    for start, end, replacement in sorted(replacements, reverse=True):
+        draft = draft[:start] + replacement + draft[end:]
+    for local_name, shared_name in name_replacements.items():
+        draft = re.sub(rf"\b{re.escape(local_name)}\b", shared_name, draft)
+    if declarations:
+        draft = _insert_after_label(draft, "STATIC:", declarations)
+    return draft
+
+
+def _conditional_ram_case_assignments(entry_plans: Sequence[Mapping], case_index: int) -> list[tuple[str, sp.Expr]]:
+    assignments: list[tuple[str, sp.Expr]] = []
+    for plan in entry_plans:
+        ram_case = next((item for item in plan.get("ram_cases", []) if int(item.get("index", -1)) == int(case_index)), None)
+        if ram_case is None:
+            continue
+        expr = sp.sympify(ram_case.get("expr", 0))
+        if expr == 0:
+            continue
+        alias_stamp = _ram_stamp_alias_assignment(
+            template_expr=sp.sympify(plan.get("template_expr", expr)),
+            ram_expr=expr,
+        )
+        if alias_stamp is not None:
+            alias_assignment, _stamp_expr = alias_stamp
+            _append_ram_alias_assignment(assignments, alias_assignment)
+        assignments.append((f"__ram_final_g_{int(plan.get('row', 0))}_{int(plan.get('col', 0))}", expr))
+    return assignments
+
+
+def _conditional_shared_source_temp_plan(
+    *,
+    entry_plans: Sequence[Mapping],
+    aliases: dict[str, dict],
+    case_id_symbol: str,
+    profiles: Sequence[Mapping],
+    symbol_table: Mapping[str, str] | None,
+) -> dict[str, dict[int, list[tuple[str, sp.Expr]]]]:
+    """Shared RAM/CODE source temps for the no-internal conditional-GValue draft."""
+    symbol_table = dict(symbol_table or {})
+    code_groups: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
+    for owner in ("CODE", "CODE_PER_STEP"):
+        for local_name, entries in _group_alias_entries(aliases, owner, case_id_symbol).items():
+            code_groups.setdefault(local_name, []).extend(entries)
+    if not code_groups:
+        return {}
+    plan: dict[str, dict[int, list[tuple[str, sp.Expr]]]] = {}
+    for local_name, code_entries in code_groups.items():
+        if local_name.startswith("runtime_"):
+            continue
+        scope = _source_cse_scope_name(local_name)
+        for case_index, _profile in enumerate(profiles or []):
+            ram_assignments = _conditional_ram_case_assignments(entry_plans, case_index)
+            code_assignments = _alias_case_assignments(code_entries, case_index)
+            if not ram_assignments or not code_assignments:
+                continue
+            ram_temps, _ram_reduced = _source_level_cse_assignments(
+                ram_assignments,
+                temp_prefix=f"__ram_shared_probe_{scope}_case{case_index}_tmp",
+            )
+            code_temps, _code_reduced = _source_level_cse_assignments(
+                code_assignments,
+                temp_prefix=f"__code_shared_probe_{scope}_case{case_index}_tmp",
+            )
+            if not ram_temps or not code_temps:
+                continue
+            ram_by_key: dict[str, sp.Expr] = {}
+            for _name, _expr, resolved in _resolved_cse_temps(ram_temps):
+                if _expr_stage(resolved, symbol_table) == "RAM":
+                    ram_by_key.setdefault(_source_expr_key(resolved), resolved)
+            shared_exprs: list[sp.Expr] = []
+            seen: set[str] = set()
+            for _name, _expr, resolved in _resolved_cse_temps(code_temps):
+                key = _source_expr_key(resolved)
+                if key in ram_by_key and key not in seen and _expr_stage(resolved, symbol_table) == "RAM":
+                    shared_exprs.append(ram_by_key[key])
+                    seen.add(key)
+            if shared_exprs:
+                plan.setdefault(local_name, {})[case_index] = [
+                    (f"sourceGI_{scope}_case{case_index}_tmp{index}", expr)
+                    for index, expr in enumerate(shared_exprs)
+                ]
+    return plan
+
+
+def _alias_assignment_lines(
+    aliases: dict[str, dict],
+    wanted_owner: str,
+    case_id_symbol: str = "case_id",
+    *,
+    shared_source_temps: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None = None,
+) -> list[str]:
+    grouped = _group_alias_entries(aliases, wanted_owner, case_id_symbol)
+    if not grouped:
+        return []
+    lines = [f"    /* Resolve {wanted_owner} multi-case effective aliases as full values, never deltas. */"]
 
     for local_name, entries in grouped.items():
         case_indices = sorted({case_index for _alias, _info, case_values in entries for case_index in case_values})
+        cse_scope = _source_cse_scope_name(local_name)
         lines.append(f"    switch ({local_name}) {{")
         for case_index in case_indices:
             lines.append(f"    case {case_index}:")
-            for alias, _info, case_values in entries:
-                default_expr = case_values[min(case_values)] if case_values else sp.Integer(0)
-                lines.append(f"        {alias} = {_ccode(case_values.get(case_index, default_expr))};")
-            lines.append("        break;")
+            assignments = _alias_case_assignments(entries, case_index)
+            cse_lines, used_temps = _emit_source_level_cse_assignment_lines(
+                assignments,
+                temp_prefix=f"sourceG_{cse_scope}_case{case_index}_tmp",
+                indent=8,
+                substitutions=_shared_source_temp_substitutions(shared_source_temps, local_name, case_index),
+            )
+            if used_temps:
+                lines.append("    {")
+                lines.extend(cse_lines)
+                lines.append("        break;")
+                lines.append("    }")
+            else:
+                lines.extend(cse_lines)
+                lines.append("        break;")
         lines.append("    default:")
-        for alias, _info, case_values in entries:
-            default_expr = case_values[min(case_values)] if case_values else sp.Integer(0)
-            lines.append(f"        {alias} = {_ccode(default_expr)};")
-        lines.append("        break;")
+        default_case_index = min(case_indices) if case_indices else 0
+        default_assignments = _alias_case_assignments(entries, default_case_index)
+        cse_lines, used_temps = _emit_source_level_cse_assignment_lines(
+            default_assignments,
+            temp_prefix=f"sourceG_{cse_scope}_default_tmp",
+            indent=8,
+            substitutions=_shared_source_temp_substitutions(shared_source_temps, local_name, default_case_index),
+        )
+        if used_temps:
+            lines.append("    {")
+            lines.extend(cse_lines)
+            lines.append("        break;")
+            lines.append("    }")
+        else:
+            lines.extend(cse_lines)
+            lines.append("        break;")
         lines.append("    }")
     return lines
 
@@ -2544,14 +3142,21 @@ def _insert_multicase_alias_layer(
     profiles: list[dict],
     branch_ids: list[str],
     aliases: dict[str, dict],
+    symbol_table: Mapping[str, str] | None = None,
 ) -> str:
     declared = _declared_c_names(draft)
+    shared_source_temps = _shared_source_temp_plan(
+        aliases,
+        case_id_symbol=case_id_symbol,
+        symbol_table=symbol_table or {},
+    )
     declarations: list[str] = []
     for branch_id in branch_ids:
         local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
         if local_name not in declared:
             declarations.append(f"    int {local_name} = 0;")
             declared.add(local_name)
+    declarations.extend(_shared_source_temp_declaration_lines(shared_source_temps, declared))
     original_symbols: set[str] = set()
     for info in aliases.values():
         for expr in (info.get("case_values") or {}).values():
@@ -2565,11 +3170,27 @@ def _insert_multicase_alias_layer(
 
     ram_lines = (
         _multicase_local_case_lines(case_id_symbol, profiles, branch_ids)
-        + _alias_assignment_lines(aliases, "RAM", case_id_symbol)
+        + _shared_source_temp_assignment_lines(shared_source_temps)
+        + _alias_assignment_lines(
+            aliases,
+            "RAM",
+            case_id_symbol,
+            shared_source_temps=shared_source_temps,
+        )
     )
     draft = _insert_after_label(draft, "RAM_PASS1:", ram_lines)
 
-    code_lines = _alias_assignment_lines(aliases, "CODE", case_id_symbol) + _alias_assignment_lines(aliases, "CODE_PER_STEP", case_id_symbol)
+    code_lines = _alias_assignment_lines(
+        aliases,
+        "CODE",
+        case_id_symbol,
+        shared_source_temps=shared_source_temps,
+    ) + _alias_assignment_lines(
+        aliases,
+        "CODE_PER_STEP",
+        case_id_symbol,
+        shared_source_temps=shared_source_temps,
+    )
     marker = "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */"
     if code_lines and marker in draft:
         draft = draft.replace(marker, "\n".join(code_lines) + "\n" + marker, 1)
@@ -3349,6 +3970,52 @@ def _split_expr_by_stage_light(expr: sp.Expr, symbol_table: dict[str, str]) -> t
     return ram_expr, code_expr
 
 
+def _alias_stage_symbol_table(profile: dict, aliases: dict[str, dict]) -> dict[str, str]:
+    table = _profile_symbol_table(profile)
+    for alias, info in aliases.items():
+        table[alias] = _symbol_dependency_for_owner(str(info.get("owner") or "RAM"))
+    return table
+
+
+def _split_final_g_expr_preserving_aliases(
+    *,
+    template_expr: sp.Expr,
+    resolved_expr: sp.Expr,
+    profile: dict,
+    aliases: dict[str, dict],
+    profile_index: int,
+) -> tuple[sp.Expr, sp.Expr]:
+    """Split final-G entry while keeping useful multi-case aliases in C output.
+
+    The resolved expression is authoritative for RAM/CODE ownership in a specific
+    case.  The template expression is preferred only when substituting aliases
+    back to this case gives the same RAM or CODE piece.  This preserves readable
+    RAM aliases such as multcase_G_C1_N1_N1 without forcing mixed-owner aliases
+    into RAM-owned cases.
+    """
+    resolved_ram, resolved_code = _split_expr_by_stage_light(
+        resolved_expr,
+        _profile_symbol_table(profile),
+    )
+    template_ram, template_code = _split_expr_by_stage_light(
+        template_expr,
+        _alias_stage_symbol_table(profile, aliases),
+    )
+
+    def choose(candidate: sp.Expr, expected: sp.Expr) -> sp.Expr:
+        candidate = sp.sympify(candidate)
+        expected = sp.sympify(expected)
+        if _expr_equal_light(expected, 0):
+            return sp.Integer(0)
+        if not _expr_equal_light(candidate, 0):
+            resolved_candidate = _profile_final_expr(candidate, profile, aliases, profile_index)
+            if _expr_equal_light(resolved_candidate, expected):
+                return candidate
+        return expected
+
+    return choose(template_ram, resolved_ram), choose(template_code, resolved_code)
+
+
 def _conditional_final_g_plans(
     *,
     case_id_symbol: str,
@@ -3365,11 +4032,18 @@ def _conditional_final_g_plans(
             per_case = []
             ram_cases = []
             code_cases = []
+            template_expr = sp.sympify(template_gred[row, col])
             for index, profile in enumerate(profiles):
-                expr = _profile_final_expr(template_gred[row, col], profile, aliases, index)
+                expr = _profile_final_expr(template_expr, profile, aliases, index)
                 symbol_table = _profile_symbol_table(profile)
                 if split_ram_code_terms:
-                    ram_expr, code_expr = _split_expr_by_stage_light(expr, symbol_table)
+                    ram_expr, code_expr = _split_final_g_expr_preserving_aliases(
+                        template_expr=template_expr,
+                        resolved_expr=expr,
+                        profile=profile,
+                        aliases=aliases,
+                        profile_index=index,
+                    )
                     per_case.append({"index": index, "expr": ram_expr + code_expr, "stage": _expr_stage(expr, symbol_table)})
                     if not _expr_equal_light(ram_expr, 0):
                         ram_cases.append({"index": index, "expr": ram_expr, "stage": "RAM"})
@@ -3389,6 +4063,7 @@ def _conditional_final_g_plans(
                 "row": row,
                 "col": col,
                 "var": _var_g_name(external_nodes, row, col),
+                "template_expr": template_expr,
                 "ram_cases": ram_cases,
                 "code_cases": code_cases,
                 "condition": _case_condition(case_id_symbol, [item["index"] for item in code_cases]),
@@ -3452,6 +4127,13 @@ def _build_conditional_final_gvalue_draft(
         external_nodes=external_nodes,
         split_ram_code_terms=True,
     )
+    shared_source_temps = _conditional_shared_source_temp_plan(
+        entry_plans=entry_plans,
+        aliases=aliases,
+        case_id_symbol=case_id_symbol,
+        profiles=profiles,
+        symbol_table=symbol_table,
+    )
 
     lines = [
         "#include <matrixLIB.h>",
@@ -3468,6 +4150,9 @@ def _build_conditional_final_gvalue_draft(
             lines.append(f"    double {symbol} = 0.0;")
     for alias in sorted(aliases):
         lines.append(f"    double {alias} = 0.0;")
+    declared_static_names = set(declared_symbols) | set(aliases)
+    declared_static_names.update(f"{_c_identifier_name(branch_id, 'branch')}_case_id" for branch_id in branch_ids)
+    lines.extend(_shared_source_temp_declaration_lines(shared_source_temps, declared_static_names))
     lines.extend([
         "",
         "RAM_PASS1:",
@@ -3487,8 +4172,11 @@ def _build_conditional_final_gvalue_draft(
         "        break;",
         "    }",
         "",
-        "    g_mat_nods[0] = getNodeNum(comp, \"" + external_nodes[0] + "\");" if nr else "",
     ])
+    lines.extend(_shared_source_temp_assignment_lines(shared_source_temps))
+    if shared_source_temps:
+        lines.append("")
+    lines.append("    g_mat_nods[0] = getNodeNum(comp, \"" + external_nodes[0] + "\");" if nr else "")
     for index, node in enumerate(external_nodes[1:], start=1):
         lines.append(f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node}\");")
     if nr:
@@ -3503,19 +4191,45 @@ def _build_conditional_final_gvalue_draft(
         for index, profile in enumerate(profiles):
             lines.append(f"    case {index}:")
             any_ram = False
+            ram_items: list[tuple[int, int, sp.Expr]] = []
+            ram_alias_assignments: list[tuple[str, sp.Expr]] = []
             for plan in entry_plans:
                 ram_case = next((item for item in plan["ram_cases"] if item["index"] == index), None)
                 if ram_case is None:
                     if any(item["index"] == index for item in plan["code_cases"]):
                         lines.append(f"        /* CODE-owned case: no RAM stamp for {plan['var']}. */")
                     continue
-                value = _ccode(ram_case["expr"])
-                row = plan["row"]
-                col = plan["col"]
-                lines.append(f"        g_mat_over[{row}][{col}] = {value};")
-                if row != col:
-                    lines.append(f"        g_mat_over[{col}][{row}] = {value};")
+                expr = sp.sympify(ram_case["expr"])
+                if expr == 0:
+                    continue
+                alias_stamp = _ram_stamp_alias_assignment(
+                    template_expr=sp.sympify(plan.get("template_expr", expr)),
+                    ram_expr=expr,
+                )
+                if alias_stamp is not None:
+                    alias_assignment, stamp_expr = alias_stamp
+                    _append_ram_alias_assignment(ram_alias_assignments, alias_assignment)
+                    expr = stamp_expr
+                ram_items.append((int(plan["row"]), int(plan["col"]), expr))
                 any_ram = True
+            if ram_items:
+                local_case_indices = _local_case_indices_for_profile(
+                    case_id_symbol=case_id_symbol,
+                    profile_index=index,
+                    profile=profile,
+                    branch_ids=branch_ids,
+                )
+                lines.extend(_emit_source_level_ram_stamp_lines(
+                    ram_items,
+                    local_index={index: index for index in range(nr)},
+                    temp_prefix=f"sourceG_{_c_identifier_name(case_id_symbol, 'case')}_case{index}_tmp",
+                    indent=8,
+                    alias_assignments=ram_alias_assignments,
+                    substitutions=_shared_source_temp_substitutions_for_profile(
+                        shared_source_temps,
+                        local_case_indices,
+                    ),
+                ))
             if not any_ram:
                 lines.append("        /* No RAM-owned final G entries in this case. */")
             lines.append("        break;")
@@ -3553,29 +4267,38 @@ def _build_conditional_final_gvalue_draft(
         "BEGIN_T0:",
         "    /* Resolve multi-case effective aliases as full values, never deltas. */",
     ])
-    lines.extend(_alias_assignment_lines(aliases, "CODE") + _alias_assignment_lines(aliases, "CODE_PER_STEP"))
+    lines.extend(
+        _alias_assignment_lines(
+            aliases,
+            "CODE",
+            case_id_symbol,
+            shared_source_temps=shared_source_temps,
+        )
+        + _alias_assignment_lines(
+            aliases,
+            "CODE_PER_STEP",
+            case_id_symbol,
+            shared_source_temps=shared_source_temps,
+        )
+    )
     if any(info.get("owner") == "RAM" for info in aliases.values()):
-        lines.extend(_alias_assignment_lines(aliases, "RAM"))
+        lines.extend(
+            _alias_assignment_lines(
+                aliases,
+                "RAM",
+                case_id_symbol,
+                shared_source_temps=shared_source_temps,
+            )
+        )
     lines.extend([
         "",
-        f"    switch ({case_id_symbol}) {{",
     ])
-    for index, profile in enumerate(profiles):
-        lines.append(f"    case {index}:")
-        any_code = False
-        for plan in entry_plans:
-            code_case = next((item for item in plan["code_cases"] if item["index"] == index), None)
-            if code_case is None:
-                continue
-            lines.append(f"        {plan['var']} = {_ccode(code_case['expr'])};")
-            any_code = True
-        if not any_code:
-            lines.append("        /* RAM-owned case: no active varG assignment. */")
-        lines.append("        break;")
+    lines.extend(_final_g_code_case_lines(
+        case_id_symbol=case_id_symbol,
+        entry_plans=entry_plans,
+        matrix_name=None,
+    ))
     lines.extend([
-        "    default:",
-        "        break;",
-        "    }",
         "",
         "    /* Node injection currents follow retained-node order. */",
     ])
@@ -3587,7 +4310,9 @@ def _build_conditional_final_gvalue_draft(
         "T1_T2:",
         "    /* This conditional GValue export assumes no runtime case switching. */",
     ])
-    return "\n".join(line for line in lines if line != ""), gvalue_conditions
+    draft = "\n".join(line for line in lines if line != "")
+    draft = _lift_repeated_ram_safe_source_temps_from_text(draft, symbol_table)
+    return draft, gvalue_conditions
 
 
 def _conditional_ram_stamp_block(
@@ -3596,51 +4321,91 @@ def _conditional_ram_stamp_block(
     profiles: list[dict],
     external_nodes: list[str],
     entry_plans: list[dict],
+    aliases: dict[str, dict] | None = None,
+    shared_source_temps: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None = None,
 ) -> list[str]:
     nr = len(external_nodes)
     if not nr or not any(plan["ram_cases"] for plan in entry_plans):
         return ["    /* No RAM-side G entries: no fixed G overlay is registered. */"]
+
+    def _case_stamp_body(index: int, *, indent: int) -> list[str]:
+        prefix = " " * indent
+        ram_items: list[tuple[int, int, sp.Expr]] = []
+        ram_alias_assignments: list[tuple[str, sp.Expr]] = []
+        body: list[str] = []
+        for plan in entry_plans:
+            ram_case = next((item for item in plan["ram_cases"] if item["index"] == index), None)
+            if ram_case is None:
+                if any(item["index"] == index for item in plan["code_cases"]):
+                    body.append(f"{prefix}/* CODE-owned case: no RAM stamp for {plan['var']}. */")
+                continue
+            expr = sp.sympify(ram_case["expr"])
+            if expr == 0:
+                continue
+            alias_stamp = _ram_stamp_alias_assignment(
+                template_expr=sp.sympify(plan.get("template_expr", expr)),
+                ram_expr=expr,
+            )
+            if alias_stamp is not None:
+                alias_assignment, stamp_expr = alias_stamp
+                _append_ram_alias_assignment(ram_alias_assignments, alias_assignment)
+                expr = stamp_expr
+            ram_items.append((int(plan["row"]), int(plan["col"]), expr))
+        if not ram_items:
+            body.append(f"{prefix}/* No RAM-owned final G entries in this case. */")
+            return body
+        branch_ids = sorted({
+            str(info.get("branch_id"))
+            for info in (aliases or {}).values()
+            if info.get("branch_id")
+        })
+        local_case_indices = _local_case_indices_for_profile(
+            case_id_symbol=case_id_symbol,
+            profile_index=index,
+            profile=profiles[index],
+            branch_ids=branch_ids,
+        )
+        used_indices = sorted({idx for row, col, _expr in ram_items for idx in (row, col)})
+        local_index = {global_index: local for local, global_index in enumerate(used_indices)}
+        dim = len(used_indices)
+        for local, global_index in enumerate(used_indices):
+            body.append(f"{prefix}g_mat_nods[{local}] = getNodeNum(comp, \"{external_nodes[global_index]}\");")
+        body.extend([
+            f"{prefix}for (int row = 0; row < {dim}; row++) {{",
+            f"{prefix}    for (int col = 0; col < {dim}; col++) {{",
+            f"{prefix}        g_mat_over[row][col] = 0.0;",
+            f"{prefix}    }}",
+            f"{prefix}}}",
+        ])
+        body.extend(_emit_source_level_ram_stamp_lines(
+            ram_items,
+            local_index=local_index,
+            temp_prefix=f"sourceG_{_c_identifier_name(case_id_symbol, 'case')}_case{index}_tmp",
+            indent=indent,
+            alias_assignments=ram_alias_assignments,
+            substitutions=_shared_source_temp_substitutions_for_profile(
+                shared_source_temps,
+                local_case_indices,
+            ),
+        ))
+        body.append(f"{prefix}setupGMatrix({dim});")
+        return body
+
+    case_bodies = [_case_stamp_body(index, indent=4) for index, _profile in enumerate(profiles)]
+    if case_bodies and all(body == case_bodies[0] for body in case_bodies[1:]):
+        return [
+            "    /* Case-invariant RAM final-G stamp after multi-case aliases are resolved. */",
+            *case_bodies[0],
+        ]
+
     lines = [
         "    /* Case-conditional RAM final-G stamp. Each init-time case gets its own compact RAM overlay. */",
         f"    switch ({case_id_symbol}) {{",
     ]
     for index, _profile in enumerate(profiles):
         lines.append(f"    case {index}:")
-        ram_items: list[tuple[int, int, sp.Expr]] = []
-        for plan in entry_plans:
-            ram_case = next((item for item in plan["ram_cases"] if item["index"] == index), None)
-            if ram_case is None:
-                if any(item["index"] == index for item in plan["code_cases"]):
-                    lines.append(f"        /* CODE-owned case: no RAM stamp for {plan['var']}. */")
-                continue
-            expr = sp.sympify(ram_case["expr"])
-            if expr == 0:
-                continue
-            ram_items.append((int(plan["row"]), int(plan["col"]), expr))
-        if not ram_items:
-            lines.append("        /* No RAM-owned final G entries in this case. */")
-            lines.append("        break;")
-            continue
-        used_indices = sorted({idx for row, col, _expr in ram_items for idx in (row, col)})
-        local_index = {global_index: local for local, global_index in enumerate(used_indices)}
-        dim = len(used_indices)
-        for local, global_index in enumerate(used_indices):
-            lines.append(f"        g_mat_nods[{local}] = getNodeNum(comp, \"{external_nodes[global_index]}\");")
-        lines.extend([
-            f"        for (int row = 0; row < {dim}; row++) {{",
-            f"            for (int col = 0; col < {dim}; col++) {{",
-            "                g_mat_over[row][col] = 0.0;",
-            "            }",
-            "        }",
-        ])
-        for row, col, expr in ram_items:
-            local_row = local_index[row]
-            local_col = local_index[col]
-            value = _ccode(expr)
-            lines.append(f"        g_mat_over[{local_row}][{local_col}] = {value};")
-            if local_row != local_col:
-                lines.append(f"        g_mat_over[{local_col}][{local_row}] = {value};")
-        lines.append(f"        setupGMatrix({dim});")
+        body = _case_stamp_body(index, indent=8)
+        lines.extend(body)
         lines.append("        break;")
     lines.extend([
         "    default:",
@@ -3708,25 +4473,63 @@ def _final_g_code_case_lines(
     ]
     for case_index in case_indices:
         lines.append(f"    case {case_index}:")
+        set_items: list[tuple[dict, sp.Expr]] = []
+        direct_assignments: list[tuple[str, sp.Expr]] = []
         for plan in entry_plans:
             code_case = next((item for item in plan["code_cases"] if int(item["index"]) == case_index), None)
             if code_case is None:
                 continue
-            value = _ccode(code_case["expr"])
+            expr = sp.sympify(code_case["expr"])
             row = int(plan["row"])
             col = int(plan["col"])
             if matrix_name is None:
-                lines.append(f"        {plan['var']} = {value};")
+                direct_assignments.append((plan["var"], expr))
             else:
-                lines.append(f"        set_CODE(&{matrix_name}, {row}, {col}, {value});")
-                if row != col:
-                    lines.append(f"        set_CODE(&{matrix_name}, {col}, {row}, {value});")
+                set_items.append((plan, expr))
+        if matrix_name is None:
+            cse_lines, used_temps = _emit_source_level_cse_assignment_lines(
+                direct_assignments,
+                temp_prefix=f"sourceG_{_c_identifier_name(case_id_symbol, 'case')}_case{case_index}_tmp",
+                indent=8,
+            )
+            if used_temps:
+                lines.append("    {")
+                lines.extend(cse_lines)
+                lines.append("        break;")
+                lines.append("    }")
+            else:
+                lines.extend(cse_lines)
+                lines.append("        break;")
+            continue
+
+        temp_assignments = [
+            (f"__entry_{index}", expr)
+            for index, (_plan, expr) in enumerate(set_items)
+        ]
+        temps, reduced = _source_level_cse_assignments(
+            temp_assignments,
+            temp_prefix=f"sourceG_{_c_identifier_name(case_id_symbol, 'case')}_case{case_index}_tmp",
+        )
+        if temps:
+            lines.append("    {")
+            for name, expr in temps:
+                lines.append(f"        double {name} = {_ccode(expr)};")
+        reduced_expr_by_lhs = {lhs: expr for lhs, expr in reduced}
+        for index, (plan, expr) in enumerate(set_items):
+            value = _ccode(reduced_expr_by_lhs.get(f"__entry_{index}", expr))
+            row = int(plan["row"])
+            col = int(plan["col"])
+            lines.append(f"        set_CODE(&{matrix_name}, {row}, {col}, {value});")
+            if row != col:
+                lines.append(f"        set_CODE(&{matrix_name}, {col}, {row}, {value});")
         if matrix_name is not None:
             for plan in entry_plans:
                 if not any(int(item["index"]) == case_index for item in plan["code_cases"]):
                     continue
                 lines.append(f"        {plan['var']} = get_CODE(&{matrix_name}, {plan['row']}, {plan['col']});")
         lines.append("        break;")
+        if temps:
+            lines.append("    }")
     lines.extend([
         "    default:",
         "        break;",
@@ -3778,6 +4581,13 @@ def _remove_code_g_alias_resolution_for_conditional_final_writes(draft: str, ali
         return draft
     if not all(str(info.get("kind") or "").upper().startswith("G") for info in aliases.values()):
         return draft
+    code_aliases = [
+        alias
+        for alias, info in aliases.items()
+        if _owner_rank(str(info.get("owner") or "RAM")) >= _owner_rank("CODE")
+    ]
+    if not code_aliases:
+        return draft
     marker = "    /* Resolve CODE multi-case effective aliases as full values, never deltas. */"
     start = draft.find(marker)
     if start < 0:
@@ -3785,9 +4595,45 @@ def _remove_code_g_alias_resolution_for_conditional_final_writes(draft: str, ali
     end = draft.find("    if (!rtds_matrix_code_ready) {", start)
     if end < 0:
         return draft
+    later_code = draft[end:]
+    if any(re.search(rf"\b{re.escape(alias)}\b", later_code) for alias in code_aliases):
+        return draft
     replacement = (
         "    /* CODE final-G cases write full case values directly below;\n"
         "       RAM-owned cases were stamped in RAM_PASS1. */\n"
+    )
+    return draft[:start] + replacement + draft[end:]
+
+
+def _remove_ram_g_alias_resolution_for_conditional_final_writes(draft: str, aliases: dict[str, dict]) -> str:
+    if not aliases:
+        return draft
+    ram_aliases = {
+        alias: info
+        for alias, info in aliases.items()
+        if info.get("owner") == "RAM"
+    }
+    if not ram_aliases:
+        return draft
+    if not all(str(info.get("kind") or "").upper().startswith("G") for info in ram_aliases.values()):
+        return draft
+
+    for alias in ram_aliases:
+        draft = re.sub(
+            rf"\n    double {re.escape(alias)} = 0\.0;",
+            "",
+            draft,
+        )
+
+    marker = "    /* Resolve RAM multi-case effective aliases as full values, never deltas. */"
+    start = draft.find(marker)
+    if start < 0:
+        return draft
+    end = draft.find("    int err = 0;", start)
+    if end < 0:
+        return draft
+    replacement = (
+        "    /* RAM final-G cases write full case values directly to g_mat_over below. */\n"
     )
     return draft[:start] + replacement + draft[end:]
 
@@ -3812,6 +4658,30 @@ def _apply_conditional_final_gvalues_to_structured_draft(
         external_nodes=external_nodes,
         split_ram_code_terms=prune_code_matrix_writes,
     )
+    branch_ids = sorted({
+        str(info.get("branch_id"))
+        for info in aliases.values()
+        if info.get("branch_id")
+    })
+    shared_source_temps = _conditional_shared_source_temp_plan(
+        entry_plans=entry_plans,
+        aliases=aliases,
+        case_id_symbol=case_id_symbol,
+        profiles=profiles,
+        symbol_table=_multi_case_symbol_table(profiles),
+    )
+    shared_decl_lines = _shared_source_temp_declaration_lines(
+        shared_source_temps,
+        _declared_c_names(draft),
+    )
+    if shared_decl_lines:
+        draft = _insert_after_label(draft, "STATIC:", shared_decl_lines)
+    shared_assignment_lines = _shared_source_temp_assignment_lines(shared_source_temps)
+    if shared_assignment_lines:
+        marker = "    int err = 0;"
+        replacement = "\n".join(shared_assignment_lines) + "\n" + marker
+        draft = draft.replace(marker, replacement, 1)
+        draft = _apply_shared_source_temp_text_reuse(draft, shared_source_temps)
     gvalue_conditions: list[dict] = []
     for plan in entry_plans:
         if not plan["code_cases"]:
@@ -3840,6 +4710,8 @@ def _apply_conditional_final_gvalues_to_structured_draft(
         profiles=profiles,
         external_nodes=external_nodes,
         entry_plans=entry_plans,
+        aliases=aliases,
+        shared_source_temps=shared_source_temps,
     ))
     draft = _replace_ram_g_setup_with_conditional_ram_block(draft, ram_block)
 
@@ -3931,6 +4803,10 @@ def _apply_conditional_final_gvalues_to_structured_draft(
                     entry_plans=entry_plans,
                 )
                 draft = _remove_code_g_alias_resolution_for_conditional_final_writes(draft, aliases)
+            draft = _lift_repeated_ram_safe_source_temps_from_text(
+                draft,
+                _multi_case_symbol_table(profiles),
+            )
             return draft, gvalue_conditions
 
     grouped_assignments: dict[tuple[int, ...], list[str]] = {}
@@ -3971,6 +4847,10 @@ def _apply_conditional_final_gvalues_to_structured_draft(
             entry_plans=entry_plans,
         )
         draft = _remove_code_g_alias_resolution_for_conditional_final_writes(draft, aliases)
+    draft = _lift_repeated_ram_safe_source_temps_from_text(
+        draft,
+        _multi_case_symbol_table(profiles),
+    )
     return draft, gvalue_conditions
 
 
@@ -4080,6 +4960,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 profiles=alias_model["profiles"],
                 branch_ids=alias_model["branch_ids"],
                 aliases=aliases,
+                symbol_table=symbol_table,
             )
             draft = _apply_multicase_conditional_diagonal_w_builder(
                 draft,
@@ -4825,7 +5706,8 @@ def _build_dummy_finalized_multi_case_c_draft(
         "RAM_PASS1:",
         "    int err = 0;",
         *(_multicase_local_case_lines(case_id_symbol, profiles, branch_ids) if aliases else []),
-        *(_alias_assignment_lines(aliases, "RAM", case_id_symbol) if aliases else []),
+        "    /* RAM G aliases are intentionally not materialized here: each finalized profile",
+        "       writes its complete RAM-owned G entries directly to g_mat_over below. */",
         "    /* Profile-specific finalized RAM stamp. */",
         f"    switch ({case_id_symbol}) {{",
     ]
@@ -5285,6 +6167,7 @@ def _build_dummy_finalized_matrix_dag_c_draft(
         profiles=alias_model["profiles"],
         branch_ids=alias_model["branch_ids"],
         aliases=aliases,
+        symbol_table=_multi_case_symbol_table(alias_model["profiles"]),
     )
     draft = _apply_multicase_conditional_diagonal_w_builder(
         draft,

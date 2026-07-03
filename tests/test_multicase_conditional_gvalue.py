@@ -114,15 +114,16 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn("g_mat_over[1][0] = -G_const;", draft)
         self.assertIn("case 1:", draft)
         self.assertIn("/* CODE-owned case: no RAM stamp for varG_A_B. */", draft)
+        self.assertIn("multcase_G_R1_A_A = G_const;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_dynamic;", draft)
         self.assertIn(
             "switch (case_id) {\n"
             "    case 1:\n"
-            "        varG_A_A = G_dynamic;\n"
-            "        varG_A_B = -G_dynamic;\n"
-            "        varG_B_B = G_dynamic;",
+            "        varG_A_A = multcase_G_R1_A_A;\n"
+            "        varG_A_B = -multcase_G_R1_A_A;\n"
+            "        varG_B_B = multcase_G_R1_A_A;",
             draft,
         )
-        self.assertNotIn("multcase_G_R1_A_A = G_const;", draft)
         self.assertNotIn("set_CODE(&G_code, 0, 0, multcase_G_R1_A_A);", draft)
         self.assertNotIn("set_CODE(&Gred_code", draft)
         self.assertNotIn("G_dynamic - G_const", draft)
@@ -148,21 +149,23 @@ class MultiCaseConditionalGValueTests(unittest.TestCase):
         self.assertIn('createGValue("varG_A_B", "A", "B", 0, "case_id == 1 || case_id == 2")', draft)
         self.assertIn("g_mat_over[0][1] = -G_const;", draft)
         self.assertIn("g_mat_over[0][1] = -G_const_3;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_const;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_dynamic_1;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_dynamic_2;", draft)
+        self.assertIn("multcase_G_R1_A_A = G_const_3;", draft)
         self.assertIn(
             "switch (case_id) {\n"
             "    case 1:\n"
-            "        varG_A_A = G_dynamic_1;\n"
-            "        varG_A_B = -G_dynamic_1;\n"
-            "        varG_B_B = G_dynamic_1;\n"
+            "        varG_A_A = multcase_G_R1_A_A;\n"
+            "        varG_A_B = -multcase_G_R1_A_A;\n"
+            "        varG_B_B = multcase_G_R1_A_A;\n"
             "        break;\n"
             "    case 2:\n"
-            "        varG_A_A = G_dynamic_2;\n"
-            "        varG_A_B = -G_dynamic_2;\n"
-            "        varG_B_B = G_dynamic_2;",
+            "        varG_A_A = multcase_G_R1_A_A;\n"
+            "        varG_A_B = -multcase_G_R1_A_A;\n"
+            "        varG_B_B = multcase_G_R1_A_A;",
             draft,
         )
-        self.assertNotIn("multcase_G_R1_A_A = G_const;", draft)
-        self.assertNotIn("multcase_G_R1_A_A = G_const_3;", draft)
         self.assertNotIn("set_CODE(&G_code, 0, 0, multcase_G_R1_A_A);", draft)
         self.assertNotIn("set_CODE(&Gred_code", draft)
         self.assertNotIn(

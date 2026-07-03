@@ -167,6 +167,43 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("Gred[0][0]", draft)
         self.assertLess(draft.count("G1 + G2"), 2)
 
+    def test_no_elimination_c_draft_reuses_source_temps_between_ram_g_and_code_ihis(self):
+        G11, G12, G22, Gc, Ihis_p, Ihis_s = sp.symbols("G11 G12 G22 Gc Ihis_p Ihis_s")
+        inv = 1 / (G11 + Gc)
+        common = Gc * inv
+        nodes = ["P", "N"]
+        G = sp.Matrix(
+            [
+                [G22 + G12 * common, -G12 * common],
+                [-G12 * common, G22 + G12 * common],
+            ]
+        )
+        Ihis = sp.Matrix(
+            [
+                [Ihis_s + G12 * Ihis_p * inv],
+                [-Ihis_s - G12 * Ihis_p * inv],
+            ]
+        )
+        structured = build_structured_formula(G, Ihis, nodes, nodes, [])
+        plan = build_dependency_stage_plan(
+            structured,
+            {
+                "G11": "RAM_CONSTANT",
+                "G12": "RAM_CONSTANT",
+                "G22": "RAM_CONSTANT",
+                "Gc": "RAM_CONSTANT",
+                "Ihis_p": "STEP_HISTORY",
+                "Ihis_s": "STEP_HISTORY",
+            },
+        )
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        self.assertRegex(draft, r"double sourceGI_tmp\d+ = 0\.0;")
+        self.assertRegex(draft, r"sourceGI_tmp\d+ = 1\.0/\(G11 \+ Gc\);")
+        self.assertNotRegex(draft, r"CODE:[\s\S]*double sourceIhis_tmp\d+ = 1\.0/\(G11 \+ Gc\);")
+        self.assertLessEqual(draft.count("1.0/(G11 + Gc)"), 1)
+
     def test_structured_c_draft_declares_matrix_error_counter(self):
         G1, G2 = sp.symbols("G1 G2")
         nodes = ["A", "X", "B"]

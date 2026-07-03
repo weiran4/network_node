@@ -199,7 +199,7 @@ process.stdout.write(JSON.stringify(cases));
     def test_no_internal_direct_retained_branch_keeps_full_ram_g_in_c_draft(self):
         response = build_optimized_response(make_test6_payload())
         draft = response["structured"]["c_draft"]
-        self.assertIn("enum { RETAINED_NODES = 2, INTERNAL_NODES = 0 };", draft)
+        self.assertNotIn("enum { RETAINED_NODES = 2, INTERNAL_NODES = 0 };", draft)
         self.assertNotIn("enum { NR =", draft)
         self.assertNotIn(" NK =", draft)
         self.assertIn("double X = 0.0;", draft)

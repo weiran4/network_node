@@ -62,6 +62,76 @@ without using expensive `sp.cancel`, `sp.simplify`, or `sp.factor` on large
 expanded expressions. Current use is mainly for reducing repeated `varG`
 reads/assignments. Future use may reduce scalar entry computation.
 
+### Source-Level Budgeted CSE
+
+For circuits where the original source matrix entries are already long
+expressions, optimize only the source/Gfull assignment layer before any dense
+Schur expansion.
+
+Current safe scope:
+
+- Multi-case effective alias assignment, for example `multcase_G_* = ...`.
+- RAM-side final/source `g_mat_over` stamp writes, including conditional
+  multi-case RAM branches.
+- No-internal final `GValue` CODE writes, where dynamic source entries are
+  assigned directly to `varG_*`.
+- Matrix-staged final writes may share source temporaries inside one case branch,
+  but the matrix DAG itself is not replaced by expanded scalar Schur formulas.
+
+Safety rules:
+
+- Use budgeted `sp.cse` only; do not call `sp.cancel`, `sp.factor`, or
+  `sp.simplify`.
+- Check expression count, `count_ops`, and string size before running CSE.
+- If the group is tiny or over budget, skip CSE and keep the old code path.
+- Keep all CSE replacements once CSE is accepted, because generated temporaries
+  can depend on earlier temporaries.
+- Apply the helper through every codegen route that can emit the same source
+  assignment style. A common bug pattern is fixing `_alias_assignment_lines`
+  while leaving standalone no-internal `GValue` emission on the old path.
+- When a RAM branch computes `sourceG_*` or `multcase_G_*`, the same RAM branch's
+  `g_mat_over` writes must reference those names. If a temp is declared but no
+  stamp uses it, the RAM/CODE split is probably passing through two different
+  emitters.
+
+This is intentionally different from dense `Gred` CSE. It reduces repeated
+source expressions in examples such as `Trf_Ctest.json` without revisiting the
+historical slow path caused by expanded dense matrices.
+
+### Multi-Case RAM Overlay Deduplication
+
+When multi-case aliases have already absorbed the case differences, different
+case profiles may produce the same RAM `g_mat_over` overlay:
+
+```text
+case 0: multcase_G_* is assigned full case-0 values
+case 1: multcase_G_* is assigned full case-1 values
+
+RAM stamp body:
+g_mat_over[i][j] = multcase_G_*
+setupGMatrix(dim)
+```
+
+In that situation, do not emit one identical `switch(case_id)` stamp block per
+case. Build the RAM stamp body for each case first, then compare the generated
+body. If all bodies are byte-for-byte identical, emit one case-invariant overlay.
+
+This is a general codegen rule, not a fixture-specific shortcut:
+
+- It is safe because the aliases are resolved before the overlay is stamped.
+- It must only collapse after comparing the actual generated body, including
+  node order, matrix dimension, zeroing loop, `g_mat_over` writes, and
+  `setupGMatrix(dim)`.
+- If any case has a different node set, retained dimension, RAM/CODE ownership,
+  or omitted RAM entries, keep the case-specific switch.
+- Do not infer equivalence from the number of cases or from matching branch
+  names; compare the final stamp body.
+
+Debug lesson: when a fixture shows repeated RAM blocks, inspect the generated
+`RAM_PASS1` body after alias resolution. A test that only checks helper output
+can miss the user-visible path; `Trf_Ctest.json` must be exercised through the
+same multi-case export request path that the UI uses.
+
 ### Source-Level Direct/Core Split
 
 Split stamps before Schur elimination:
@@ -225,6 +295,100 @@ inverse structure rather than a full inverse. If the coupled block is size 2 or
 
 Future refinement: allow more of the diagonal portion to remain scalar and only
 use matrix operations for the small coupled block.
+
+### Auto Dummy Nodes For Pack Multi-Case
+
+When a packed multi-case component contains cases with different internal
+topologies but the same external interface, the editor could automatically add
+dummy alignment nodes for the missing internal nodes instead of requiring the
+user to place N-Dummy blocks manually.
+
+The intended behavior is only a workflow aid:
+
+- Detect which canonical internal nodes are present in some pack cases but
+  missing in others.
+- Add isolated dummy alignment nodes in the missing cases.
+- Preserve the external node count, names, and order.
+- Keep dummy nodes as topology-compatibility placeholders; final C export should
+  still remove or neutralize dummy-only rows/columns where safe.
+
+This should remain separate from normal branch editing. It must not change
+ordinary single-case circuits or allow dummy nodes to alter physical topology.
+
+## Debugging Lessons
+
+### Multi-Case Export Cache Coverage
+
+Saved JSON files may contain several `multiCaseExportCache` entries. A bug can
+exist in cache entry 1 or later while cache entry 0 looks correct. When checking
+multi-case C export regressions, rebuild every cache payload:
+
+```text
+for cache in multiCaseExportCache:
+  payload = json.loads(cache["key"])
+  build_multi_case_response(payload)
+```
+
+Do not conclude that a fix works from the first cached payload only.
+
+### Conditional Final-G RAM Stamp Owns `g_mat_over`
+
+When the conditional final-G path writes complete RAM-owned entries directly to
+`g_mat_over`, the earlier RAM `multcase_G_*` alias switch must be removed. If
+both layers remain, the code may compute:
+
+```c
+multcase_G_... = ...;
+```
+
+and then never use it in `g_mat_over`. This is dead code and can also mislead
+debugging because it looks like the alias layer is active when the final-G RAM
+stamp has already taken ownership.
+
+### RAM/CODE Source Temp Sharing Must Check The Actual Draft Path
+
+Complex source-level `G_full` and `Ihis_full` expressions can share the same
+small subexpressions. For example, `Trf_Ctest.json` has RAM-side G terms and
+CODE-side Ihis terms that both use `1/(G11 + Gc)`. If the selected case is
+init-time fixed and `RAM_PASS1` already computes the same RHS, a persistent
+`sourceGI_*` temp can be declared in `STATIC`, assigned in `RAM_PASS1`, and reused
+later by CODE/Ihis.
+
+Two debug rules matter here:
+
+- Validate through every `multiCaseExportCache` entry, not only the first helper
+  path. The UI may hit the conditional-final-G structured post-process path
+  while a unit helper hits the alias-template path.
+- For the text-level safety pass, an exact RHS already emitted in `RAM_PASS1` is
+  the safety evidence. A conservative symbol table may classify one symbol as
+  CODE because another case needs CODE, but the already-generated RAM line shows
+  this exact init-time case can compute that RHS before CODE.
+
+### Source-Level CSE Temporaries Need Liveness Checks
+
+`sp.cse` can emit chained temporaries. A temporary is valid even if it is not
+written directly to `g_mat_over`, as long as another live temporary uses it.
+Regression tests should check transitive usage, not only direct `g_mat_over`
+mentions.
+
+Conversely, a `multcase_G_*` or `sourceG_*` value that is assigned and never
+referenced later in the same RAM/CODE block is a real codegen smell.
+
+### Dimension Enums Are Not Decorative
+
+Optimized C export should emit retained/internal dimension enums only when the
+generated C draft still uses those names. No-internal direct/original-G paths can
+stamp `g_mat_over` with literal compact dimensions and do not need:
+
+```c
+enum { RETAINED_NODES = n, INTERNAL_NODES = 0 };
+```
+
+Leaving that enum in the draft is harmless to compilation but confusing during
+review, especially after the no-Schur path has already avoided runtime matrix
+objects. Strip an unused `NR/NK` enum before renaming dimensions. If later code
+references `NR` or `NK`, keep the readable `RETAINED_NODES/INTERNAL_NODES` enum
+and comments.
 
 ## Safety Rules
 

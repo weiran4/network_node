@@ -1177,17 +1177,131 @@ def _c_signed_canonical_expr(expr: sp.Expr) -> tuple[sp.Expr, int]:
     return expr, 1
 
 
+_SOURCE_CSE_MAX_ASSIGNMENTS = 80
+_SOURCE_CSE_MAX_OPS = 2500
+_SOURCE_CSE_MAX_CHARS = 18000
+_SOURCE_CSE_MIN_SAVINGS = 24
+
+
+def _c_source_cse_prefix(fallback_prefix: str) -> str:
+    clean = _c_symbol_name(fallback_prefix or "source")
+    if clean.startswith(("ramG", "codeG", "G_", "Gred", "G")):
+        return "sourceG_tmp"
+    if clean.startswith(("Ihis", "Inj")):
+        return "sourceIhis_tmp"
+    return f"{clean}_source_tmp"
+
+
+def _c_repeated_denominator_temps(
+    exprs: Sequence[sp.Expr],
+    fallback_prefix: str,
+) -> tuple[list[tuple[str, sp.Expr]], list[sp.Expr]]:
+    if len(exprs) < 2:
+        return [], list(exprs)
+    denom_info: dict[str, dict] = {}
+    fractions: list[tuple[sp.Expr, sp.Expr]] = []
+    for index, expr in enumerate(exprs):
+        numer, denom = sp.sympify(expr).as_numer_denom()
+        fractions.append((sp.sympify(numer), sp.sympify(denom)))
+        if denom == 1:
+            continue
+        ops = int(sp.count_ops(denom, visual=False))
+        if ops <= 0 or ops > 80 or len(str(denom)) > 600:
+            continue
+        key = sp.srepr(denom)
+        item = denom_info.setdefault(key, {"denom": denom, "count": 0, "first_index": index})
+        item["count"] += 1
+
+    repeated = [
+        item
+        for item in denom_info.values()
+        if int(item["count"]) >= 2
+    ]
+    if not repeated:
+        return [], list(exprs)
+
+    prefix = _c_source_cse_prefix(fallback_prefix)
+    temps: list[tuple[str, sp.Expr]] = []
+    denom_key_to_symbol: dict[str, sp.Symbol] = {}
+    for temp_index, item in enumerate(sorted(repeated, key=lambda value: int(value["first_index"]))):
+        name = f"{prefix}{temp_index}"
+        denom = sp.sympify(item["denom"])
+        temps.append((name, 1 / denom))
+        denom_key_to_symbol[sp.srepr(denom)] = sp.Symbol(name)
+
+    rewritten: list[sp.Expr] = []
+    for original, (numer, denom) in zip(exprs, fractions):
+        symbol = denom_key_to_symbol.get(sp.srepr(denom))
+        if symbol is None:
+            rewritten.append(sp.sympify(original))
+        else:
+            rewritten.append(sp.Mul(numer, symbol, evaluate=False))
+    return temps, rewritten
+
+
+def _c_source_level_cse(
+    exprs: Sequence[sp.Expr],
+    fallback_prefix: str,
+) -> tuple[list[tuple[str, sp.Expr]], list[sp.Expr]]:
+    """Bounded CSE inside one scalar assignment batch.
+
+    This is intentionally a code-generation optimization only.  It never uses
+    cancel/factor/full simplification to prove equivalence, and it silently
+    returns the original expressions if the batch is too large.
+    """
+    normalized = [sp.sympify(expr) for expr in exprs]
+    if len(normalized) < 2 or len(normalized) > _SOURCE_CSE_MAX_ASSIGNMENTS:
+        return [], normalized
+    total_ops = sum(int(sp.count_ops(expr, visual=False)) for expr in normalized)
+    if total_ops < 12 or total_ops > _SOURCE_CSE_MAX_OPS:
+        return [], normalized
+    total_chars = sum(len(str(expr)) for expr in normalized)
+    if total_chars < 96 or total_chars > _SOURCE_CSE_MAX_CHARS:
+        return [], normalized
+
+    denominator_temps, normalized = _c_repeated_denominator_temps(normalized, fallback_prefix)
+    try:
+        replacements, reduced = sp.cse(
+            normalized,
+            symbols=sp.numbered_symbols(_c_source_cse_prefix(fallback_prefix), start=len(denominator_temps)),
+            order="none",
+        )
+    except Exception:
+        return [], normalized
+    if not replacements:
+        return denominator_temps, normalized
+
+    try:
+        before_cost = sum(len(_ccode(expr)) for expr in exprs)
+        after_cost = (
+            sum(len(_ccode(expr)) for _name, expr in denominator_temps)
+            + sum(len(_ccode(expr)) for _name, expr in replacements)
+            + sum(len(_ccode(expr)) for expr in reduced)
+        )
+    except Exception:
+        return denominator_temps, normalized
+    if not denominator_temps and after_cost + _SOURCE_CSE_MIN_SAVINGS >= before_cost:
+        return [], normalized
+
+    temps = [(str(name), sp.sympify(expr)) for name, expr in replacements]
+    return [*denominator_temps, *temps], [sp.sympify(expr) for expr in reduced]
+
+
 def _c_scalar_assignment_cse(
     assignments: Sequence[tuple[str, sp.Expr, str | None, str | None, str | None]],
     fallback_prefix: str,
     indent: str = "    ",
 ) -> tuple[list[str], list[str], list[str]]:
-    normalized = [(target, sp.simplify(expr), comment) for target, expr, comment, _, _ in assignments]
+    original_exprs = [sp.simplify(expr) for _target, expr, _comment, _suggested, _label in assignments]
+    source_temps, source_reduced_exprs = _c_source_level_cse(original_exprs, fallback_prefix)
+    normalized = [
+        (target, sp.simplify(expr), comment)
+        for (target, _raw_expr, comment, _suggested, _label), expr in zip(assignments, source_reduced_exprs)
+    ]
     groups: dict[str, dict] = {}
     occurrences: list[tuple[str | None, int, sp.Expr]] = []
-    for index, item in enumerate(assignments):
-        _, raw_expr, _, _, _ = item
-        expr = sp.simplify(raw_expr)
+    for index, expr in enumerate(source_reduced_exprs):
+        expr = sp.simplify(expr)
         if expr == 0:
             occurrences.append((None, 1, expr))
             continue
@@ -1221,6 +1335,11 @@ def _c_scalar_assignment_cse(
     key_to_temp: dict[str, str] = {}
     temp_names: list[str] = []
     compute_lines: list[str] = []
+
+    for name, expr in source_temps:
+        temp_names.append(name)
+        compute_lines.append(f"{indent}/* {name} is a repeated source subexpression. */")
+        compute_lines.append(f"{indent}double {name} = {_ccode(expr)};")
 
     for key in sorted(temp_keys, key=lambda item: groups[item]["first_index"]):
         group = groups[key]
@@ -2120,6 +2239,20 @@ def _c_emit_rtds_stage_sections(
             code_g_assignments_no_elim,
             "G",
         )
+        ihis_assignments_no_elim = [
+            (
+                f"Inj{_c_node_variable_name(node, node_display_names)}",
+                Ihisred_no_elim[index, 0],
+                None,
+                None,
+                f"Ihisred[{_c_display_node(node, node_display_names)}]",
+            )
+            for index, node in enumerate(external_nodes)
+        ]
+        ihis_temp_names_no_elim, ihis_compute_lines_no_elim, ihis_assignment_lines_no_elim = _c_scalar_assignment_cse(
+            ihis_assignments_no_elim,
+            "Ihis",
+        )
         no_elim_code_names: list[str] = []
         no_elim_g_symbol_names = _matrix_symbol_names(code_G_no_elim)
         no_elim_ihis_symbol_names = _matrix_symbol_names(Ihisred_no_elim) - no_elim_g_symbol_names
@@ -2135,6 +2268,7 @@ def _c_emit_rtds_stage_sections(
             *_c_declaration_group("User G/CODE symbols", no_elim_g_symbol_names),
             *_c_declaration_group("User Ihis/history symbols", no_elim_ihis_symbol_names),
             *_c_declaration_group("CODE G scalar aliases", code_g_temp_names_no_elim),
+            *_c_declaration_group("CODE Ihis scalar aliases", ihis_temp_names_no_elim),
             "",
             "LOCAL_STATIC:",
             *_c_declaration_group("User RAM-only G symbols", no_elim_ram_symbols),
@@ -2227,10 +2361,8 @@ def _c_emit_rtds_stage_sections(
                 ],
             ),
             "    /* Node injection currents follow the retained-node order of the original system. */",
-            *[
-                f"    Inj{_c_node_variable_name(node, node_display_names)} = {_ccode(Ihisred_no_elim[index, 0])};"
-                for index, node in enumerate(external_nodes)
-            ],
+            *ihis_compute_lines_no_elim,
+            *ihis_assignment_lines_no_elim,
             "",
             "T1_T2:",
             "    /* No internal nodes were eliminated, so there is no Vk recovery step. */",
@@ -2893,8 +3025,111 @@ def _c_emit_rtds_reduction_tail(
     ]
 
 
+_SOURCE_TEMP_DECL_RE = re.compile(
+    r"^(?P<indent>\s*)double\s+(?P<name>source(?:G|Ihis)_tmp\d+)\s*=\s*(?P<rhs>[^;\n]+);$"
+)
+
+
+def _source_temp_rhs_is_liftable(rhs: str) -> bool:
+    return not re.search(r"\bsource(?:G|Ihis|GI)_tmp\d+\b", rhs)
+
+
+def _lift_repeated_ram_code_source_temps(draft: str) -> str:
+    """Promote exact RAM/CODE repeated source temps to STATIC storage.
+
+    The optimized-elimination C emitter may discover the same source-level
+    subexpression independently in RAM G setup and CODE Ihis setup.  If the
+    generated C text is exactly the same, hoist one shared variable so the CODE
+    stage can reuse the value computed during RAM initialization.
+    """
+    if "STATIC:" not in draft or "CODE:" not in draft:
+        return draft
+    code_pos = draft.find("\nCODE:")
+    if code_pos < 0:
+        return draft
+
+    line_infos: list[dict] = []
+    lines_for_scan = draft.splitlines()
+    line_offsets: list[int] = []
+    cursor = 0
+    for line in lines_for_scan:
+        line_offsets.append(cursor)
+        cursor += len(line) + 1
+    for line_no, line in enumerate(lines_for_scan):
+        match = _SOURCE_TEMP_DECL_RE.match(line)
+        if not match:
+            continue
+        rhs = match.group("rhs").strip()
+        if not _source_temp_rhs_is_liftable(rhs):
+            continue
+        section = "RAM" if line_offsets[line_no] < code_pos else "CODE"
+        line_infos.append(
+            {
+                "line_no": line_no,
+                "name": match.group("name"),
+                "rhs": rhs,
+                "section": section,
+            }
+        )
+
+    by_rhs: dict[str, list[dict]] = {}
+    for info in line_infos:
+        by_rhs.setdefault(info["rhs"], []).append(info)
+
+    shared_rhs = {
+        rhs: infos
+        for rhs, infos in by_rhs.items()
+        if any(info["section"] == "RAM" for info in infos) and any(info["section"] == "CODE" for info in infos)
+    }
+    if not shared_rhs:
+        return draft
+
+    rhs_to_shared: dict[str, str] = {}
+    name_to_shared: dict[str, str] = {}
+    keep_line_for_rhs: dict[str, int] = {}
+    used_names = set(re.findall(r"\bsourceGI_tmp\d+\b", draft))
+    next_index = 0
+    for rhs, infos in sorted(shared_rhs.items(), key=lambda item: min(info["line_no"] for info in item[1])):
+        while f"sourceGI_tmp{next_index}" in used_names:
+            next_index += 1
+        shared_name = f"sourceGI_tmp{next_index}"
+        used_names.add(shared_name)
+        rhs_to_shared[rhs] = shared_name
+        ram_lines = [info["line_no"] for info in infos if info["section"] == "RAM"]
+        keep_line_for_rhs[rhs] = min(ram_lines)
+        for info in infos:
+            name_to_shared[info["name"]] = shared_name
+
+    lines = draft.splitlines()
+    output: list[str] = []
+    declaration_inserted = False
+    for line_no, line in enumerate(lines):
+        if line == "STATIC:" and not declaration_inserted:
+            output.append(line)
+            for rhs, shared_name in rhs_to_shared.items():
+                output.append(f"    double {shared_name} = 0.0;")
+            declaration_inserted = True
+            continue
+
+        match = _SOURCE_TEMP_DECL_RE.match(line)
+        if match and match.group("name") in name_to_shared:
+            rhs = match.group("rhs").strip()
+            shared_name = name_to_shared[match.group("name")]
+            if line_no == keep_line_for_rhs.get(rhs):
+                output.append(f"{match.group('indent')}{shared_name} = {rhs};")
+            continue
+
+        updated = line
+        for old_name, shared_name in name_to_shared.items():
+            updated = re.sub(rf"\b{re.escape(old_name)}\b", shared_name, updated)
+        output.append(updated)
+
+    return "\n".join(output)
+
+
 def _join_c_draft_lines(lines: Sequence[str]) -> str:
     draft = "\n".join(lines)
+    draft = _lift_repeated_ram_code_source_temps(draft)
     draft = _use_readable_dimension_names(draft)
     draft = _ensure_static_blank_line(draft)
     include_lines: list[str] = []
@@ -2911,16 +3146,22 @@ def _join_c_draft_lines(lines: Sequence[str]) -> str:
 
 
 def _use_readable_dimension_names(draft: str) -> str:
-    draft = re.sub(
-        r"enum \{ NR = (?P<nr>\d+), NK = (?P<nk>\d+) \};",
-        "enum { RETAINED_NODES = \\g<nr>, INTERNAL_NODES = \\g<nk> };\n"
-        "/* Dimension names:\n"
-        " * RETAINED_NODES is the number of external nodes kept in the reduced network.\n"
-        " * INTERNAL_NODES is the number of eliminated internal nodes used by Schur/Vk recovery.\n"
-        " */",
-        draft,
-        count=1,
-    )
+    enum_pattern = re.compile(r"enum \{ NR = (?P<nr>\d+), NK = (?P<nk>\d+) \};")
+    match = enum_pattern.search(draft)
+    if match:
+        body_without_enum = draft[: match.start()] + draft[match.end() :]
+        has_dimension_usage = re.search(r"\b(?:NR|NK)\b", body_without_enum) is not None
+        if not has_dimension_usage:
+            draft = body_without_enum.lstrip("\n")
+        else:
+            replacement = (
+                f"enum {{ RETAINED_NODES = {match.group('nr')}, INTERNAL_NODES = {match.group('nk')} }};\n"
+                "/* Dimension names:\n"
+                " * RETAINED_NODES is the number of external nodes kept in the reduced network.\n"
+                " * INTERNAL_NODES is the number of eliminated internal nodes used by Schur/Vk recovery.\n"
+                " */"
+            )
+            draft = draft[: match.start()] + replacement + draft[match.end() :]
     draft = re.sub(r"\bNR\b", "RETAINED_NODES", draft)
     draft = re.sub(r"\bNK\b", "INTERNAL_NODES", draft)
     return draft
