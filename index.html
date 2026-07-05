@@ -9557,6 +9557,34 @@
       };
     }
 
+    function finalRetainedFieldsForSinglePackPayload(payload) {
+      const packagedBranches = state.branches.filter(branch => branch?.packageOriginal);
+      if (packagedBranches.length !== 1 || state.branches.length !== 1) return {};
+      const branch = packagedBranches[0];
+      normalizePackageNetworkCases(branch);
+      const cases = branch.packageOriginal?.networkCases || [];
+      if (!cases.length) return {};
+      const activeIndex = Math.max(
+        0,
+        Math.min(cases.length - 1, Number(branch.packageOriginal?.activeNetworkCase ?? branch.activeSwitchCase) || 0)
+      );
+      const active = cases[activeIndex] || {};
+      const finalExternalGroups = active.finalExternalGroups || [];
+      const finalGMatrix = active.finalGMatrix;
+      const finalIhisVector = active.finalIhisVector;
+      if (!finalExternalGroups.length || finalGMatrix == null || finalIhisVector == null) return {};
+      const payloadExternalNames = payload?.external_nodes || [];
+      if (payloadExternalNames.length && finalExternalGroups.length !== payloadExternalNames.length) return {};
+      return {
+        finalExternalGroups: structuredClone(finalExternalGroups),
+        finalInternalGroups: structuredClone(active.finalInternalGroups || []),
+        finalK_v: structuredClone(active.finalK_v || []),
+        finalK_h: structuredClone(active.finalK_h || []),
+        finalGMatrix,
+        finalIhisVector
+      };
+    }
+
     function optimizedEliminationCacheKey(payload) {
       return JSON.stringify({
         version: OPTIMIZED_ELIMINATION_CACHE_VERSION,
@@ -9698,7 +9726,11 @@
           branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(caseIndex) || 0));
           if (branch.packageOriginal) applyPackageNetworkCase(branch, branch.activeSwitchCase);
         });
-        return optimizedEliminationPayload({ deferDummyNodeBlocks: true });
+        const payload = optimizedEliminationPayload({ deferDummyNodeBlocks: true });
+        return {
+          ...payload,
+          ...finalRetainedFieldsForSinglePackPayload(payload)
+        };
       } finally {
         originals.forEach(([branch, activeSwitchCase, activeNetworkCase]) => {
           branch.activeSwitchCase = activeSwitchCase;
@@ -13298,17 +13330,9 @@
     }
 
     function validatePackageCaseExternalSignature(branch, subsystem) {
-      const expectedExternalPortRows = packageCasePortRows(branch.packageOriginal?.externalGroups || []);
-      const currentExternalPortRows = packageCasePortRows(subsystem.externalGroups || []);
-      const compare = (expectedGroups, actualGroups, message) => {
-        const expected = packageCaseGroupSignature(expectedGroups);
-        const actual = packageCaseGroupSignature(actualGroups);
-        const same = expected.length === actual.length && expected.every((name, index) => name === actual[index]);
-        return same ? "" : `${tr(message)}：${expected.join(", ") || "-"} != ${actual.join(", ") || "-"}`;
-      };
-      return packageCasePortMismatchMessage(branch.packageOriginal?.externalGroups || [], subsystem.externalGroups || [], "外部端口不一致，不能完成这个 Pack 工况")
-        || (expectedExternalPortRows.length !== currentExternalPortRows.length ? `${tr("外部端口不一致，不能完成这个 Pack 工况")}\nExpected: ${expectedExternalPortRows.join(", ") || "-"}\nCurrent: ${currentExternalPortRows.join(", ") || "-"}` : "")
-        || compare(branch.packageOriginal?.internalGroups || [], subsystem.internalGroups || [], "内部节点不一致，不能完成这个 Pack 工况");
+      // Pack cases may eliminate different internal nodes. Only the exposed port
+      // signature must stay fixed; each case stores its own recovery data.
+      return packageCasePortMismatchMessage(branch.packageOriginal?.externalGroups || [], subsystem.externalGroups || [], "外部端口不一致，不能完成这个 Pack 工况");
     }
 
     function dummyBranchesForPackCase(branches = state.branches) {

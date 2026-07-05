@@ -327,8 +327,18 @@ def _apply_source_temp_substitutions(
         reverse=True,
     )
     out = sp.sympify(parsed)
-    for source_expr, symbol in ordered:
-        out = out.xreplace({sp.sympify(source_expr): symbol})
+    # Some hoisted temps intentionally build on earlier hoisted temps:
+    #   tmp0 = 1 / den
+    #   tmp1 = G12 * tmp0
+    # A single xreplace pass can only produce ``G12 * tmp0`` from the original
+    # expression; it needs one more structural pass to collapse that to tmp1.
+    # This remains cheap and deterministic: no algebraic simplify/cancel/factor.
+    for _ in range(max(1, min(len(ordered), 8))):
+        before = out
+        for source_expr, symbol in ordered:
+            out = out.xreplace({sp.sympify(source_expr): symbol})
+        if out == before:
+            break
     return out
 
 
@@ -1171,6 +1181,21 @@ def _multi_case_signature(result: dict) -> dict:
 def _matrix_from_clean(value: object) -> sp.Matrix:
     if value is None:
         return sp.zeros(0, 0)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return sp.zeros(0, 0)
+        if cleaned.startswith("["):
+            parsed = sp.sympify(cleaned, locals=_symbol_locals(cleaned))
+            if isinstance(parsed, sp.MatrixBase):
+                return sp.Matrix(parsed)
+            if isinstance(parsed, (list, tuple)):
+                if not parsed:
+                    return sp.zeros(0, 0)
+                if not isinstance(parsed[0], (list, tuple, sp.MatrixBase)):
+                    return sp.Matrix([[_parse_expr(str(item))] for item in parsed])
+                return sp.Matrix([[_parse_expr(str(item)) for item in row] for row in parsed])
+        return sp.Matrix([[_parse_expr(cleaned)]])
     if isinstance(value, list) and value and not isinstance(value[0], list):
         return sp.Matrix([[_parse_expr(str(item))] for item in value])
     return sp.Matrix([[_parse_expr(str(item)) for item in row] for row in (value or [])])
@@ -1509,6 +1534,112 @@ def _validate_multicase_topology(profiles: list[dict]) -> None:
         for key, expected in base_shapes.items():
             if _matrix_payload_shape(payload, key) != expected:
                 raise ValueError(f"multi-case topology invariant failed for profile {index}: {key} shape changed")
+
+
+def _final_group_display_name(group: object, fallback: str) -> str:
+    if isinstance(group, dict):
+        for key in ("display", "name", "globalNet", "node", "id"):
+            value = group.get(key)
+            if value not in (None, ""):
+                return str(value)
+    if group not in (None, ""):
+        return str(group)
+    return fallback
+
+
+def _final_retained_profile_adapter(profiles: list[dict]) -> tuple[list[dict], list[dict]] | None:
+    """Adapt pack cases with equal final ports but different internal recovery.
+
+    Raw Pack internals are allowed to differ only after each case has already
+    produced a same-shaped final retained equation.  The alias-template path can
+    then operate on final G/Ihis while T1_T2 keeps the case-specific recovery.
+    """
+    if len(profiles) < 2:
+        return None
+    normalized_profiles: list[dict] = []
+    recovery_profiles: list[dict] = []
+    base_external_nodes: list[str] | None = None
+    base_g_shape: tuple[int, int] | None = None
+    base_ihis_shape: tuple[int, int] | None = None
+
+    for profile_index, profile in enumerate(profiles):
+        payload = profile.get("payload") or {}
+        final_external_groups = payload.get("finalExternalGroups") or []
+        final_g_value = payload.get("finalGMatrix")
+        final_ihis_value = payload.get("finalIhisVector")
+        if not final_external_groups or final_g_value is None or final_ihis_value is None:
+            return None
+        external_nodes = [
+            _final_group_display_name(group, f"N{index + 1}")
+            for index, group in enumerate(final_external_groups)
+        ]
+        if base_external_nodes is None:
+            base_external_nodes = external_nodes
+        elif external_nodes != base_external_nodes:
+            return None
+
+        final_g = _matrix_from_clean(final_g_value)
+        final_ihis = _matrix_from_clean(final_ihis_value)
+        if final_g.rows != len(external_nodes) or final_g.cols != len(external_nodes):
+            return None
+        if final_ihis.rows != len(external_nodes) or final_ihis.cols != 1:
+            return None
+        g_shape = (final_g.rows, final_g.cols)
+        ihis_shape = (final_ihis.rows, final_ihis.cols)
+        if base_g_shape is None:
+            base_g_shape = g_shape
+            base_ihis_shape = ihis_shape
+        elif g_shape != base_g_shape or ihis_shape != base_ihis_shape:
+            return None
+
+        internal_groups = payload.get("finalInternalGroups") or []
+        recovery_nodes = [
+            _final_group_display_name(group, f"K{index + 1}")
+            for index, group in enumerate(internal_groups)
+        ]
+        k_v = _matrix_from_clean(payload.get("finalK_v") or [])
+        k_h = _matrix_from_clean(payload.get("finalK_h") or [])
+        if recovery_nodes:
+            if k_v.shape != (len(recovery_nodes), len(external_nodes)):
+                return None
+            if k_h.shape not in {(len(recovery_nodes), 1), (0, 0)}:
+                return None
+            if k_h.shape == (0, 0):
+                k_h = sp.zeros(len(recovery_nodes), 1)
+        elif k_v.shape not in {(0, 0), (0, len(external_nodes))}:
+            return None
+
+        next_profile = json.loads(json.dumps(profile))
+        next_payload = json.loads(json.dumps(payload))
+        final_g_clean = _clean_matrix(final_g)
+        final_ihis_clean = _clean_vector(final_ihis)
+        next_payload.update({
+            "all_nodes": external_nodes,
+            "external_nodes": external_nodes,
+            "internal_nodes": [],
+            "ground_nodes": [],
+            "node_display_names": {node: node for node in external_nodes},
+            "G_full": final_g_clean,
+            "G_full_tagged": final_g_clean,
+            "Ihis_full": final_ihis_clean,
+            "Ihis_full_tagged": final_ihis_clean,
+            "direct_retained_stamps": [],
+        })
+        next_profile["payload"] = next_payload
+        normalized_profiles.append(next_profile)
+        try:
+            profile_case_id = int(profile.get("case_id", profile_index))
+        except (TypeError, ValueError):
+            profile_case_id = profile_index
+        recovery_profiles.append({
+            "case_ids": [profile_case_id],
+            "recovery_nodes": recovery_nodes,
+            "super_nodes": external_nodes,
+            "K_v": _clean_matrix(k_v) if k_v.shape != (0, 0) else [],
+            "K_h": _clean_vector(k_h) if k_h.shape != (0, 0) else [],
+        })
+
+    return normalized_profiles, recovery_profiles
 
 
 def _profile_case_index(profile: dict, branch_id: str, default: int = 0) -> int:
@@ -2207,6 +2338,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     sample_profiles = _profiles_with_runtime_case_samples(payload, profiles, runtime_groups)
     if len(sample_profiles) < 2:
         return None
+    final_recovery_profiles: list[dict] = []
     try:
         _validate_multicase_topology(sample_profiles)
     except ValueError as exc:
@@ -2219,7 +2351,10 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                 f"Runtime-mutable case group {name} changes topology or matrix shape. "
                 "Use init-time case group instead."
             ) from exc
-        raise
+        adapted = _final_retained_profile_adapter(sample_profiles)
+        if adapted is None:
+            raise
+        sample_profiles, final_recovery_profiles = adapted
     branch_ids = _branch_ids_from_profiles(sample_profiles)
     if not branch_ids:
         return None
@@ -2441,6 +2576,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
         "sample_profiles": sample_profiles,
         "branch_ids": [branch_id for branch_id in branch_ids if branch_id not in runtime_groups],
         "runtime_case_groups": list(runtime_groups.values()),
+        "final_recovery_profiles": final_recovery_profiles,
     }
 
 
@@ -2846,7 +2982,24 @@ def _shared_source_temp_substitutions(
     case_index: int,
 ) -> dict[sp.Expr, sp.Symbol]:
     items = ((shared_plan or {}).get(local_name) or {}).get(int(case_index)) or []
-    return {sp.sympify(expr): sp.Symbol(name) for name, expr in items}
+    substitutions: dict[sp.Expr, sp.Symbol] = {}
+    emitted: dict[sp.Expr, sp.Symbol] = {}
+    symbol_full_exprs: dict[sp.Symbol, sp.Expr] = {}
+    for name, expr in items:
+        expr = sp.sympify(expr)
+        symbol = sp.Symbol(name)
+        full_expr = expr.xreplace(symbol_full_exprs)
+        for candidate in (expr, sp.sympify(full_expr)):
+            substitutions.setdefault(candidate, symbol)
+            substitutions.setdefault(-candidate, -symbol)
+        resolved = _apply_source_temp_substitutions(expr, emitted)
+        substitutions.setdefault(sp.sympify(resolved), symbol)
+        substitutions.setdefault(-sp.sympify(resolved), -symbol)
+        for candidate in (expr, sp.sympify(full_expr), sp.sympify(resolved)):
+            emitted.setdefault(candidate, symbol)
+            emitted.setdefault(-candidate, -symbol)
+        symbol_full_exprs[symbol] = sp.sympify(full_expr)
+    return substitutions
 
 
 def _shared_source_temp_substitutions_for_profile(
@@ -2875,10 +3028,12 @@ def _local_case_indices_for_profile(
 
 def _shared_source_temp_assignment_lines(
     shared_plan: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]],
+    *,
+    comment: str = "Resolve RAM-safe source temporaries shared by G and Ihis aliases.",
 ) -> list[str]:
     if not shared_plan:
         return []
-    lines = ["    /* Resolve RAM-safe source temporaries shared by G and Ihis aliases. */"]
+    lines = [f"    /* {comment} */"]
     for local_name, case_map in shared_plan.items():
         if not case_map:
             continue
@@ -2886,21 +3041,128 @@ def _shared_source_temp_assignment_lines(
         for case_index in sorted(case_map):
             lines.append(f"    case {case_index}:")
             emitted: dict[sp.Expr, sp.Symbol] = {}
+            symbol_full_exprs: dict[sp.Symbol, sp.Expr] = {}
             for name, expr in case_map[case_index]:
+                full_expr = sp.sympify(expr).xreplace(symbol_full_exprs)
                 rhs = _apply_source_temp_substitutions(expr, emitted)
                 lines.append(f"        {name} = {_ccode(rhs)};")
-                emitted[sp.sympify(expr)] = sp.Symbol(name)
+                symbol = sp.Symbol(name)
+                for candidate in (sp.sympify(expr), sp.sympify(full_expr), sp.sympify(rhs)):
+                    emitted.setdefault(candidate, symbol)
+                    emitted.setdefault(-candidate, -symbol)
+                symbol_full_exprs[symbol] = sp.sympify(full_expr)
             lines.append("        break;")
         default_index = min(case_map)
         lines.append("    default:")
         emitted = {}
+        symbol_full_exprs = {}
         for name, expr in case_map[default_index]:
+            full_expr = sp.sympify(expr).xreplace(symbol_full_exprs)
             rhs = _apply_source_temp_substitutions(expr, emitted)
             lines.append(f"        {name} = {_ccode(rhs)};")
-            emitted[sp.sympify(expr)] = sp.Symbol(name)
+            symbol = sp.Symbol(name)
+            for candidate in (sp.sympify(expr), sp.sympify(full_expr), sp.sympify(rhs)):
+                emitted.setdefault(candidate, symbol)
+                emitted.setdefault(-candidate, -symbol)
+            symbol_full_exprs[symbol] = sp.sympify(full_expr)
         lines.append("        break;")
         lines.append("    }")
     return lines
+
+
+def _merge_source_temp_plans(
+    *plans: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None,
+) -> dict[str, dict[int, list[tuple[str, sp.Expr]]]]:
+    merged: dict[str, dict[int, list[tuple[str, sp.Expr]]]] = {}
+    seen_names: set[str] = set()
+    for plan in plans:
+        for local_name, case_map in (plan or {}).items():
+            for case_index, items in case_map.items():
+                out = merged.setdefault(local_name, {}).setdefault(int(case_index), [])
+                for name, expr in items:
+                    if name in seen_names:
+                        continue
+                    seen_names.add(name)
+                    out.append((name, sp.sympify(expr)))
+    return merged
+
+
+def _source_temp_stage_overrides(
+    plan: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None,
+    stage: str,
+) -> dict[str, str]:
+    """Treat already-hoisted source temporaries as available at the given stage.
+
+    Alias-local CSE may build on sourceGI/sourceG temps emitted by an earlier
+    switch.  Those generated symbols are not user symbols, so the normal symbol
+    table would mark them UNKNOWN and keep later sourceG/sourceIhis temps inside
+    the alias switch.  The override preserves the staged pipeline: first switch
+    computes reusable temporaries, second switch assigns full alias values only.
+    """
+    overrides: dict[str, str] = {}
+    for case_map in (plan or {}).values():
+        for items in case_map.values():
+            for name, _expr in items:
+                overrides[str(name)] = stage
+    return overrides
+
+
+def _owner_source_temp_prefix(wanted_owner: str) -> str:
+    if wanted_owner == "CODE_PER_STEP":
+        return "sourceIhis"
+    if wanted_owner == "CODE":
+        return "sourceCodeG"
+    return "sourceG"
+
+
+def _alias_source_temp_plan(
+    aliases: dict[str, dict],
+    wanted_owner: str,
+    case_id_symbol: str,
+    *,
+    base_source_temps: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None,
+    symbol_table: Mapping[str, str] | None,
+    require_ram_safe: bool,
+) -> dict[str, dict[int, list[tuple[str, sp.Expr]]]]:
+    """Hoist owner-local source CSE temps before the full-value alias switch.
+
+    The alias switch should stay boring: assign multcase_* full values only.
+    Any repeated source-level helper expressions are computed in an earlier
+    switch for the same local case selector, then reused by G/Ihis aliases.
+    """
+    grouped = _group_alias_entries(aliases, wanted_owner, case_id_symbol)
+    if not grouped:
+        return {}
+    symbol_table = dict(symbol_table or {})
+    if require_ram_safe:
+        symbol_table.update(_source_temp_stage_overrides(base_source_temps, "RAM"))
+    plan: dict[str, dict[int, list[tuple[str, sp.Expr]]]] = {}
+    prefix_root = _owner_source_temp_prefix(wanted_owner)
+    for local_name, entries in grouped.items():
+        case_indices = sorted({case_index for _alias, _info, case_values in entries for case_index in case_values})
+        if not case_indices:
+            continue
+        scope = _source_cse_scope_name(local_name)
+        for case_index in case_indices:
+            substitutions = _shared_source_temp_substitutions(base_source_temps, local_name, case_index)
+            assignments = [
+                (lhs, _apply_source_temp_substitutions(expr, substitutions))
+                for lhs, expr in _alias_case_assignments(entries, case_index)
+            ]
+            temps, _reduced = _source_level_cse_assignments(
+                assignments,
+                temp_prefix=f"{prefix_root}_{scope}_case{case_index}_tmp",
+            )
+            if not temps:
+                continue
+            case_items: list[tuple[str, sp.Expr]] = []
+            for name, expr, resolved in _resolved_cse_temps(temps):
+                if require_ram_safe and _expr_stage(resolved, symbol_table) != "RAM":
+                    continue
+                case_items.append((name, expr))
+            if case_items:
+                plan.setdefault(local_name, {})[int(case_index)] = case_items
+    return plan
 
 
 def _apply_shared_source_temp_text_reuse(
@@ -3204,42 +3466,23 @@ def _alias_assignment_lines(
 
     for local_name, entries in grouped.items():
         case_indices = sorted({case_index for _alias, _info, case_values in entries for case_index in case_values})
-        cse_scope = _source_cse_scope_name(local_name)
         lines.append(f"    switch ({local_name}) {{")
         for case_index in case_indices:
             lines.append(f"    case {case_index}:")
             assignments = _alias_case_assignments(entries, case_index)
-            cse_lines, used_temps = _emit_source_level_cse_assignment_lines(
-                assignments,
-                temp_prefix=f"sourceG_{cse_scope}_case{case_index}_tmp",
-                indent=8,
-                substitutions=_shared_source_temp_substitutions(shared_source_temps, local_name, case_index),
-            )
-            if used_temps:
-                lines.append("    {")
-                lines.extend(cse_lines)
-                lines.append("        break;")
-                lines.append("    }")
-            else:
-                lines.extend(cse_lines)
-                lines.append("        break;")
+            substitutions = _shared_source_temp_substitutions(shared_source_temps, local_name, case_index)
+            for lhs, expr in assignments:
+                resolved = _apply_source_temp_substitutions(expr, substitutions)
+                lines.append(f"        {lhs} = {_ccode(resolved)};")
+            lines.append("        break;")
         lines.append("    default:")
         default_case_index = min(case_indices) if case_indices else 0
         default_assignments = _alias_case_assignments(entries, default_case_index)
-        cse_lines, used_temps = _emit_source_level_cse_assignment_lines(
-            default_assignments,
-            temp_prefix=f"sourceG_{cse_scope}_default_tmp",
-            indent=8,
-            substitutions=_shared_source_temp_substitutions(shared_source_temps, local_name, default_case_index),
-        )
-        if used_temps:
-            lines.append("    {")
-            lines.extend(cse_lines)
-            lines.append("        break;")
-            lines.append("    }")
-        else:
-            lines.extend(cse_lines)
-            lines.append("        break;")
+        substitutions = _shared_source_temp_substitutions(shared_source_temps, local_name, default_case_index)
+        for lhs, expr in default_assignments:
+            resolved = _apply_source_temp_substitutions(expr, substitutions)
+            lines.append(f"        {lhs} = {_ccode(resolved)};")
+        lines.append("        break;")
         lines.append("    }")
     return lines
 
@@ -3259,13 +3502,40 @@ def _insert_multicase_alias_layer(
         case_id_symbol=case_id_symbol,
         symbol_table=symbol_table or {},
     )
+    ram_alias_temps = _alias_source_temp_plan(
+        aliases,
+        "RAM",
+        case_id_symbol,
+        base_source_temps=shared_source_temps,
+        symbol_table=symbol_table or {},
+        require_ram_safe=True,
+    )
+    ram_source_temps = _merge_source_temp_plans(shared_source_temps, ram_alias_temps)
+    code_alias_temps = _alias_source_temp_plan(
+        aliases,
+        "CODE",
+        case_id_symbol,
+        base_source_temps=ram_source_temps,
+        symbol_table=symbol_table or {},
+        require_ram_safe=False,
+    )
+    code_source_temps = _merge_source_temp_plans(ram_source_temps, code_alias_temps)
+    ihis_alias_temps = _alias_source_temp_plan(
+        aliases,
+        "CODE_PER_STEP",
+        case_id_symbol,
+        base_source_temps=code_source_temps,
+        symbol_table=symbol_table or {},
+        require_ram_safe=False,
+    )
+    all_source_temps = _merge_source_temp_plans(ram_source_temps, code_alias_temps, ihis_alias_temps)
     declarations: list[str] = []
     for branch_id in branch_ids:
         local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
         if local_name not in declared:
             declarations.append(f"    int {local_name} = 0;")
             declared.add(local_name)
-    declarations.extend(_shared_source_temp_declaration_lines(shared_source_temps, declared))
+    declarations.extend(_shared_source_temp_declaration_lines(all_source_temps, declared))
     original_symbols: set[str] = set()
     for info in aliases.values():
         for expr in (info.get("case_values") or {}).values():
@@ -3279,26 +3549,37 @@ def _insert_multicase_alias_layer(
 
     ram_lines = (
         _multicase_local_case_lines(case_id_symbol, profiles, branch_ids)
-        + _shared_source_temp_assignment_lines(shared_source_temps)
+        + _shared_source_temp_assignment_lines(ram_source_temps)
         + _alias_assignment_lines(
             aliases,
             "RAM",
             case_id_symbol,
-            shared_source_temps=shared_source_temps,
+            shared_source_temps=ram_source_temps,
         )
     )
     draft = _insert_after_label(draft, "RAM_PASS1:", ram_lines)
 
-    code_lines = _alias_assignment_lines(
-        aliases,
-        "CODE",
-        case_id_symbol,
-        shared_source_temps=shared_source_temps,
-    ) + _alias_assignment_lines(
-        aliases,
-        "CODE_PER_STEP",
-        case_id_symbol,
-        shared_source_temps=shared_source_temps,
+    code_lines = (
+        _shared_source_temp_assignment_lines(
+            code_alias_temps,
+            comment="Resolve CODE source temporaries used by G aliases.",
+        )
+        + _alias_assignment_lines(
+            aliases,
+            "CODE",
+            case_id_symbol,
+            shared_source_temps=code_source_temps,
+        )
+        + _shared_source_temp_assignment_lines(
+            ihis_alias_temps,
+            comment="Resolve CODE_PER_STEP source temporaries used by Ihis aliases.",
+        )
+        + _alias_assignment_lines(
+            aliases,
+            "CODE_PER_STEP",
+            case_id_symbol,
+            shared_source_temps=all_source_temps,
+        )
     )
     marker = "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */"
     if code_lines and marker in draft:
@@ -3311,6 +3592,7 @@ def _insert_multicase_alias_layer(
         "   Each case-resolved alias is assigned a full source value first;",
         "   the normal structured matrix DAG is generated exactly once. */",
     ]
+    draft = _apply_shared_source_temp_text_reuse(draft, all_source_temps)
     return _prepend_c_header_after_includes(draft, header)
 
 
@@ -5113,6 +5395,11 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             node_display_names=template_payload.get("node_display_names") or {},
             dummy_analysis=dummy_analysis,
         )
+        draft = _apply_final_retained_recovery_profiles_to_draft(
+            draft,
+            case_id_symbol=case_id_symbol,
+            recovery_profiles=alias_model.get("final_recovery_profiles") or [],
+        )
     display_reuse_plan_by_case: dict[int, list] = {}
     try:
         display_reuse_plan_by_case[int(alias_model["profiles"][0].get("index", 0))] = structural_gred_entry_reuse_plan(
@@ -5632,6 +5919,111 @@ def _apply_dummy_recovery_profiles_to_draft(
     if marker in draft:
         return draft.replace(marker, marker + "\n".join(lines) + "\n", 1)
     return draft.rstrip() + "\n" + "\n".join(lines) + "\n"
+
+
+def _apply_final_retained_recovery_profiles_to_draft(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    recovery_profiles: Sequence[dict] | None,
+) -> str:
+    """Add T1_T2 recovery for Pack cases reduced to common final ports.
+
+    The G/Ihis template is built from same-shaped final retained equations.
+    Recovered internal voltages are case-specific and therefore must be emitted
+    separately instead of forcing raw pack internals to have identical topology.
+    """
+    profiles = list(recovery_profiles or [])
+    if not profiles:
+        return draft
+    if not any(profile.get("recovery_nodes") for profile in profiles):
+        return draft
+
+    declared = set(re.findall(r"\bdouble\s+([A-Za-z_]\w*)\b", draft))
+    recovery_names: list[str] = []
+    recovery_name_set: set[str] = set()
+    recovery_symbol_names: set[str] = set()
+    external_c_names: set[str] = set()
+
+    for profile in profiles:
+        for col, node in enumerate(profile.get("super_nodes") or []):
+            external_c_names.add(_c_identifier_name(node, f"V{col + 1}"))
+        for row, node in enumerate(profile.get("recovery_nodes") or []):
+            c_name = _c_identifier_name(node, f"K{row + 1}")
+            if c_name not in recovery_name_set:
+                recovery_name_set.add(c_name)
+                recovery_names.append(c_name)
+        for key in ("K_v", "K_h"):
+            value = profile.get(key)
+            if value is None or value == []:
+                continue
+            try:
+                matrix = sp.Matrix(value)
+            except Exception:
+                continue
+            recovery_symbol_names.update(_symbols_in_matrices(matrix))
+
+    declarations: list[str] = []
+    for name in recovery_names:
+        if name not in declared:
+            declarations.append(f"    double {name} = 0.0;")
+            declared.add(name)
+
+    recovery_symbol_names = {
+        _c_identifier_name(name, name)
+        for name in recovery_symbol_names
+        if _c_identifier_name(name, name) not in declared
+        and _c_identifier_name(name, name) not in recovery_name_set
+        and _c_identifier_name(name, name) not in external_c_names
+    }
+    if recovery_symbol_names:
+        if declarations:
+            declarations.append("")
+        declarations.append("    /* User symbols used only by case-specific voltage recovery. */")
+        declarations.extend(f"    double {name} = 0.0;" for name in sorted(recovery_symbol_names))
+
+    if declarations:
+        static_marker = "STATIC:\n"
+        if static_marker in draft:
+            draft = draft.replace(
+                static_marker,
+                static_marker + "\n" + "\n".join(declarations) + "\n",
+                1,
+            )
+
+    lines = [
+        "    /* Case-specific voltage recovery for Pack cases with different internal reductions. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for profile in profiles:
+        case_ids = [int(case_id) for case_id in (profile.get("case_ids") or [])]
+        if not case_ids:
+            continue
+        for case_id in case_ids:
+            lines.append(f"    case {case_id}:")
+        assignment_lines = _recovery_assignment_lines(profile)
+        if assignment_lines:
+            lines.extend(assignment_lines)
+        else:
+            lines.append("        /* This Pack case has no recovered internal nodes. */")
+        lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+    ])
+
+    stale_comments = [
+        "    /* No internal nodes were eliminated, so there is no Vk recovery step. */",
+        "    /* DummyNodeBlock isolated internal nodes are not recovered. */",
+    ]
+    for comment in stale_comments:
+        draft = draft.replace(comment + "\n", "")
+        draft = draft.replace(comment, "")
+    marker = "T1_T2:\n"
+    if marker in draft:
+        return draft.replace(marker, marker + "\n".join(lines) + "\n", 1)
+    return draft.rstrip() + "\nT1_T2:\n" + "\n".join(lines) + "\n"
 
 
 def _apply_single_case_dummy_recovery_skip(

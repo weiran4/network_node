@@ -514,7 +514,12 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("validatePackageCaseExternalSignature", source)
         self.assertIn("packageCaseGroupSignature", source)
         self.assertIn("外部端口不一致，不能完成这个 Pack 工况", source)
-        self.assertIn("内部节点不一致，不能完成这个 Pack 工况", source)
+        start = source.index("function validatePackageCaseExternalSignature")
+        end = source.index("function dummyBranchesForPackCase", start)
+        guard_source = source[start:end]
+        self.assertIn("packageCasePortMismatchMessage", guard_source)
+        self.assertIn("externalGroups", guard_source)
+        self.assertNotIn("internalGroups", guard_source)
         self.assertIn("data-package-network-action=\"edit\"", source)
         self.assertIn("data-package-network-action=\"duplicate\"", source)
         self.assertIn("id=\"packageCaseEditOverlay\"", source)
@@ -674,7 +679,7 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("Expected:", source)
         self.assertIn("Current:", source)
         self.assertIn("packageCasePortRows(shell.packageOriginal?.externalGroups || [])", source)
-        self.assertIn("packageCasePortRows(subsystem.externalGroups || [])", source)
+        self.assertIn("packageCasePortMismatchMessage(branch.packageOriginal?.externalGroups || [], subsystem.externalGroups || []", source)
         self.assertIn("renderPackageCasePortReminder(shell)", source)
 
     def test_packaged_network_cases_participate_in_multicase_export(self):
@@ -695,6 +700,22 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         eligible_source = source[eligible_start:eligible_end]
         self.assertIn("normalizeSwitchCases(branch);", eligible_source)
         self.assertIn("branch.switchCases.length > 1", eligible_source)
+
+    def test_pack_case_profile_payload_forwards_final_retained_fields(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function finalRetainedFieldsForSinglePackPayload(payload)", source)
+        self.assertIn("packagedBranches.length !== 1", source)
+        self.assertIn("state.branches.length !== 1", source)
+        self.assertIn("finalExternalGroups", source)
+        self.assertIn("finalGMatrix", source)
+        self.assertIn("finalIhisVector", source)
+
+        payload_start = source.index("function payloadForCaseProfile")
+        payload_end = source.index("function dummyFinalizationForCaseProfile")
+        payload_source = source[payload_start:payload_end]
+        self.assertIn("const payload = optimizedEliminationPayload({ deferDummyNodeBlocks: true });", payload_source)
+        self.assertIn("...finalRetainedFieldsForSinglePackPayload(payload)", payload_source)
 
     def test_pack_case_edit_preserves_saved_node_order(self):
         source = Path("index.html").read_text(encoding="utf-8")

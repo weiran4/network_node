@@ -107,6 +107,12 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(matrix[0, 0], sp.Symbol("AA") + sp.Symbol("CC"))
         self.assertEqual(matrix[0, 1], sp.Symbol("BB") + sp.Symbol("CC"))
 
+    def test_saved_string_matrix_fields_are_parsed_as_matrices(self):
+        matrix = optimized_api._matrix_from_clean("[[G11, -G12], [G12, G22]]")
+        self.assertEqual(matrix.shape, (2, 2))
+        self.assertEqual(matrix[0, 0], sp.Symbol("G11"))
+        self.assertEqual(matrix[0, 1], -sp.Symbol("G12"))
+
     def test_direct_retained_stamp_cc_symbol_can_accumulate(self):
         payload = {
             "direct_retained_stamps": [
@@ -593,13 +599,26 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
             },
         }
 
-        lines = "\n".join(_alias_assignment_lines(aliases, "CODE"))
+        source_temps = optimized_api._alias_source_temp_plan(
+            aliases,
+            "CODE",
+            "C1_case_id",
+            base_source_temps=None,
+            symbol_table={},
+            require_ram_safe=False,
+        )
+        source_lines = "\n".join(optimized_api._shared_source_temp_assignment_lines(source_temps))
+        alias_lines = "\n".join(
+            _alias_assignment_lines(aliases, "CODE", "C1_case_id", shared_source_temps=source_temps)
+        )
 
-        self.assertIn("double sourceG_C1_case0_tmp", lines)
-        self.assertIn("double sourceG_C1_case1_tmp", lines)
-        self.assertLess(lines.count("AA + G22 + Grc + PN + PP + w2"), 3)
-        self.assertLess(lines.count("Dabc + G22 + Grc + PN + PP + w2"), 3)
-        self.assertIn("multcase_G_C1_B_RC = ", lines)
+        self.assertIn("sourceCodeG_C1_case0_tmp", source_lines)
+        self.assertIn("sourceCodeG_C1_case1_tmp", source_lines)
+        self.assertNotIn("double sourceCodeG_C1_case0_tmp", alias_lines)
+        self.assertNotIn("double sourceCodeG_C1_case1_tmp", alias_lines)
+        self.assertIn("sourceCodeG_C1_case0_tmp", alias_lines)
+        self.assertIn("sourceCodeG_C1_case1_tmp", alias_lines)
+        self.assertIn("multcase_G_C1_B_RC = ", alias_lines)
 
     def test_source_level_final_gvalue_writes_use_budgeted_cse(self):
         entry_plans = [
@@ -972,6 +991,159 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("g_mat_over[0][0] = multcase_G_R1_A_A;", draft)
         self.assertIn("case 1:", draft)
         self.assertIn("g_mat_over[0][1] = -multcase_G_R1_A_A;", draft)
+
+    def test_pack_cases_with_same_final_ports_but_different_internal_recovery_use_final_template(self):
+        def with_final(payload: dict, *, g: str, internal: list[str], k_v: list[list[str]], k_h: list[str]) -> dict:
+            clone = json.loads(json.dumps(payload))
+            clone.update({
+                "finalExternalGroups": [
+                    {"display": "A", "globalNet": "A"},
+                    {"display": "B", "globalNet": "B"},
+                ],
+                "finalInternalGroups": [
+                    {"display": node, "globalNet": node}
+                    for node in internal
+                ],
+                "finalGMatrix": [[g, f"-({g})"], [f"-({g})", g]],
+                "finalIhisVector": ["0", "0"],
+                "finalK_v": k_v,
+                "finalK_h": k_h,
+            })
+            return clone
+
+        no_internal = with_final(
+            _series_payload("G0", internal=False),
+            g="G0",
+            internal=[],
+            k_v=[],
+            k_h=[],
+        )
+        with_internal = with_final(
+            _series_payload("G1", internal=True),
+            g="G1",
+            internal=["X"],
+            k_v=[["1", "0"]],
+            k_h=["Ihis_x"],
+        )
+        response = build_multi_case_response(
+            _request(
+                [
+                    {"name": "Pack case 0", "case_map": {"Pack": 0}, "payload": no_internal},
+                    {"name": "Pack case 1", "case_map": {"Pack": 1}, "payload": with_internal},
+                ],
+                deps=_deps("G0", "G1", step=("Ihis_x",)),
+                case_id="case_id",
+            )
+        )
+
+        multi = response["multi_case"]
+        draft = multi["c_draft"]
+        self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assertIn("multcase_G_Pack_A_A = G0;", draft)
+        self.assertIn("multcase_G_Pack_A_A = G1;", draft)
+        self.assertIn('getNodeNum(comp, "A")', draft)
+        self.assertNotIn('getNodeNum(comp, "X")', draft)
+        self.assertIn("T1_T2:", draft)
+        self.assertIn("case 1:", draft)
+        self.assertIn("X = (1.0)*A + Ihis_x;", draft)
+        self.assertNotIn("No internal nodes were eliminated, so there is no Vk recovery step.", draft)
+
+    def test_trf_ctest_dummy_fixture_uses_final_ports_with_case_specific_recovery(self):
+        fixture = Path("exports/Trf_Ctest_dummy.json")
+        if not fixture.exists():
+            self.skipTest("Trf_Ctest_dummy.json fixture is not available")
+        data = json.loads(fixture.read_text(encoding="utf-8"))
+        network_cases = data["branches"][0]["packageOriginal"]["networkCases"]
+        def payload_from_saved_case(case: dict) -> dict:
+            final_external = [
+                str(group.get("display") or group.get("globalNet") or f"N{index + 1}")
+                for index, group in enumerate(case.get("finalExternalGroups") or [])
+            ]
+            final_internal = [
+                str(group.get("display") or group.get("globalNet") or f"K{index + 1}")
+                for index, group in enumerate(case.get("finalInternalGroups") or [])
+            ]
+            return {
+                "all_nodes": list(final_external),
+                "external_nodes": list(final_external),
+                "internal_nodes": list(final_internal),
+                "ground_nodes": [],
+                "node_display_names": {node: node for node in final_external + final_internal},
+                "G_full": case.get("gMatrix"),
+                "G_full_tagged": case.get("gMatrix"),
+                "Ihis_full": case.get("ihisVector"),
+                "Ihis_full_tagged": case.get("ihisVector"),
+                "direct_retained_stamps": [],
+                "finalExternalGroups": case.get("finalExternalGroups"),
+                "finalInternalGroups": case.get("finalInternalGroups"),
+                "finalGMatrix": case.get("finalGMatrix"),
+                "finalIhisVector": case.get("finalIhisVector"),
+                "finalK_v": case.get("finalK_v"),
+                "finalK_h": case.get("finalK_h"),
+            }
+
+        profiles = [
+            {
+                "case_id": index,
+                "name": case.get("name") or f"case {index}",
+                "case_map": {"C1": index},
+                "payload": payload_from_saved_case(case),
+            }
+            for index, case in enumerate(network_cases)
+        ]
+        response = build_multi_case_response(
+            _request(
+                profiles,
+                deps=_deps("G11", "G12", "G22", "Gc", step=("Ihis_p", "Ihis_s", "IhisC")),
+                case_id="case_id",
+            )
+        )
+
+        multi = response["multi_case"]
+        draft = multi["c_draft"]
+        self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assertIn('getNodeNum(comp, "N1")', draft)
+        self.assertIn('getNodeNum(comp, "N4")', draft)
+        self.assertNotIn('getNodeNum(comp, "inner_left")', draft)
+        self.assertNotIn('getNodeNum(comp, "inner_right")', draft)
+        self.assertIn("Case-specific voltage recovery", draft)
+        self.assertIn("case 1:", draft)
+        self.assertIn("inner_left =", draft)
+        self.assertIn("case 2:", draft)
+        self.assertIn("inner_right =", draft)
+        self.assertIn("case 3:", draft)
+        self.assertNotIn("No internal nodes were eliminated, so there is no Vk recovery step.", draft)
+        self.assertIn(
+            "sourceGI_C1_case1_tmp1 = Gc*sourceGI_C1_case1_tmp0;",
+            draft,
+            "The shared RAM-safe G/Ihis temp should be computed once before RAM/CODE aliases use it.",
+        )
+        self.assertNotIn(
+            "double sourceG_C1_case1_tmp0 = Gc*sourceGI_C1_case1_tmp0;",
+            draft,
+            "RAM alias CSE should reuse sourceGI_C1_case1_tmp1 instead of recomputing the same product.",
+        )
+        ram_alias_block = draft.split("/* Resolve RAM multi-case effective aliases as full values, never deltas. */", 1)[
+            1
+        ].split("int err = 0;", 1)[0]
+        self.assertNotRegex(
+            ram_alias_block,
+            r"\bdouble\s+sourceG_C1_case\d+_tmp\d+\s*=",
+            "The RAM alias switch should only assign multcase_G values; sourceG temps must be hoisted.",
+        )
+        ihis_alias_block = draft.split(
+            "/* Resolve CODE_PER_STEP multi-case effective aliases as full values, never deltas. */",
+            1,
+        )[1].split(
+            "/* ************************************************************************\n"
+            "     * CODE-SIDE IHIS VALUE SETUP",
+            1,
+        )[0]
+        self.assertNotRegex(
+            ihis_alias_block,
+            r"\bdouble\s+sourceIhis_C1_case\d+_tmp\d+\s*=",
+            "The Ihis alias switch should only assign multcase_Ihis values; sourceIhis temps must be hoisted.",
+        )
 
     def test_rejects_case_that_changes_topology(self):
         bad_payload = _series_payload("X", internal=False)

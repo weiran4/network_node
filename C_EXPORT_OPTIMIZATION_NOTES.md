@@ -391,6 +391,20 @@ The intended behavior is only a workflow aid:
 This should remain separate from normal branch editing. It must not change
 ordinary single-case circuits or allow dummy nodes to alter physical topology.
 
+### Pack Cases With Different Internal Elimination Sets
+
+A packed multi-case component is allowed to use different internal eliminated
+nodes in different init-time cases as long as the external port signature is the
+same. The editor save guard should therefore validate only the external port
+count, names, and order. Internal node groups, `K_v/K_h`, final recovery data,
+and dummy-finalized rows are case-local data saved inside each packaged case.
+
+This is different from a runtime-mutable case group. A runtime-mutable group can
+change only expressions during CODE; it must not change topology, node order,
+retained/internal dimensions, or recovery layout. If a bug appears around Pack
+case saving, first check whether the failing guard is incorrectly comparing
+`internalGroups` instead of only `externalGroups`.
+
 ## Debugging Lessons
 
 ### Multi-Case Export Cache Coverage
@@ -564,6 +578,38 @@ message should explain the physical fix:
 - keep one of the nodes as retained/external reference,
 - add a real ground/reference/admittance path, or
 - use a future MNA/constraint-aware reduction path for ideal source constraints.
+
+### Pack Cases With Different Internals Need A Final-Retained Adapter
+
+Pack multi-case editing can produce cases with the same external ports but
+different internal eliminated nodes and voltage-recovery formulas. This is not a
+Dummy/N-Dummy padding problem. Do not force the raw `G_full/Ihis_full` topology
+to match by adding fake nodes.
+
+The safe bridge is:
+
+1. Each case is reduced to the same final retained port order.
+2. The alias-template C path uses those same-shaped final `G/Ihis` equations as
+   its template input.
+3. Case-specific internal voltage recovery is emitted separately in `T1_T2`.
+
+Frontend debugging rule: the backend adapter only works if the multi-case
+profile payload forwards `finalExternalGroups`, `finalGMatrix`, `finalIhisVector`,
+and the case recovery fields from the active Pack case. If the UI still reports
+`all_nodes changed` for a Pack whose exposed ports match, inspect the frontend
+payload first; the saved case data may be correct while the export request is
+still sending the raw per-case internal topology.
+4. Cases with no recovered internal nodes simply skip recovery.
+
+This preserves the normal multi-case alias-template rule while keeping voltage
+recovery for cases that actually had internal nodes.
+
+Debugging gotcha: saved project JSON may store `finalGMatrix`,
+`finalIhisVector`, `finalK_v`, and `finalK_h` as stringified matrix expressions
+such as `"[[G11, -G11], ...]"`, not as nested arrays. Matrix parsing helpers must
+recognize that format before checking shape. If a string matrix is passed
+directly to `sp.Matrix`, it can be interpreted as a character sequence, causing
+false dimension failures and making the backend fall back to the wrong path.
 
 ## Safety Rules
 
