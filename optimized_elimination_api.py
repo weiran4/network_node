@@ -1642,6 +1642,95 @@ def _final_retained_profile_adapter(profiles: list[dict]) -> tuple[list[dict], l
     return normalized_profiles, recovery_profiles
 
 
+def _final_retained_profile_adapter_unavailable_reason(profiles: list[dict]) -> str:
+    if len(profiles) < 2:
+        return "need at least two case profiles"
+
+    base_external_nodes: list[str] | None = None
+    base_g_shape: tuple[int, int] | None = None
+    base_ihis_shape: tuple[int, int] | None = None
+    for profile_index, profile in enumerate(profiles):
+        payload = profile.get("payload") or {}
+        final_external_groups = payload.get("finalExternalGroups") or []
+        final_g_value = payload.get("finalGMatrix")
+        final_ihis_value = payload.get("finalIhisVector")
+        missing = []
+        if not final_external_groups:
+            missing.append("finalExternalGroups")
+        if final_g_value is None:
+            missing.append("finalGMatrix")
+        if final_ihis_value is None:
+            missing.append("finalIhisVector")
+        if missing:
+            return f"profile {profile_index} missing {', '.join(missing)}"
+
+        external_nodes = [
+            _final_group_display_name(group, f"N{index + 1}")
+            for index, group in enumerate(final_external_groups)
+        ]
+        if base_external_nodes is None:
+            base_external_nodes = external_nodes
+        elif external_nodes != base_external_nodes:
+            return (
+                f"profile {profile_index} final external port order differs: "
+                f"{external_nodes} != {base_external_nodes}"
+            )
+
+        try:
+            final_g = _matrix_from_clean(final_g_value)
+            final_ihis = _matrix_from_clean(final_ihis_value)
+        except Exception as exc:  # pragma: no cover - defensive diagnostics
+            return f"profile {profile_index} final retained matrix parse failed: {exc}"
+
+        if final_g.rows != len(external_nodes) or final_g.cols != len(external_nodes):
+            return (
+                f"profile {profile_index} finalGMatrix shape {final_g.shape} "
+                f"does not match {len(external_nodes)} final ports"
+            )
+        if final_ihis.rows != len(external_nodes) or final_ihis.cols != 1:
+            return (
+                f"profile {profile_index} finalIhisVector shape {final_ihis.shape} "
+                f"does not match {len(external_nodes)} final ports"
+            )
+
+        g_shape = (final_g.rows, final_g.cols)
+        ihis_shape = (final_ihis.rows, final_ihis.cols)
+        if base_g_shape is None:
+            base_g_shape = g_shape
+            base_ihis_shape = ihis_shape
+        elif g_shape != base_g_shape or ihis_shape != base_ihis_shape:
+            return (
+                f"profile {profile_index} final retained shape differs: "
+                f"G {g_shape} / Ihis {ihis_shape} != G {base_g_shape} / Ihis {base_ihis_shape}"
+            )
+
+        internal_groups = payload.get("finalInternalGroups") or []
+        recovery_nodes = [
+            _final_group_display_name(group, f"K{index + 1}")
+            for index, group in enumerate(internal_groups)
+        ]
+        try:
+            k_v = _matrix_from_clean(payload.get("finalK_v") or [])
+            k_h = _matrix_from_clean(payload.get("finalK_h") or [])
+        except Exception as exc:  # pragma: no cover - defensive diagnostics
+            return f"profile {profile_index} recovery matrix parse failed: {exc}"
+        if recovery_nodes:
+            if k_v.shape != (len(recovery_nodes), len(external_nodes)):
+                return (
+                    f"profile {profile_index} finalK_v shape {k_v.shape} "
+                    f"does not match {len(recovery_nodes)} recovery nodes x {len(external_nodes)} final ports"
+                )
+            if k_h.shape not in {(len(recovery_nodes), 1), (0, 0)}:
+                return (
+                    f"profile {profile_index} finalK_h shape {k_h.shape} "
+                    f"does not match {len(recovery_nodes)} recovery nodes"
+                )
+        elif k_v.shape not in {(0, 0), (0, len(external_nodes))}:
+            return f"profile {profile_index} has finalK_v rows but no finalInternalGroups"
+
+    return "unknown adapter incompatibility"
+
+
 def _profile_case_index(profile: dict, branch_id: str, default: int = 0) -> int:
     case_map = profile.get("case_map") or {}
     return int(case_map.get(branch_id, default) or 0)
@@ -2353,7 +2442,8 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
             ) from exc
         adapted = _final_retained_profile_adapter(sample_profiles)
         if adapted is None:
-            raise
+            reason = _final_retained_profile_adapter_unavailable_reason(sample_profiles)
+            raise ValueError(f"{exc}; final-retained adapter unavailable: {reason}") from exc
         sample_profiles, final_recovery_profiles = adapted
     branch_ids = _branch_ids_from_profiles(sample_profiles)
     if not branch_ids:

@@ -1145,11 +1145,108 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
             "The Ihis alias switch should only assign multcase_Ihis values; sourceIhis temps must be hoisted.",
         )
 
+    def test_final_retained_adapter_allows_different_raw_internal_counts(self):
+        def final_pack_payload(raw_internal: list[str], final_internal: list[str], g: str) -> dict:
+            raw_nodes = ["N1", "N2", *raw_internal]
+            raw_size = len(raw_nodes)
+            return {
+                "all_nodes": raw_nodes,
+                "external_nodes": ["N1", "N2"],
+                "internal_nodes": raw_internal,
+                "ground_nodes": [],
+                "node_display_names": {node: node for node in raw_nodes},
+                "G_full": [["0" for _ in range(raw_size)] for _ in range(raw_size)],
+                "G_full_tagged": [["0" for _ in range(raw_size)] for _ in range(raw_size)],
+                "Ihis_full": ["0" for _ in range(raw_size)],
+                "Ihis_full_tagged": ["0" for _ in range(raw_size)],
+                "direct_retained_stamps": [],
+                "finalExternalGroups": [
+                    {"display": "N1", "globalNet": "N1"},
+                    {"display": "N2", "globalNet": "N2"},
+                ],
+                "finalInternalGroups": [
+                    {"display": node, "globalNet": node}
+                    for node in final_internal
+                ],
+                "finalGMatrix": [[g, f"-({g})"], [f"-({g})", g]],
+                "finalIhisVector": ["0", "0"],
+                "finalK_v": [
+                    ["1", "0"] if index == 0 else ["0", "1"]
+                    for index, _node in enumerate(final_internal)
+                ],
+                "finalK_h": [f"Ihis_{node}" for node in final_internal],
+            }
+
+        profiles = [
+            {
+                "case_id": 0,
+                "name": "one internal",
+                "case_map": {"Pack": 0},
+                "payload": final_pack_payload(["inner_left"], ["inner_left"], "G0"),
+            },
+            {
+                "case_id": 1,
+                "name": "two internals",
+                "case_map": {"Pack": 1},
+                "payload": final_pack_payload(
+                    ["inner_left", "inner_right"],
+                    ["inner_left", "inner_right"],
+                    "G1",
+                ),
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "topology invariant"):
+            optimized_api._validate_multicase_topology(profiles)
+
+        adapted_profiles, recovery_profiles = optimized_api._final_retained_profile_adapter(profiles)
+        self.assertEqual(adapted_profiles[0]["payload"]["all_nodes"], ["N1", "N2"])
+        self.assertEqual(adapted_profiles[0]["payload"]["internal_nodes"], [])
+        self.assertEqual(adapted_profiles[1]["payload"]["all_nodes"], ["N1", "N2"])
+        self.assertEqual(adapted_profiles[1]["payload"]["internal_nodes"], [])
+        self.assertEqual(recovery_profiles[0]["recovery_nodes"], ["inner_left"])
+        self.assertEqual(recovery_profiles[1]["recovery_nodes"], ["inner_left", "inner_right"])
+
+        response = build_multi_case_response(
+            _request(
+                profiles,
+                deps=_deps("G0", "G1", step=("Ihis_inner_left", "Ihis_inner_right")),
+                case_id="case_id",
+            )
+        )
+        multi = response["multi_case"]
+        draft = multi["c_draft"]
+        self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assertIn('getNodeNum(comp, "N1")', draft)
+        self.assertIn('getNodeNum(comp, "N2")', draft)
+        self.assertNotIn('getNodeNum(comp, "inner_left")', draft)
+        self.assertNotIn('getNodeNum(comp, "inner_right")', draft)
+        self.assertIn("Case-specific voltage recovery", draft)
+        self.assertIn("case 0:", draft)
+        self.assertIn("inner_left =", draft)
+        self.assertIn("case 1:", draft)
+        self.assertIn("inner_right =", draft)
+
     def test_rejects_case_that_changes_topology(self):
         bad_payload = _series_payload("X", internal=False)
         bad_payload["all_nodes"] = ["A", "C"]
         bad_payload["external_nodes"] = ["A", "C"]
         with self.assertRaisesRegex(ValueError, "topology"):
+            build_multi_case_response(
+                _request(
+                    [
+                        {"name": "ok", "case_map": {"R1": 0}, "payload": _series_payload("X", internal=False)},
+                        {"name": "bad", "case_map": {"R1": 1}, "payload": bad_payload},
+                    ],
+                    deps=_deps("X"),
+                )
+            )
+
+    def test_topology_mismatch_reports_missing_final_retained_adapter_fields(self):
+        bad_payload = _series_payload("X", internal=False)
+        bad_payload["all_nodes"] = ["A", "C"]
+        bad_payload["external_nodes"] = ["A", "C"]
+        with self.assertRaisesRegex(ValueError, "final-retained adapter unavailable: profile 0 missing"):
             build_multi_case_response(
                 _request(
                     [
