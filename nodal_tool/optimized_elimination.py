@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Sequence
+from typing import Dict, Sequence, Tuple
 
 import sympy as sp
 
@@ -18,8 +18,8 @@ class GredEntryReuse:
     sign: int
 
 
-_PolyKey = tuple[tuple[tuple[str, ...], int], ...]
-_Poly = dict[tuple[str, ...], int]
+_PolyKey = Tuple[Tuple[Tuple[str, ...], int], ...]
+_Poly = Dict[Tuple[str, ...], int]
 
 
 def _expr_is_exact_zero(expr: sp.Expr) -> bool:

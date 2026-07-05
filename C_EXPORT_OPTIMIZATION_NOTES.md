@@ -340,6 +340,38 @@ inverse structure rather than a full inverse. If the coupled block is size 2 or
 Future refinement: allow more of the diagonal portion to remain scalar and only
 use matrix operations for the small coupled block.
 
+### Optional Manual Scalar Preview
+
+Keep the default optimized C export path unchanged, but consider adding a
+separate user-triggered preview button such as "convert diagonal `Gkk` case to
+scalar code". This is an experimental/readability tool, not a model mutation.
+
+The button should be enabled only when the current selected case/profile has a
+structurally diagonal `Gkk`. For multi-case exports, each case must be checked
+independently; diagonal cases can preview scalar code while non-diagonal cases
+must keep the normal matrix-DAG path.
+
+Expected behavior:
+
+- Generate a reversible scalar-code variant from the same backend math result.
+- Let the user compare the matrix-DAG draft and the scalar draft.
+- Keep the existing draft as the default fallback if the scalar version is too
+  long, harder to review, or fails a budget check.
+- Do not save the scalar variant into the circuit JSON unless the user
+  explicitly accepts it as an export preference.
+
+Safety rules:
+
+- Use the existing structural `Gkk` diagonal proof; do not use `sp.cancel`,
+  `sp.factor`, or broad `sp.simplify` to justify the conversion.
+- Respect RAM/CODE ownership and runtime-mutable case constraints.
+- Do not force scalar generation for dummy-finalized or multi-profile cases
+  whose active retained/internal dimensions differ unless the case branch has
+  already been proven compatible.
+- Run the same generated-code checks as normal C export, including undefined
+  enum names, duplicate declarations, stale cache versions, and no unused
+  MATRIX initialization.
+
 ### Auto Dummy Nodes For Pack Multi-Case
 
 When a packed multi-case component contains cases with different internal
@@ -407,6 +439,22 @@ Two debug rules matter here:
   the safety evidence. A conservative symbol table may classify one symbol as
   CODE because another case needs CODE, but the already-generated RAM line shows
   this exact init-time case can compute that RHS before CODE.
+- Shared source temporaries can be emitted in stages. A later source expression
+  may already be rewritten through earlier `sourceGI_*` temporaries, for example
+  `sourceGI_C1_case0_tmp4 * sourceGI_C1_case0_tmp9`. Reuse detection must compare
+  both forms: the original SymPy expression and the already-substituted emitted
+  C expression. Otherwise `RAM_PASS1` can recompute the same product as a local
+  `sourceG_*` temp even though a persistent `sourceGI_*` temp already exists.
+- This check must stay structural/textual. Do not use `cancel`, `simplify`, or
+  `factor` merely to prove source-temp equality; if the exact emitted RHS does
+  not match, leave the generated code unchanged.
+- Empty fixture caches are not regression coverage. If a saved JSON has an empty
+  `multiCaseExportCache`, cache-driven tests must skip explicitly or build a
+  minimal direct request/helper-level regression.
+- Keep runtime modules compatible with the Python shipped on other machines.
+  Module-level type aliases such as `tuple[...]` and `dict[...]` can fail on old
+  Python versions before any API logic runs. Use `typing.Tuple` / `typing.Dict`
+  in runtime code unless the project has explicitly dropped those versions.
 
 ### Source-Level CSE Temporaries Need Liveness Checks
 

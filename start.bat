@@ -28,6 +28,17 @@ if not defined PY_CMD (
 
 echo Using Python command: %PY_CMD%
 
+%PY_CMD% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)" >nul 2>nul
+if not %ERRORLEVEL%==0 (
+  echo WARNING: Python 3.9 or newer is recommended.
+  %PY_CMD% -c "import sys; print('Current Python: ' + '.'.join(map(str, sys.version_info[:3])))"
+  echo.
+  echo Older Python versions may fail on newer project code or dependencies.
+  echo If startup or C export fails, install Python 3.11 or newer and run this file again.
+  echo Download: https://www.python.org/downloads/
+  echo.
+)
+
 %PY_CMD% -c "import sympy" >nul 2>nul
 if not %ERRORLEVEL%==0 (
   echo SymPy is not installed. Installing SymPy now...

@@ -2913,27 +2913,69 @@ def _apply_shared_source_temp_text_reuse(
     so the alias-resolution blocks already contain local sourceG_* CSE temps.
     Rebuilding that whole block would be fragile; this pass only rewrites a
     local temp when its emitted RHS is exactly the same C expression as a
-    RAM-safe sourceGI temp.  It does no algebraic equivalence checking.
+    RAM-safe sourceGI temp.  The RHS may be either the original expression or
+    the expression after earlier sourceGI temps have already been substituted.
+    It does no algebraic equivalence checking.
     """
     if not shared_plan:
         return draft
+
+    def rhs_to_shared_names(items: Sequence[tuple[str, sp.Expr]]) -> dict[str, str]:
+        rhs_map: dict[str, str] = {}
+        emitted: dict[sp.Expr, sp.Symbol] = {}
+        for shared_name, expr in items:
+            parsed = sp.sympify(expr)
+            rhs_map.setdefault(_ccode(parsed), shared_name)
+            rhs_map.setdefault(_ccode(_apply_source_temp_substitutions(parsed, emitted)), shared_name)
+            emitted[parsed] = sp.Symbol(shared_name)
+        return rhs_map
+
+    def replace_local_assignments(
+        source: str,
+        *,
+        scope: str,
+        label: str,
+        rhs_map: Mapping[str, str],
+    ) -> str:
+        pattern = re.compile(
+            rf"(?m)^(?P<indent>\s*)double\s+"
+            rf"(?P<local>sourceG_{re.escape(scope)}_{re.escape(label)}_tmp\d+)"
+            rf"\s*=\s*(?P<rhs>[^;\n]+);\s*$"
+        )
+        search_start = 0
+        while True:
+            match = pattern.search(source, search_start)
+            if not match:
+                return source
+            shared_name = rhs_map.get(match.group("rhs").strip())
+            if not shared_name:
+                search_start = match.end()
+                continue
+            local_temp = match.group("local")
+            line_end = match.end()
+            if source[line_end:line_end + 1] == "\n":
+                line_end += 1
+            source = source[:match.start()] + source[line_end:]
+            source = re.sub(rf"\b{re.escape(local_temp)}\b", shared_name, source)
+            search_start = 0
+
     for local_name, case_map in shared_plan.items():
         scope = _source_cse_scope_name(local_name)
         for case_index, items in case_map.items():
-            for shared_name, expr in items:
-                rhs = re.escape(_ccode(expr))
-                pattern = re.compile(
-                    rf"(?m)^(?P<indent>\s*)double\s+"
-                    rf"(?P<local>sourceG_{re.escape(scope)}_case{int(case_index)}_tmp\d+)"
-                    rf"\s*=\s*{rhs};\s*$"
-                )
-                while True:
-                    match = pattern.search(draft)
-                    if not match:
-                        break
-                    local_temp = match.group("local")
-                    draft = draft[: match.start()] + draft[match.end() + (1 if draft[match.end():match.end()+1] == "\n" else 0):]
-                    draft = re.sub(rf"\b{re.escape(local_temp)}\b", shared_name, draft)
+            draft = replace_local_assignments(
+                draft,
+                scope=scope,
+                label=f"case{int(case_index)}",
+                rhs_map=rhs_to_shared_names(items),
+            )
+        if case_map:
+            default_index = min(case_map)
+            draft = replace_local_assignments(
+                draft,
+                scope=scope,
+                label="default",
+                rhs_map=rhs_to_shared_names(case_map[default_index]),
+            )
     return draft
 
 
