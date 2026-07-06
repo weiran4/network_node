@@ -95,14 +95,15 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertEqual(response["multi_case"]["fast_path"], "case_alias_template")
         self.assertIn("Multi-case alias-template C draft", draft)
         self.assertIn("multcase_G_tx_A_A", draft)
-        self.assertIn("switch (tx_case_id)", draft)
+        self.assertIn("switch (topology_case)", draft)
+        self.assertNotIn("tx_case_id", draft)
         self.assertIn("multcase_G_tx_A_A = G1;", draft)
         self.assertIn("multcase_G_tx_A_A = G3;", draft)
         self.assertNotIn("TODO", draft)
         self.assertIn("RAM-SIDE STATIC MATRIX PRECOMPUTE", draft)
-        self.assertIn("Gkr_k1_A = -multcase_G_tx_A_A;", draft)
+        self.assertIn("Gkr_X_A = -multcase_G_tx_A_A;", draft)
         self.assertIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
-        self.assertNotIn("set_CODE(&Gkr_code, 0, 0, Gkr_k1_A);", draft)
+        self.assertNotIn("set_CODE(&Gkr_code, 0, 0, Gkr_X_A);", draft)
         self.assertNotIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
 
     def test_two_conductances_in_series(self):

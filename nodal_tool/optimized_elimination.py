@@ -1407,18 +1407,26 @@ def _block_element_name(
     row: int,
     col: int,
     external_nodes: Sequence[str],
+    internal_nodes: Sequence[str] | None = None,
     node_display_names: dict[str, str] | None = None,
 ) -> str:
+    internal_nodes = internal_nodes or []
+
+    def internal_name(index: int) -> str:
+        if 0 <= index < len(internal_nodes):
+            return _c_node_variable_name(internal_nodes[index], node_display_names)
+        return f"k{index + 1}"
+
     if block == "Grr":
         return _scalar_g_name("Grr", external_nodes[row], external_nodes[col], node_display_names)
     if block == "Grk":
         row_name = _c_node_variable_name(external_nodes[row], node_display_names)
-        return f"Grk_{row_name}_k{col + 1}"
+        return f"Grk_{row_name}_{internal_name(col)}"
     if block == "Gkr":
         col_name = _c_node_variable_name(external_nodes[col], node_display_names)
-        return f"Gkr_k{row + 1}_{col_name}"
+        return f"Gkr_{internal_name(row)}_{col_name}"
     if block == "Gkk":
-        return f"Gkk_k{row + 1}_k{col + 1}"
+        return f"Gkk_{internal_name(row)}_{internal_name(col)}"
     if block == "W":
         return f"W_{row + 1}_{col + 1}"
     raise ValueError(f"Unsupported block alias kind: {block}")
@@ -1429,16 +1437,24 @@ def _block_element_label(
     row: int,
     col: int,
     external_nodes: Sequence[str],
+    internal_nodes: Sequence[str] | None = None,
     node_display_names: dict[str, str] | None = None,
 ) -> str:
+    internal_nodes = internal_nodes or []
+
+    def internal_label(index: int) -> str:
+        if 0 <= index < len(internal_nodes):
+            return _c_node_variable_name(internal_nodes[index], node_display_names)
+        return f"k{index + 1}"
+
     if block == "Grr":
         return f"Grr[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]"
     if block == "Grk":
-        return f"Grk[{_c_display_node(external_nodes[row], node_display_names)},k{col + 1}]"
+        return f"Grk[{_c_display_node(external_nodes[row], node_display_names)},{internal_label(col)}]"
     if block == "Gkr":
-        return f"Gkr[k{row + 1},{_c_display_node(external_nodes[col], node_display_names)}]"
+        return f"Gkr[{internal_label(row)},{_c_display_node(external_nodes[col], node_display_names)}]"
     if block == "Gkk":
-        return f"Gkk[k{row + 1},k{col + 1}]"
+        return f"Gkk[{internal_label(row)},{internal_label(col)}]"
     if block == "W":
         return f"W[{row + 1},{col + 1}]"
     raise ValueError(f"Unsupported block alias kind: {block}")
@@ -1448,6 +1464,7 @@ def _block_alias_entries(
     matrix: sp.Matrix,
     block: str,
     external_nodes: Sequence[str],
+    internal_nodes: Sequence[str] | None = None,
     node_display_names: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     matrix = sp.Matrix(matrix)
@@ -1459,7 +1476,7 @@ def _block_alias_entries(
             expr = sp.simplify(matrix[row, col])
             if expr == 0:
                 continue
-            label = _block_element_label(block, row, col, external_nodes, node_display_names)
+            label = _block_element_label(block, row, col, external_nodes, internal_nodes, node_display_names)
             expr_key = sp.srepr(expr)
             if expr_key not in grouped:
                 grouped[expr_key] = []
@@ -1472,7 +1489,7 @@ def _block_alias_entries(
         expr = items[0][3]
         if len(items) == 1:
             row, col, _, _ = items[0]
-            name = _block_element_name(block, row, col, external_nodes, node_display_names)
+            name = _block_element_name(block, row, col, external_nodes, internal_nodes, node_display_names)
         else:
             shared_index += 1
             name = f"{block}_shared_{shared_index}"
@@ -2375,11 +2392,11 @@ def _c_emit_rtds_stage_sections(
         ram_g_assignments,
         "ramG",
     )
-    Grr_alias_entries = _block_alias_entries(Grr, "Grr", external_nodes, node_display_names)
-    Grk_alias_entries = _block_alias_entries(Grk, "Grk", external_nodes, node_display_names)
-    Gkr_alias_entries = _block_alias_entries(Gkr, "Gkr", external_nodes, node_display_names)
-    Gkk_alias_entries = _block_alias_entries(Gkk, "Gkk", external_nodes, node_display_names)
-    W_alias_entries = _block_alias_entries(W, "W", external_nodes, node_display_names)
+    Grr_alias_entries = _block_alias_entries(Grr, "Grr", external_nodes, internal_nodes, node_display_names)
+    Grk_alias_entries = _block_alias_entries(Grk, "Grk", external_nodes, internal_nodes, node_display_names)
+    Gkr_alias_entries = _block_alias_entries(Gkr, "Gkr", external_nodes, internal_nodes, node_display_names)
+    Gkk_alias_entries = _block_alias_entries(Gkk, "Gkk", external_nodes, internal_nodes, node_display_names)
+    W_alias_entries = _block_alias_entries(W, "W", external_nodes, internal_nodes, node_display_names)
     W_formula_alias_entries = _runtime_w_alias_entries(W.rows or Gkk.rows) if (w_runtime_inverse or structured_w_builder) else W_alias_entries
     need_W_scalar_aliases = bool(
         dynamic_gred

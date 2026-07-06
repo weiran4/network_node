@@ -392,7 +392,7 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         self.assertIn("switch (runtime_R11_case_id)", draft)
         self.assertIn("multcase_G_R11_A_A = G_const;", draft)
         self.assertIn("multcase_G_R11_A_A = G_dyn;", draft)
-        self.assertIn("Gkk_k1_k1 = G2 + multcase_G_R11_A_A;", draft)
+        self.assertIn("Gkk_X_X = G2 + multcase_G_R11_A_A;", draft)
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
         self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)

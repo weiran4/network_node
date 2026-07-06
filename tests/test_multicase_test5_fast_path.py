@@ -61,7 +61,8 @@ class MultiCaseTest5FastPathTests(unittest.TestCase):
         self.assertEqual(response["multi_case"]["codegen_mode"], "case-agnostic alias template")
         draft = response["multi_case"]["c_draft"]
         self.assertIn("Multi-case alias-template C draft", draft)
-        self.assertIn("switch (C1_case_id)", draft)
+        self.assertIn("switch (case_id)", draft)
+        self.assertNotIn("C1_case_id", draft)
         self.assertIn("Dabc", draft)
         self.assertIn("multcase_G_C1", draft)
         self.assertNotIn("_global", draft)

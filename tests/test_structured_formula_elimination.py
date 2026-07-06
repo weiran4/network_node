@@ -297,8 +297,8 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
 
         self.assertEqual(plan["dependency_analysis"]["Gred_stage"], [["CODE_UPDATE", "CODE_UPDATE"], ["CODE_UPDATE", "CODE_UPDATE"]])
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
-        self.assertIn("Grk_A_k1 = -Gc;", draft)
-        self.assertIn("set_CODE(&Grk_code, 0, 0, Grk_A_k1);", draft)
+        self.assertIn("Grk_A_X = -Gc;", draft)
+        self.assertIn("set_CODE(&Grk_code, 0, 0, Grk_A_X);", draft)
         self.assertIn("GVALUES:", draft)
         self.assertIn('double varG_A_A = createGValue("varG_A_A", "A", "A", 0, "TRUE");', draft)
         self.assertIn('double varG_A_B = createGValue("varG_A_B", "A", "B", 0, "TRUE");', draft)
@@ -358,7 +358,7 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
-        self.assertIn("set(&Grk_code, 0, 0, Grk_A_k1);", draft)
+        self.assertIn("set(&Grk_code, 0, 0, Grk_A_X);", draft)
         self.assertNotIn("set(&Gkr_code", draft)
         self.assertIn("set(&W_code, 0, 0, W_1_1);", draft)
         self.assertIn("matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)

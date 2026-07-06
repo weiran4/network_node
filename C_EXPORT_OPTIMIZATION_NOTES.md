@@ -579,19 +579,32 @@ message should explain the physical fix:
 - add a real ground/reference/admittance path, or
 - use a future MNA/constraint-aware reduction path for ideal source constraints.
 
-### Pack Cases With Different Internals Need A Final-Retained Adapter
+### Pack Cases With Different Internals Need A Gkk Placeholder Adapter
 
 Pack multi-case editing can produce cases with the same external ports but
 different internal eliminated nodes and voltage-recovery formulas. This is not a
-Dummy/N-Dummy padding problem. Do not force the raw `G_full/Ihis_full` topology
-to match by adding fake nodes.
+reason to abandon the structured Schur path. For init-time Pack cases, align the
+case profiles with backend-only placeholder internal nodes so every case can use
+the same `Grr/Grk/Gkr/Gkk` layout.
 
 The safe bridge is:
 
-1. Each case is reduced to the same final retained port order.
-2. The alias-template C path uses those same-shaped final `G/Ihis` equations as
-   its template input.
-3. Case-specific internal voltage recovery is emitted separately in `T1_T2`.
+1. Keep the user-visible external port order fixed across all cases.
+2. Build the union of internal eliminated nodes across the Pack cases.
+3. For a case that does not physically contain one of those internal nodes, add
+   an isolated backend placeholder row/column to `Gkk` with identity conductance
+   and zero `Ihis`. This makes the template dimensions match without changing
+   the physical network.
+4. Before solving the real internal-node recovery for a case, skip placeholder
+   rows/columns and emit only the recovery work that case needs.
+5. Use the existing matrix-DAG Schur flow for real `Gkk` work; diagonal or
+   placeholder-only rows may still be optimized away by the normal structural
+   codegen rules.
+
+The older final-retained adapter is kept as a compatibility fallback for saved
+payloads that already provide only final retained `G/Ihis` data. It should not be
+the first choice when raw `G_full/Ihis_full` data can be aligned with
+placeholder internals.
 
 Frontend debugging rule: the backend adapter only works if the multi-case
 profile payload forwards `finalExternalGroups`, `finalGMatrix`, `finalIhisVector`,
@@ -603,6 +616,14 @@ still sending the raw per-case internal topology.
 
 This preserves the normal multi-case alias-template rule while keeping voltage
 recovery for cases that actually had internal nodes.
+
+Generated C names must use the user's final node names, not backend placeholder
+ids. For example, if the UI node list names the internal nodes `inner_left` and
+`inner_right`, recovery variables and matrix aliases should use names such as
+`inner_left`, `inner_right`, `Gkk_inner_left_inner_left`, and
+`multcase_G_C1_inner_left_inner_left`. Backend ids such as
+`pkg_internal_C1_0` are only internal bookkeeping and should not leak into the C
+draft.
 
 Debugging gotcha: saved project JSON may store `finalGMatrix`,
 `finalIhisVector`, `finalK_v`, and `finalK_h` as stringified matrix expressions

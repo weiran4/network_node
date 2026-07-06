@@ -231,7 +231,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         draft = response["multi_case"]["c_draft"]
         self.assertIn("multcase_G_R1_A_A = X;", draft)
         self.assertIn("multcase_G_R1_A_A = X + Y;", draft)
-        self.assertIn("set(&Grk_code, 0, 0, Grk_A_k1);", draft)
+        self.assertIn("set(&Grk_code, 0, 0, Grk_A_X);", draft)
         self.assertIn("set(&W_code, 0, 0, W_1_1);", draft)
         self.assertIn("matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
         self.assertIn("Symmetry reuse: W * Gkr = transpose(Grk * W).", draft)
@@ -538,7 +538,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
 
         draft = response["multi_case"]["c_draft"]
-        self.assertIn("Case-resolved diagonal Gkk fast path", draft)
+        self.assertIn("Case-resolved Gkk inverse", draft)
         self.assertIn("case 0:", draft)
         self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", draft)
         self.assertIn("set_CODE(&W_code, 0, 1, 0.0);", draft)
@@ -992,7 +992,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("case 1:", draft)
         self.assertIn("g_mat_over[0][1] = -multcase_G_R1_A_A;", draft)
 
-    def test_pack_cases_with_same_final_ports_but_different_internal_recovery_use_final_template(self):
+    def test_pack_cases_with_same_final_ports_but_different_internal_recovery_prefer_gkk_template(self):
         def with_final(payload: dict, *, g: str, internal: list[str], k_v: list[list[str]], k_h: list[str]) -> dict:
             clone = json.loads(json.dumps(payload))
             clone.update({
@@ -1041,11 +1041,18 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(multi["fast_path"], "case_alias_template")
         self.assertIn("multcase_G_Pack_A_A = G0;", draft)
         self.assertIn("multcase_G_Pack_A_A = G1;", draft)
+        self.assertIn("INTERNAL_NODES = 1", draft)
+        self.assertIn("W_code", draft)
+        self.assertIn("Gkr_code", draft)
         self.assertIn('getNodeNum(comp, "A")', draft)
         self.assertNotIn('getNodeNum(comp, "X")', draft)
         self.assertIn("T1_T2:", draft)
+        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", draft)
+        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", draft)
         self.assertIn("case 1:", draft)
-        self.assertIn("X = (1.0)*A + Ihis_x;", draft)
+        self.assertIn("X = get_CODE(&Vk_code, 0, 0);", draft)
+        self.assertNotIn("X = (G1/(G1 + G2))*A + (G2/(G1 + G2))*B;", draft)
+        self.assertNotIn("no eliminated internal nodes", draft)
         self.assertNotIn("No internal nodes were eliminated, so there is no Vk recovery step.", draft)
 
     def test_trf_ctest_dummy_fixture_uses_final_ports_with_case_specific_recovery(self):
@@ -1054,25 +1061,76 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
             self.skipTest("Trf_Ctest_dummy.json fixture is not available")
         data = json.loads(fixture.read_text(encoding="utf-8"))
         network_cases = data["branches"][0]["packageOriginal"]["networkCases"]
-        def payload_from_saved_case(case: dict) -> dict:
+        def payload_from_saved_case(case: dict, package_branch_id: str) -> dict:
             final_external = [
-                str(group.get("display") or group.get("globalNet") or f"N{index + 1}")
+                str(group.get("display") or group.get("globalNet") or group.get("id") or f"N{index + 1}")
                 for index, group in enumerate(case.get("finalExternalGroups") or [])
             ]
             final_internal = [
-                str(group.get("display") or group.get("globalNet") or f"K{index + 1}")
+                f"pkg-internal:{package_branch_id}:{index}"
                 for index, group in enumerate(case.get("finalInternalGroups") or [])
             ]
+            display_names = {}
+            for node, group in zip(final_external, case.get("finalExternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            for node, group in zip(final_internal, case.get("finalInternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            all_nodes = [*final_external, *final_internal]
+            node_index = {node: index for index, node in enumerate(all_nodes)}
+            terminal_node: dict[str, str] = {}
+            for node, group in [
+                *zip(final_external, case.get("finalExternalGroups") or []),
+                *zip(final_internal, case.get("finalInternalGroups") or []),
+            ]:
+                for member in group.get("members") or []:
+                    terminal_node[str(member)] = node
+            G_full = sp.zeros(len(all_nodes), len(all_nodes))
+            Ihis_full = sp.zeros(len(all_nodes), 1)
+
+            def add_entry(row_node: str | None, col_node: str | None, expr: object) -> None:
+                if row_node not in node_index or col_node not in node_index:
+                    return
+                G_full[node_index[row_node], node_index[col_node]] += optimized_api._parse_expr(expr)
+
+            def add_ihis(row_node: str | None, expr: object) -> None:
+                if row_node not in node_index:
+                    return
+                Ihis_full[node_index[row_node], 0] += optimized_api._parse_expr(expr)
+
+            for branch in case.get("branches") or []:
+                branch_id = str(branch.get("id") or "")
+                if branch.get("kind") == "single_phase_transformer":
+                    sides = ["P", "N", "S", "T"]
+                    local_g = optimized_api._matrix_from_clean(branch.get("gMatrix") or [])
+                    local_ihis = optimized_api._matrix_from_clean(branch.get("ihisVector") or [])
+                    for row, row_side in enumerate(sides):
+                        row_node = terminal_node.get(f"{branch_id}.{row_side}")
+                        add_ihis(row_node, local_ihis[row, 0])
+                        for col, col_side in enumerate(sides):
+                            col_node = terminal_node.get(f"{branch_id}.{col_side}")
+                            add_entry(row_node, col_node, local_g[row, col])
+                elif branch.get("kind") == "two_node_branch":
+                    node_a = terminal_node.get(f"{branch_id}.A")
+                    node_b = terminal_node.get(f"{branch_id}.B")
+                    g = optimized_api._parse_expr(branch.get("g") or "0")
+                    ihis = optimized_api._parse_expr(branch.get("ihis") or "0")
+                    add_entry(node_a, node_a, g)
+                    add_entry(node_a, node_b, -g)
+                    add_entry(node_b, node_a, -g)
+                    add_entry(node_b, node_b, g)
+                    add_ihis(node_a, ihis)
+                    add_ihis(node_b, -ihis)
+
             return {
-                "all_nodes": list(final_external),
+                "all_nodes": all_nodes,
                 "external_nodes": list(final_external),
                 "internal_nodes": list(final_internal),
                 "ground_nodes": [],
-                "node_display_names": {node: node for node in final_external + final_internal},
-                "G_full": case.get("gMatrix"),
-                "G_full_tagged": case.get("gMatrix"),
-                "Ihis_full": case.get("ihisVector"),
-                "Ihis_full_tagged": case.get("ihisVector"),
+                "node_display_names": display_names,
+                "G_full": optimized_api._clean_matrix(G_full),
+                "G_full_tagged": optimized_api._clean_matrix(G_full),
+                "Ihis_full": optimized_api._clean_vector(Ihis_full),
+                "Ihis_full_tagged": optimized_api._clean_vector(Ihis_full),
                 "direct_retained_stamps": [],
                 "finalExternalGroups": case.get("finalExternalGroups"),
                 "finalInternalGroups": case.get("finalInternalGroups"),
@@ -1087,14 +1145,14 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
                 "case_id": index,
                 "name": case.get("name") or f"case {index}",
                 "case_map": {"C1": index},
-                "payload": payload_from_saved_case(case),
+                "payload": payload_from_saved_case(case, data["branches"][0].get("id") or "C1"),
             }
             for index, case in enumerate(network_cases)
         ]
         response = build_multi_case_response(
             _request(
                 profiles,
-                deps=_deps("G11", "G12", "G22", "Gc", step=("Ihis_p", "Ihis_s", "IhisC")),
+                deps=_deps("G11", "G12", "G22", "Gc", step=("Ihis_p", "Ihis_s", "IhisC1", "IhisC2")),
                 case_id="case_id",
             )
         )
@@ -1102,48 +1160,216 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         multi = response["multi_case"]
         draft = multi["c_draft"]
         self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assertIn("INTERNAL_NODES = 2", draft)
+        self.assertIn("W_code", draft)
+        self.assertIn("Gkr_code", draft)
         self.assertIn('getNodeNum(comp, "N1")', draft)
         self.assertIn('getNodeNum(comp, "N4")', draft)
         self.assertNotIn('getNodeNum(comp, "inner_left")', draft)
         self.assertNotIn('getNodeNum(comp, "inner_right")', draft)
+        self.assertNotIn("no eliminated internal nodes", draft)
         self.assertIn("Case-specific voltage recovery", draft)
         self.assertIn("case 1:", draft)
         self.assertIn("inner_left =", draft)
         self.assertIn("case 2:", draft)
         self.assertIn("inner_right =", draft)
+        self.assertIn("Gkk_inner_left_inner_left", draft)
+        self.assertIn("Gkk[inner_left,inner_left]", draft)
+        self.assertNotIn("pkg_internal_C1_0", draft)
+        self.assertNotIn("Gkk_pkg_internal_C1_0_pkg_internal_C1_0", draft)
+        self.assertNotIn("Gkk_k1_k1", draft)
+        self.assertNotIn("Gkk[k1,k1]", draft)
         self.assertIn("case 3:", draft)
         self.assertNotIn("No internal nodes were eliminated, so there is no Vk recovery step.", draft)
-        self.assertIn(
-            "sourceGI_C1_case1_tmp1 = Gc*sourceGI_C1_case1_tmp0;",
-            draft,
-            "The shared RAM-safe G/Ihis temp should be computed once before RAM/CODE aliases use it.",
-        )
-        self.assertNotIn(
-            "double sourceG_C1_case1_tmp0 = Gc*sourceGI_C1_case1_tmp0;",
-            draft,
-            "RAM alias CSE should reuse sourceGI_C1_case1_tmp1 instead of recomputing the same product.",
-        )
-        ram_alias_block = draft.split("/* Resolve RAM multi-case effective aliases as full values, never deltas. */", 1)[
-            1
-        ].split("int err = 0;", 1)[0]
-        self.assertNotRegex(
-            ram_alias_block,
-            r"\bdouble\s+sourceG_C1_case\d+_tmp\d+\s*=",
-            "The RAM alias switch should only assign multcase_G values; sourceG temps must be hoisted.",
-        )
-        ihis_alias_block = draft.split(
-            "/* Resolve CODE_PER_STEP multi-case effective aliases as full values, never deltas. */",
-            1,
-        )[1].split(
-            "/* ************************************************************************\n"
-            "     * CODE-SIDE IHIS VALUE SETUP",
+        self.assertIn("Case-resolved Gkk inverse. Placeholder-only rows are skipped", draft)
+        w_switch = draft.split("Case-resolved Gkk inverse. Placeholder-only rows are skipped", 1)[1].split(
+            "/* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP",
             1,
         )[0]
-        self.assertNotRegex(
-            ihis_alias_block,
-            r"\bdouble\s+sourceIhis_C1_case\d+_tmp\d+\s*=",
-            "The Ihis alias switch should only assign multcase_Ihis values; sourceIhis temps must be hoisted.",
+        w_case0 = w_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
+        w_case1 = w_switch.split("case 1:", 1)[1].split("case 2:", 1)[0]
+        w_case2 = w_switch.split("case 2:", 1)[1].split("case 3:", 1)[0]
+        w_case3 = w_switch.split("case 3:", 1)[1].split("default:", 1)[0]
+        self.assertIn("set_CODE(&W_code, 0, 0, 0.0);", w_case0)
+        self.assertIn("set_CODE(&W_code, 1, 1, 0.0);", w_case0)
+        self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", w_case1)
+        self.assertIn("set_CODE(&W_code, 1, 1, 0.0);", w_case1)
+        self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", w_case2)
+        self.assertIn("set_CODE(&W_code, 1, 1, 0.0);", w_case2)
+        self.assertIn("mat_2x2_sym_inv_code", w_case3)
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+
+    def test_case_specific_recovery_reuses_template_vk_block_when_available(self):
+        draft = """STATIC:
+
+    double pkg_internal_C2_0 = 0.0;
+
+T1_T2:
+    /* Internal-node voltage recovery after solved retained-node voltages are available. */
+    set_CODE(&Vr_code, 0, 0, N1);
+    set_CODE(&Vr_code, 1, 0, N4);
+    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);
+    matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);
+
+    /* One variable per eliminated node, in effective k order. */
+    N2 = get_CODE(&Vk_code, 0, 0);
+"""
+
+        updated = optimized_api._apply_final_retained_recovery_profiles_to_draft(
+            draft,
+            case_id_symbol="case_id",
+            recovery_profiles=[
+                {
+                    "case_ids": [0],
+                    "recovery_nodes": ["pkg_internal_C2_0"],
+                    "super_nodes": ["N1", "N4"],
+                    "K_v": [["1/2", "1/2"]],
+                    "K_h": ["0"],
+                },
+                {
+                    "case_ids": [1],
+                    "recovery_nodes": [],
+                    "super_nodes": ["N1", "N4"],
+                    "K_v": [],
+                    "K_h": [],
+                },
+            ],
+            template_internal_nodes=["pkg_internal_C2_0"],
         )
+
+        self.assertIn("case 0:", updated)
+        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", updated)
+        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", updated)
+        self.assertIn("pkg_internal_C2_0 = get_CODE(&Vk_code, 0, 0);", updated)
+        self.assertIn("case 1:", updated)
+        case1_block = updated.split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertNotIn("matrix_matXvec_CODE", case1_block)
+        self.assertNotIn("matrix_scalarMult_CODE", case1_block)
+        self.assertNotIn("N2 = get_CODE(&Vk_code, 0, 0);", updated)
+        self.assertNotIn("pkg_internal_C2_0 = (1.0/2.0)*N1 + (1.0/2.0)*N4;", updated)
+
+    def test_trf_ctest_dummy_small_does_not_emit_unconditional_template_recovery(self):
+        fixture = Path("exports/Trf_Ctest_dummy_small.json")
+        if not fixture.exists():
+            self.skipTest("Trf_Ctest_dummy_small.json fixture is not available")
+        data = json.loads(fixture.read_text(encoding="utf-8"))
+        branch = next(
+            item for item in data.get("branches", [])
+            if item.get("packageOriginal", {}).get("networkCases")
+        )
+        cases = branch["packageOriginal"]["networkCases"]
+
+        def payload_from_saved_case(case: dict, package_branch_id: str) -> dict:
+            final_external = [
+                str(group.get("display") or group.get("globalNet") or group.get("id") or f"N{index + 1}")
+                for index, group in enumerate(case.get("finalExternalGroups") or [])
+            ]
+            final_internal = [
+                f"pkg-internal:{package_branch_id}:{index}"
+                for index, group in enumerate(case.get("finalInternalGroups") or [])
+            ]
+            display_names = {}
+            for node, group in zip(final_external, case.get("finalExternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            for node, group in zip(final_internal, case.get("finalInternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            all_nodes = [*final_external, *final_internal]
+            node_index = {node: index for index, node in enumerate(all_nodes)}
+            terminal_node: dict[str, str] = {}
+            for node, group in [
+                *zip(final_external, case.get("finalExternalGroups") or []),
+                *zip(final_internal, case.get("finalInternalGroups") or []),
+            ]:
+                for member in group.get("members") or []:
+                    terminal_node[str(member)] = node
+            G_full = sp.zeros(len(all_nodes), len(all_nodes))
+            Ihis_full = sp.zeros(len(all_nodes), 1)
+
+            def add_entry(row_node: str | None, col_node: str | None, expr: object) -> None:
+                if row_node not in node_index or col_node not in node_index:
+                    return
+                G_full[node_index[row_node], node_index[col_node]] += optimized_api._parse_expr(expr)
+
+            def add_ihis(row_node: str | None, expr: object) -> None:
+                if row_node not in node_index:
+                    return
+                Ihis_full[node_index[row_node], 0] += optimized_api._parse_expr(expr)
+
+            for saved_branch in case.get("branches") or []:
+                branch_id = str(saved_branch.get("id") or "")
+                if saved_branch.get("kind") != "two_node_branch":
+                    continue
+                node_a = terminal_node.get(f"{branch_id}.A")
+                node_b = terminal_node.get(f"{branch_id}.B")
+                g = optimized_api._parse_expr(saved_branch.get("g") or "0")
+                ihis = optimized_api._parse_expr(saved_branch.get("ihis") or "0")
+                add_entry(node_a, node_a, g)
+                add_entry(node_a, node_b, -g)
+                add_entry(node_b, node_a, -g)
+                add_entry(node_b, node_b, g)
+                add_ihis(node_a, ihis)
+                add_ihis(node_b, -ihis)
+
+            return {
+                "all_nodes": all_nodes,
+                "external_nodes": list(final_external),
+                "internal_nodes": list(final_internal),
+                "ground_nodes": [],
+                "node_display_names": display_names,
+                "G_full": optimized_api._clean_matrix(G_full),
+                "G_full_tagged": optimized_api._clean_matrix(G_full),
+                "Ihis_full": optimized_api._clean_vector(Ihis_full),
+                "Ihis_full_tagged": optimized_api._clean_vector(Ihis_full),
+                "direct_retained_stamps": [],
+                "finalExternalGroups": case.get("finalExternalGroups"),
+                "finalInternalGroups": case.get("finalInternalGroups"),
+                "finalGMatrix": case.get("finalGMatrix"),
+                "finalIhisVector": case.get("finalIhisVector"),
+                "finalK_v": case.get("finalK_v"),
+                "finalK_h": case.get("finalK_h"),
+            }
+
+        profiles = [
+            {
+                "case_id": index,
+                "name": case.get("name") or f"case {index}",
+                "case_map": {branch.get("id") or "C2": index},
+                "payload": payload_from_saved_case(case, branch.get("id") or "C2"),
+            }
+            for index, case in enumerate(cases)
+        ]
+        draft = build_multi_case_response(
+            _request(profiles, deps=_deps("R"), case_id="case_id")
+        )["multi_case"]["c_draft"]
+
+        self.assertIn("Case-specific voltage recovery", draft)
+        self.assertIn("switch (case_id)", draft)
+        self.assertNotIn("C2_case_id", draft)
+        self.assertNotIn("Decode the optional global case selector into per-element local cases", draft)
+        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", draft)
+        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", draft)
+        self.assertIn("N2 = get_CODE(&Vk_code, 0, 0);", draft)
+        self.assertIn("Recovery-only matrix setup is skipped", draft)
+        recovery_switch = draft.split("Case-specific voltage recovery", 1)[1]
+        case0_block = recovery_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
+        case1_block = recovery_switch.split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", case0_block)
+        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", case0_block)
+        self.assertNotIn("matrix_matXvec_CODE", case1_block)
+        self.assertNotIn("matrix_scalarMult_CODE", case1_block)
+        setup_switch = draft.split("Recovery-only matrix setup is skipped", 1)[1].split("CODE:", 1)[0]
+        setup_case0 = setup_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
+        self.assertNotIn("case 1:", setup_switch)
+        self.assertIn("matrixDim(&Gkr_code", setup_case0)
+        self.assertIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", setup_case0)
+        self.assertIn("matrix_register(&tmp_W_Gkr_Vr_code);", setup_case0)
+        code_condition = draft.split("Recovery-only MATRIX_ conditioning", 1)[1].split("Node injection currents", 1)[0]
+        self.assertIn("if (case_id == 0)", code_condition)
+        self.assertIn("conditionMatrixForCODE(&Vr_code);", code_condition)
+        self.assertNotIn("pkg_internal_C2_0 = get_CODE(&Vk_code, 0, 0);", draft)
+        self.assertNotIn("pkg_internal_C2_0 = (1.0/2.0)*N1 + (1.0/2.0)*N4;", draft)
+        self.assertNotIn("N2 = (1.0/2.0)*N1 + (1.0/2.0)*N4;", draft)
+        self.assertIn("Internal-node voltage recovery after solved retained-node voltages", draft)
 
     def test_final_retained_adapter_allows_different_raw_internal_counts(self):
         def final_pack_payload(raw_internal: list[str], final_internal: list[str], g: str) -> dict:
@@ -1226,6 +1452,97 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("inner_left =", draft)
         self.assertIn("case 1:", draft)
         self.assertIn("inner_right =", draft)
+
+    def test_gkk_placeholder_adapter_preempts_final_fields_when_raw_internal_counts_differ(self):
+        def chain_payload(internal_nodes: list[str], edges: list[tuple[str, str, str]]) -> dict:
+            all_nodes = ["N1", "N2", *internal_nodes]
+            node_index = {node: index for index, node in enumerate(all_nodes)}
+            matrix = sp.zeros(len(all_nodes), len(all_nodes))
+            for left, right, conductance in edges:
+                g = sp.Symbol(conductance)
+                i = node_index[left]
+                j = node_index[right]
+                matrix[i, i] += g
+                matrix[j, j] += g
+                matrix[i, j] -= g
+                matrix[j, i] -= g
+            return {
+                "all_nodes": all_nodes,
+                "external_nodes": ["N1", "N2"],
+                "internal_nodes": internal_nodes,
+                "ground_nodes": [],
+                "node_display_names": {node: node for node in all_nodes},
+                "G_full": optimized_api._clean_matrix(matrix),
+                "G_full_tagged": optimized_api._clean_matrix(matrix),
+                "Ihis_full": ["0" for _ in all_nodes],
+                "Ihis_full_tagged": ["0" for _ in all_nodes],
+                "direct_retained_stamps": [],
+                "finalExternalGroups": [
+                    {"display": "N1", "globalNet": "N1"},
+                    {"display": "N2", "globalNet": "N2"},
+                ],
+                "finalInternalGroups": [
+                    {"display": node, "globalNet": node}
+                    for node in internal_nodes
+                ],
+                "finalGMatrix": [["Gfinal", "-Gfinal"], ["-Gfinal", "Gfinal"]],
+                "finalIhisVector": ["0", "0"],
+                "finalK_v": [
+                    ["1", "0"] if index == 0 else ["0", "1"]
+                    for index, _node in enumerate(internal_nodes)
+                ],
+                "finalK_h": [f"Ihis_{node}" for node in internal_nodes],
+            }
+
+        profiles = [
+            {
+                "case_id": 0,
+                "name": "one internal",
+                "case_map": {"Pack": 0},
+                "payload": chain_payload(
+                    ["K1"],
+                    [("N1", "K1", "Ga"), ("K1", "N2", "Gb")],
+                ),
+            },
+            {
+                "case_id": 1,
+                "name": "two internals",
+                "case_map": {"Pack": 1},
+                "payload": chain_payload(
+                    ["K1", "K2"],
+                    [("N1", "K1", "Ga"), ("K1", "K2", "Gb"), ("K2", "N2", "Gc")],
+                ),
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "topology invariant"):
+            optimized_api._validate_multicase_topology(profiles)
+
+        request = _request(profiles, deps=_deps("Ga", "Gb", "Gc"), case_id="case_id")
+        alias_model = _build_multicase_alias_template_payload(request)
+        template_payload = alias_model["template_payload"]
+        self.assertEqual(template_payload["external_nodes"], ["N1", "N2"])
+        self.assertEqual(template_payload["internal_nodes"], ["K1", "K2"])
+        aligned_case0 = alias_model["profiles"][0]["payload"]
+        self.assertEqual(aligned_case0["backend_placeholder_internal_nodes"], ["K2"])
+        aligned_g0 = sp.Matrix(aligned_case0["G_full"])
+        self.assertEqual(sp.sympify(aligned_g0[3, 0]), sp.Integer(0))
+        self.assertEqual(sp.sympify(aligned_g0[3, 1]), sp.Integer(0))
+        self.assertEqual(sp.sympify(aligned_g0[3, 2]), sp.Integer(0))
+        self.assertEqual(sp.sympify(aligned_g0[3, 3]), sp.Integer(1))
+
+        response = build_multi_case_response(request)
+        multi = response["multi_case"]
+        draft = multi["c_draft"]
+        self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assertIn("Gkk_code", draft)
+        self.assertNotIn("no eliminated internal nodes", draft)
+        self.assertIn("Case-specific voltage recovery", draft)
+        self.assertIn("case 0:", draft)
+        self.assertIn("K1 =", draft)
+        self.assertIn("case 1:", draft)
+        self.assertIn("K2 =", draft)
+        self.assertNotIn("multi-case topology invariant failed", draft)
 
     def test_rejects_case_that_changes_topology(self):
         bad_payload = _series_payload("X", internal=False)

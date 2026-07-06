@@ -1343,10 +1343,14 @@ def _expr_matrix_from_payload(payload: dict, key: str) -> sp.Matrix:
 
 def _expr_matrix_for_alias_template_profile(payload: dict, key: str, common_dummy_internal_nodes: set[str]) -> sp.Matrix:
     matrix = _expr_matrix_from_payload(payload, key)
-    if not common_dummy_internal_nodes:
+    backend_placeholder_nodes = {
+        str(node)
+        for node in (payload.get("backend_placeholder_internal_nodes") or [])
+    }
+    if not common_dummy_internal_nodes and not backend_placeholder_nodes:
         return matrix
     blocks = dummy_node_blocks_from_payload(payload)
-    if not blocks:
+    if not blocks and not backend_placeholder_nodes:
         return matrix
     node_index = {str(node): index for index, node in enumerate(payload.get("all_nodes") or [])}
     dummy_nodes = {
@@ -1355,6 +1359,7 @@ def _expr_matrix_for_alias_template_profile(payload: dict, key: str, common_dumm
         for node in block.dummy_nodes
         if str(node) in common_dummy_internal_nodes
     }
+    dummy_nodes.update(node for node in backend_placeholder_nodes if node in node_index)
     if not dummy_nodes:
         return matrix
     matrix = sp.Matrix(matrix)
@@ -1547,6 +1552,28 @@ def _final_group_display_name(group: object, fallback: str) -> str:
     return fallback
 
 
+def _payload_node_display_names(payload: Mapping) -> dict[str, str]:
+    display_names = {
+        str(key): str(value)
+        for key, value in (payload.get("node_display_names") or {}).items()
+    }
+
+    def merge_ordered_groups(nodes_key: str, groups_key: str, fallback_prefix: str) -> None:
+        nodes = [str(node) for node in (payload.get(nodes_key) or [])]
+        groups = payload.get(groups_key) or []
+        for index, group in enumerate(groups):
+            if index >= len(nodes):
+                break
+            node = nodes[index]
+            display_names[node] = _final_group_display_name(group, f"{fallback_prefix}{index + 1}")
+
+    merge_ordered_groups("external_nodes", "externalGroups", "N")
+    merge_ordered_groups("internal_nodes", "internalGroups", "K")
+    merge_ordered_groups("external_nodes", "finalExternalGroups", "N")
+    merge_ordered_groups("internal_nodes", "finalInternalGroups", "K")
+    return display_names
+
+
 def _final_retained_profile_adapter(profiles: list[dict]) -> tuple[list[dict], list[dict]] | None:
     """Adapt pack cases with equal final ports but different internal recovery.
 
@@ -1639,6 +1666,148 @@ def _final_retained_profile_adapter(profiles: list[dict]) -> tuple[list[dict], l
             "K_h": _clean_vector(k_h) if k_h.shape != (0, 0) else [],
         })
 
+    return normalized_profiles, recovery_profiles
+
+
+def _gkk_placeholder_profile_adapter(profiles: list[dict]) -> tuple[list[dict], list[dict]] | None:
+    """Align Pack cases with equal external ports but different raw internals.
+
+    Missing internal nodes are backend-only placeholders: they are added as an
+    isolated identity row/column so Gkk remains invertible and has no Schur
+    effect.  Case-specific recovery is computed from the original payload before
+    placeholders are inserted.
+    """
+    if len(profiles) < 2:
+        return None
+
+    base_payload = profiles[0].get("payload") or {}
+    base_external_nodes = [str(node) for node in (base_payload.get("external_nodes") or [])]
+    base_ground_nodes = [str(node) for node in (base_payload.get("ground_nodes") or [])]
+    if not base_external_nodes:
+        return None
+
+    internal_union: list[str] = []
+    internal_display_names: dict[str, str] = {}
+    for profile in profiles:
+        payload = profile.get("payload") or {}
+        if [str(node) for node in (payload.get("external_nodes") or [])] != base_external_nodes:
+            return None
+        if [str(node) for node in (payload.get("ground_nodes") or [])] != base_ground_nodes:
+            return None
+        all_nodes = [str(node) for node in (payload.get("all_nodes") or [])]
+        internal_nodes = [str(node) for node in (payload.get("internal_nodes") or [])]
+        if not all_nodes:
+            return None
+        if any(node not in all_nodes for node in base_external_nodes):
+            return None
+        if any(node not in all_nodes for node in internal_nodes):
+            return None
+        if any(node in base_external_nodes for node in internal_nodes):
+            return None
+        display_names = _payload_node_display_names(payload)
+        for node in internal_nodes:
+            if node not in internal_union:
+                internal_union.append(node)
+            internal_display_names.setdefault(node, str(display_names.get(node, node)))
+
+    if not internal_union:
+        return None
+
+    common_nodes = [*base_external_nodes, *internal_union]
+    normalized_profiles: list[dict] = []
+    recovery_profiles: list[dict] = []
+
+    for profile_index, profile in enumerate(profiles):
+        payload = profile.get("payload") or {}
+        all_nodes = [str(node) for node in (payload.get("all_nodes") or [])]
+        internal_nodes = [str(node) for node in (payload.get("internal_nodes") or [])]
+        node_index = {node: index for index, node in enumerate(all_nodes)}
+        missing_internal_nodes = [node for node in internal_union if node not in internal_nodes]
+
+        try:
+            G_full = _expr_matrix_from_payload(payload, "G_full")
+            Ihis_full = _expr_matrix_from_payload(payload, "Ihis_full")
+            reduced = _reduced_super_result_from_payload(payload)
+        except Exception:
+            return None
+        if G_full.shape != (len(all_nodes), len(all_nodes)):
+            return None
+        if Ihis_full.shape != (len(all_nodes), 1):
+            return None
+
+        aligned_index = {node: index for index, node in enumerate(common_nodes)}
+        aligned_G = sp.zeros(len(common_nodes), len(common_nodes))
+        aligned_Ihis = sp.zeros(len(common_nodes), 1)
+        for row_node in all_nodes:
+            if row_node not in aligned_index:
+                continue
+            src_row = node_index[row_node]
+            dst_row = aligned_index[row_node]
+            aligned_Ihis[dst_row, 0] = Ihis_full[src_row, 0]
+            for col_node in all_nodes:
+                if col_node not in aligned_index:
+                    continue
+                aligned_G[dst_row, aligned_index[col_node]] = G_full[src_row, node_index[col_node]]
+
+        for node in missing_internal_nodes:
+            idx = aligned_index[node]
+            for pos in range(len(common_nodes)):
+                aligned_G[idx, pos] = 0
+                aligned_G[pos, idx] = 0
+            aligned_G[idx, idx] = 1
+            aligned_Ihis[idx, 0] = 0
+
+        next_profile = json.loads(json.dumps(profile))
+        next_payload = json.loads(json.dumps(payload))
+        display_names = _payload_node_display_names(payload)
+        for node in common_nodes:
+            display_names.setdefault(node, internal_display_names.get(node, node))
+        aligned_G_clean = _clean_matrix(aligned_G)
+        aligned_Ihis_clean = _clean_vector(aligned_Ihis)
+        next_payload.update({
+            "all_nodes": common_nodes,
+            "external_nodes": base_external_nodes,
+            "internal_nodes": internal_union,
+            "ground_nodes": base_ground_nodes,
+            "node_display_names": display_names,
+            "G_full": aligned_G_clean,
+            "G_full_tagged": aligned_G_clean,
+            "Ihis_full": aligned_Ihis_clean,
+            "Ihis_full_tagged": aligned_Ihis_clean,
+            "backend_placeholder_internal_nodes": missing_internal_nodes,
+        })
+        next_profile["payload"] = next_payload
+        normalized_profiles.append(next_profile)
+
+        try:
+            profile_case_id = int(profile.get("case_id", profile_index))
+        except (TypeError, ValueError):
+            profile_case_id = profile_index
+        recovery_nodes = [str(node) for node in (reduced.get("internal_nodes") or [])]
+        display_names = next_payload.get("node_display_names") or {}
+        reduced_external_nodes = [str(node) for node in (reduced.get("external_nodes") or base_external_nodes)]
+        K_v = sp.Matrix(reduced.get("K_v") or sp.zeros(0, len(base_external_nodes)))
+        K_h = sp.Matrix(reduced.get("K_h") or sp.zeros(0, 1))
+        recovery_profiles.append({
+            "case_ids": [profile_case_id],
+            "recovery_nodes": recovery_nodes,
+            "super_nodes": reduced_external_nodes,
+            "super_node_c_names": {
+                node: str(display_names.get(node, node))
+                for node in reduced_external_nodes
+            },
+            "recovery_node_c_names": {
+                node: str(display_names.get(node, node))
+                for node in recovery_nodes
+            },
+            "K_v": _clean_matrix(K_v) if K_v.shape != (0, 0) else [],
+            "K_h": _clean_vector(K_h) if K_h.shape != (0, 0) else [],
+        })
+
+    try:
+        _validate_multicase_topology(normalized_profiles)
+    except ValueError:
+        return None
     return normalized_profiles, recovery_profiles
 
 
@@ -2261,7 +2430,9 @@ def _direct_retained_local_entry_replacements(
     runtime_groups: Mapping[str, dict],
     global_alias_cache: dict[tuple, str],
     base_case_by_branch: Mapping[str, int],
+    alias_node_order: Sequence[str] | None = None,
 ) -> dict[tuple[int, str, int], sp.Expr]:
+    alias_node_order = [str(node) for node in (alias_node_order or template_payload.get("all_nodes") or [])]
     node_index = {
         str(node): index
         for index, node in enumerate(template_payload.get("all_nodes") or [])
@@ -2321,7 +2492,7 @@ def _direct_retained_local_entry_replacements(
                     key=key,
                     row=row,
                     col=col,
-                    node_order=list(template_payload.get("all_nodes") or []),
+                    node_order=alias_node_order,
                     profile_values=values,
                     base_case=base_case_by_branch.get(branch_id, 0),
                 )
@@ -2335,7 +2506,7 @@ def _direct_retained_local_entry_replacements(
             key=key,
             row=row,
             col=col,
-            node_order=list(template_payload.get("all_nodes") or []),
+            node_order=alias_node_order,
             values=values,
         )
         return temp_replacements.get((key, row, col))
@@ -2440,7 +2611,9 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                 f"Runtime-mutable case group {name} changes topology or matrix shape. "
                 "Use init-time case group instead."
             ) from exc
-        adapted = _final_retained_profile_adapter(sample_profiles)
+        adapted = _gkk_placeholder_profile_adapter(sample_profiles)
+        if adapted is None:
+            adapted = _final_retained_profile_adapter(sample_profiles)
         if adapted is None:
             reason = _final_retained_profile_adapter_unavailable_reason(sample_profiles)
             raise ValueError(f"{exc}; final-retained adapter unavailable: {reason}") from exc
@@ -2453,6 +2626,11 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     if not isinstance(base_payload, dict):
         return None
     node_order = [str(node) for node in base_payload.get("all_nodes") or []]
+    node_display_names = _payload_node_display_names(base_payload)
+    alias_node_order = [
+        str(node_display_names.get(node, node))
+        for node in node_order
+    ]
     symbol_table = {}
     for profile in sample_profiles:
         symbol_table.update((profile.get("payload") or {}).get("symbol_dependency_table") or {})
@@ -2490,6 +2668,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
         runtime_groups=runtime_groups,
         global_alias_cache=global_alias_cache,
         base_case_by_branch=base_case_by_branch,
+        alias_node_order=alias_node_order,
     )
 
     for key, matrices in matrices_by_key.items():
@@ -2527,7 +2706,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                             key=key,
                             row=row,
                             col=col,
-                            node_order=node_order,
+                            node_order=alias_node_order,
                             values=values,
                             branch_id=branch_id,
                             kind=kind,
@@ -2547,7 +2726,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                             key=key,
                             row=row,
                             col=col,
-                            node_order=node_order,
+                            node_order=alias_node_order,
                             values_by_init=runtime_invariant,
                         )
                         continue
@@ -2564,7 +2743,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                     key=key,
                     row=row,
                     col=col,
-                    node_order=node_order,
+                    node_order=alias_node_order,
                     values=values,
                     branch_id=branch_id,
                     kind=kind,
@@ -2584,7 +2763,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                     key=key,
                     row=row,
                     col=col,
-                    node_order=node_order,
+                    node_order=alias_node_order,
                     profile_values=values,
                     base_case=base_case_by_branch.get(branch_id, 0),
                 )
@@ -2614,7 +2793,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
                 key=key,
                 row=row,
                 col=col,
-                node_order=node_order,
+                node_order=alias_node_order,
                 values_by_init=runtime_invariant,
             )
             continue
@@ -2626,7 +2805,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
             key=key,
             row=row,
             col=col,
-            node_order=node_order,
+            node_order=alias_node_order,
             values=values,
         )
 
@@ -2662,7 +2841,7 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     return {
         "template_payload": template_payload,
         "aliases": aliases,
-        "profiles": profiles,
+        "profiles": sample_profiles,
         "sample_profiles": sample_profiles,
         "branch_ids": [branch_id for branch_id in branch_ids if branch_id not in runtime_groups],
         "runtime_case_groups": list(runtime_groups.values()),
@@ -2927,6 +3106,27 @@ def _insert_after_label(draft: str, label: str, lines: list[str]) -> str:
     return draft.replace(label, label + "\n" + "\n".join(lines), 1)
 
 
+def _branch_can_use_global_case_id(profiles: Sequence[Mapping], branch_id: str) -> bool:
+    if not profiles:
+        return False
+    for index, profile in enumerate(profiles):
+        try:
+            global_case = int(profile.get("case_id", index))
+        except (TypeError, ValueError):
+            global_case = index
+        if _profile_case_index(profile, branch_id, 0) != global_case:
+            return False
+    return True
+
+
+def _global_case_id_branch_ids(profiles: Sequence[Mapping], branch_ids: Sequence[str]) -> set[str]:
+    return {
+        str(branch_id)
+        for branch_id in branch_ids
+        if _branch_can_use_global_case_id(profiles, str(branch_id))
+    }
+
+
 def _multicase_local_case_lines(case_id_symbol: str, profiles: list[dict], branch_ids: list[str]) -> list[str]:
     if not branch_ids:
         return []
@@ -2949,13 +3149,21 @@ def _multicase_local_case_lines(case_id_symbol: str, profiles: list[dict], branc
     return lines
 
 
-def _alias_local_case_name(alias: str, info: Mapping, case_id_symbol: str) -> str:
+def _alias_local_case_name(
+    alias: str,
+    info: Mapping,
+    case_id_symbol: str,
+    *,
+    global_case_branch_ids: set[str] | None = None,
+) -> str:
     branch_id = info.get("branch_id") or alias
     selector = info.get("selector")
     if selector == "global":
         return case_id_symbol
     if selector == "runtime":
         return str(info.get("case_id_symbol") or f"runtime_{_c_identifier_name(branch_id, 'branch')}_case_id")
+    if str(branch_id) in (global_case_branch_ids or set()):
+        return case_id_symbol
     return f"{_c_identifier_name(branch_id, 'branch')}_case_id"
 
 
@@ -2963,12 +3171,19 @@ def _group_alias_entries(
     aliases: dict[str, dict],
     wanted_owner: str,
     case_id_symbol: str,
+    *,
+    global_case_branch_ids: set[str] | None = None,
 ) -> dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]]:
     grouped: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
     for alias, info in aliases.items():
         if info.get("owner") != wanted_owner:
             continue
-        local_name = _alias_local_case_name(alias, info, case_id_symbol)
+        local_name = _alias_local_case_name(
+            alias,
+            info,
+            case_id_symbol,
+            global_case_branch_ids=global_case_branch_ids,
+        )
         case_values = {int(case_index): _parse_expr(expr) for case_index, expr in (info.get("case_values") or {}).items()}
         grouped.setdefault(local_name, []).append((alias, info, case_values))
     return grouped
@@ -2990,6 +3205,7 @@ def _shared_source_temp_plan(
     *,
     case_id_symbol: str,
     symbol_table: Mapping[str, str] | None,
+    global_case_branch_ids: set[str] | None = None,
 ) -> dict[str, dict[int, list[tuple[str, sp.Expr]]]]:
     """Find RAM-safe source CSE temps shared by RAM G and CODE/Ihis aliases.
 
@@ -2998,10 +3214,20 @@ def _shared_source_temp_plan(
     selectors are skipped because RAM-assigned temps would not refresh at runtime.
     """
     symbol_table = dict(symbol_table or {})
-    ram_groups = _group_alias_entries(aliases, "RAM", case_id_symbol)
+    ram_groups = _group_alias_entries(
+        aliases,
+        "RAM",
+        case_id_symbol,
+        global_case_branch_ids=global_case_branch_ids,
+    )
     code_groups: dict[str, list[tuple[str, dict, dict[int, sp.Expr]]]] = {}
     for owner in ("CODE", "CODE_PER_STEP"):
-        for local_name, entries in _group_alias_entries(aliases, owner, case_id_symbol).items():
+        for local_name, entries in _group_alias_entries(
+            aliases,
+            owner,
+            case_id_symbol,
+            global_case_branch_ids=global_case_branch_ids,
+        ).items():
             code_groups.setdefault(local_name, []).extend(entries)
     plan: dict[str, dict[int, list[tuple[str, sp.Expr]]]] = {}
     for local_name, ram_entries in ram_groups.items():
@@ -3213,6 +3439,7 @@ def _alias_source_temp_plan(
     base_source_temps: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None,
     symbol_table: Mapping[str, str] | None,
     require_ram_safe: bool,
+    global_case_branch_ids: set[str] | None = None,
 ) -> dict[str, dict[int, list[tuple[str, sp.Expr]]]]:
     """Hoist owner-local source CSE temps before the full-value alias switch.
 
@@ -3220,7 +3447,12 @@ def _alias_source_temp_plan(
     Any repeated source-level helper expressions are computed in an earlier
     switch for the same local case selector, then reused by G/Ihis aliases.
     """
-    grouped = _group_alias_entries(aliases, wanted_owner, case_id_symbol)
+    grouped = _group_alias_entries(
+        aliases,
+        wanted_owner,
+        case_id_symbol,
+        global_case_branch_ids=global_case_branch_ids,
+    )
     if not grouped:
         return {}
     symbol_table = dict(symbol_table or {})
@@ -3548,8 +3780,14 @@ def _alias_assignment_lines(
     case_id_symbol: str = "case_id",
     *,
     shared_source_temps: Mapping[str, Mapping[int, Sequence[tuple[str, sp.Expr]]]] | None = None,
+    global_case_branch_ids: set[str] | None = None,
 ) -> list[str]:
-    grouped = _group_alias_entries(aliases, wanted_owner, case_id_symbol)
+    grouped = _group_alias_entries(
+        aliases,
+        wanted_owner,
+        case_id_symbol,
+        global_case_branch_ids=global_case_branch_ids,
+    )
     if not grouped:
         return []
     lines = [f"    /* Resolve {wanted_owner} multi-case effective aliases as full values, never deltas. */"]
@@ -3587,10 +3825,13 @@ def _insert_multicase_alias_layer(
     symbol_table: Mapping[str, str] | None = None,
 ) -> str:
     declared = _declared_c_names(draft)
+    global_case_branch_ids = _global_case_id_branch_ids(profiles, branch_ids)
+    decoded_branch_ids = [branch_id for branch_id in branch_ids if branch_id not in global_case_branch_ids]
     shared_source_temps = _shared_source_temp_plan(
         aliases,
         case_id_symbol=case_id_symbol,
         symbol_table=symbol_table or {},
+        global_case_branch_ids=global_case_branch_ids,
     )
     ram_alias_temps = _alias_source_temp_plan(
         aliases,
@@ -3599,6 +3840,7 @@ def _insert_multicase_alias_layer(
         base_source_temps=shared_source_temps,
         symbol_table=symbol_table or {},
         require_ram_safe=True,
+        global_case_branch_ids=global_case_branch_ids,
     )
     ram_source_temps = _merge_source_temp_plans(shared_source_temps, ram_alias_temps)
     code_alias_temps = _alias_source_temp_plan(
@@ -3608,6 +3850,7 @@ def _insert_multicase_alias_layer(
         base_source_temps=ram_source_temps,
         symbol_table=symbol_table or {},
         require_ram_safe=False,
+        global_case_branch_ids=global_case_branch_ids,
     )
     code_source_temps = _merge_source_temp_plans(ram_source_temps, code_alias_temps)
     ihis_alias_temps = _alias_source_temp_plan(
@@ -3617,10 +3860,11 @@ def _insert_multicase_alias_layer(
         base_source_temps=code_source_temps,
         symbol_table=symbol_table or {},
         require_ram_safe=False,
+        global_case_branch_ids=global_case_branch_ids,
     )
     all_source_temps = _merge_source_temp_plans(ram_source_temps, code_alias_temps, ihis_alias_temps)
     declarations: list[str] = []
-    for branch_id in branch_ids:
+    for branch_id in decoded_branch_ids:
         local_name = f"{_c_identifier_name(branch_id, 'branch')}_case_id"
         if local_name not in declared:
             declarations.append(f"    int {local_name} = 0;")
@@ -3638,13 +3882,14 @@ def _insert_multicase_alias_layer(
         draft = draft.replace("STATIC:", "STATIC:\n" + "\n".join(declarations), 1)
 
     ram_lines = (
-        _multicase_local_case_lines(case_id_symbol, profiles, branch_ids)
+        _multicase_local_case_lines(case_id_symbol, profiles, decoded_branch_ids)
         + _shared_source_temp_assignment_lines(ram_source_temps)
         + _alias_assignment_lines(
             aliases,
             "RAM",
             case_id_symbol,
             shared_source_temps=ram_source_temps,
+            global_case_branch_ids=global_case_branch_ids,
         )
     )
     draft = _insert_after_label(draft, "RAM_PASS1:", ram_lines)
@@ -3659,6 +3904,7 @@ def _insert_multicase_alias_layer(
             "CODE",
             case_id_symbol,
             shared_source_temps=code_source_temps,
+            global_case_branch_ids=global_case_branch_ids,
         )
         + _shared_source_temp_assignment_lines(
             ihis_alias_temps,
@@ -3669,6 +3915,7 @@ def _insert_multicase_alias_layer(
             "CODE_PER_STEP",
             case_id_symbol,
             shared_source_temps=all_source_temps,
+            global_case_branch_ids=global_case_branch_ids,
         )
     )
     marker = "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */"
@@ -3729,18 +3976,22 @@ def _template_gkk_from_payload(payload: dict) -> sp.Matrix:
     return G.extract(indices, indices)
 
 
-def _find_w_code_sym3_inverse_block(draft: str) -> tuple[int, int, str] | None:
-    marker = "    mat_3x3_sym_inv_code("
+def _find_w_code_symmetric_inverse_block(draft: str, size: int) -> tuple[int, int, str] | None:
+    marker = f"    mat_{size}x{size}_sym_inv_code("
     marker_index = draft.find(marker)
     if marker_index < 0:
         return None
     start = draft.rfind("    double W_code_11 = 0.0;\n", 0, marker_index)
-    end_marker = "    set_CODE(&W_code, 2, 2, W_code_33);\n"
+    end_marker = f"    set_CODE(&W_code, {size - 1}, {size - 1}, W_code_{size}{size});\n"
     end = draft.find(end_marker, marker_index)
     if start < 0 or end < 0:
         return None
     end += len(end_marker)
     return start, end, draft[start:end]
+
+
+def _find_w_code_sym3_inverse_block(draft: str) -> tuple[int, int, str] | None:
+    return _find_w_code_symmetric_inverse_block(draft, 3)
 
 
 def _indent_c_block(block: str, spaces: int) -> list[str]:
@@ -3758,6 +4009,33 @@ def _diagonal_w_code_lines(size: int, indent: int) -> list[str]:
     return lines
 
 
+def _active_diagonal_w_code_lines(size: int, active_rows: set[int], indent: int) -> list[str]:
+    prefix = " " * indent
+    lines: list[str] = []
+    for row in range(size):
+        for col in range(size):
+            value = f"1.0 / get_CODE(&Gkk_code, {row}, {row})" if row == col and row in active_rows else "0.0"
+            lines.append(f"{prefix}set_CODE(&W_code, {row}, {col}, {value});")
+    return lines
+
+
+def _active_internal_rows_by_case(
+    recovery_profiles: Sequence[Mapping] | None,
+    template_internal_nodes: Sequence[str] | None,
+) -> dict[int, set[int]]:
+    node_to_row = {str(node): row for row, node in enumerate(template_internal_nodes or [])}
+    rows_by_case: dict[int, set[int]] = {}
+    for profile in recovery_profiles or []:
+        rows = {
+            node_to_row[str(node)]
+            for node in (profile.get("recovery_nodes") or [])
+            if str(node) in node_to_row
+        }
+        for case_id in profile.get("case_ids") or []:
+            rows_by_case[int(case_id)] = set(rows)
+    return rows_by_case
+
+
 def _apply_multicase_conditional_diagonal_w_builder(
     draft: str,
     *,
@@ -3765,14 +4043,18 @@ def _apply_multicase_conditional_diagonal_w_builder(
     profiles: list[dict],
     aliases: dict[str, dict],
     gkk_template: sp.Matrix,
+    recovery_profiles: Sequence[Mapping] | None = None,
+    template_internal_nodes: Sequence[str] | None = None,
 ) -> str:
     gkk_template = sp.Matrix(gkk_template)
-    if not profiles or gkk_template.rows != 3 or gkk_template.cols != 3:
+    size = int(gkk_template.rows)
+    if not profiles or size not in {2, 3} or gkk_template.cols != size:
         return draft
-    inverse_block = _find_w_code_sym3_inverse_block(draft)
+    inverse_block = _find_w_code_symmetric_inverse_block(draft, size)
     if inverse_block is None:
         return draft
 
+    active_rows_by_case = _active_internal_rows_by_case(recovery_profiles, template_internal_nodes)
     diagonal_cases: list[int] = []
     fallback_cases: list[int] = []
     for index, profile in enumerate(profiles):
@@ -3784,23 +4066,24 @@ def _apply_multicase_conditional_diagonal_w_builder(
         return draft
 
     start, end, original_block = inverse_block
-    if not fallback_cases:
+    if not fallback_cases and not active_rows_by_case:
         replacement = "\n".join(
             ["    /* Case-resolved diagonal Gkk fast path: W = inv(diag(Gkk)). */"]
-            + _diagonal_w_code_lines(3, 4)
+            + _diagonal_w_code_lines(size, 4)
         ) + "\n"
         return draft[:start] + replacement + draft[end:]
 
     lines = [
-        "    /* Case-resolved diagonal Gkk fast path: use direct reciprocal for diagonal cases. */",
+        "    /* Case-resolved Gkk inverse. Placeholder-only rows are skipped for cases with fewer internals. */",
         f"    switch ({case_id_symbol}) {{",
     ]
     for index in diagonal_cases:
         lines.append(f"    case {index}:")
-    lines.append("    {")
-    lines.extend(_diagonal_w_code_lines(3, 8))
-    lines.append("        break;")
-    lines.append("    }")
+        lines.append("    {")
+        active_rows = active_rows_by_case.get(index, set(range(size)))
+        lines.extend(_active_diagonal_w_code_lines(size, active_rows, 8))
+        lines.append("        break;")
+        lines.append("    }")
     for index in fallback_cases:
         lines.append(f"    case {index}:")
     lines.append("    {")
@@ -4923,6 +5206,9 @@ def _replace_ram_g_setup_with_conditional_ram_block(draft: str, ram_block: str) 
         return draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
     end = draft.find(end_marker, start)
     if end < 0:
+        gvalues_marker = "\nGVALUES:"
+        end = draft.find(gvalues_marker, start)
+    if end < 0:
         return draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
     header_end = draft.find("*/", start)
     if header_end < 0 or header_end > end:
@@ -5467,6 +5753,8 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 profiles=alias_model["profiles"],
                 aliases=aliases,
                 gkk_template=_template_gkk_from_payload(template_payload),
+                recovery_profiles=alias_model.get("final_recovery_profiles") or [],
+                template_internal_nodes=result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],
             )
             draft = _apply_multicase_conditional_diagonal_scalar_paths(
                 draft,
@@ -5489,6 +5777,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             draft,
             case_id_symbol=case_id_symbol,
             recovery_profiles=alias_model.get("final_recovery_profiles") or [],
+            template_internal_nodes=result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],
         )
     display_reuse_plan_by_case: dict[int, list] = {}
     try:
@@ -5574,7 +5863,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 "comment": profile.get("comment") or "",
                 "case_map": profile.get("case_map") or {},
             }
-            for index, profile in enumerate(alias_model["profiles"])
+            for index, profile in enumerate(payload.get("case_profiles") or alias_model["profiles"])
         ],
         "warnings": list(dict.fromkeys(warnings)),
         "multi_case": {
@@ -5582,7 +5871,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
             "external_nodes": result.get("external_nodes") or [],
             "effective_internal_nodes": result.get("effective_internal_nodes") or [],
             "block_type": (result.get("structured") or {}).get("block_type"),
-            "profile_count": len(alias_model["profiles"]),
+            "profile_count": len(payload.get("case_profiles") or alias_model["profiles"]),
             "aliases": aliases,
             "runtime_case_groups": [
                 {
@@ -6011,11 +6300,33 @@ def _apply_dummy_recovery_profiles_to_draft(
     return draft.rstrip() + "\n" + "\n".join(lines) + "\n"
 
 
+def _remove_default_voltage_recovery_block(draft: str) -> str:
+    start_marker = "    /* Internal-node voltage recovery after solved retained-node voltages are available. */\n"
+    start = draft.find(start_marker)
+    if start < 0:
+        return draft
+    assignment_marker = "    /* One variable per eliminated node, in effective k order. */\n"
+    assignment_start = draft.find(assignment_marker, start)
+    if assignment_start < 0:
+        return draft
+    pos = assignment_start + len(assignment_marker)
+    assignment_re = re.compile(r"    [A-Za-z_]\w* = get_CODE\(&Vk_code, \d+, 0\);\n")
+    while True:
+        match = assignment_re.match(draft, pos)
+        if not match:
+            break
+        pos = match.end()
+    if draft.startswith("\n", pos):
+        pos += 1
+    return draft[:start] + draft[pos:]
+
+
 def _apply_final_retained_recovery_profiles_to_draft(
     draft: str,
     *,
     case_id_symbol: str,
     recovery_profiles: Sequence[dict] | None,
+    template_internal_nodes: Sequence[str] | None = None,
 ) -> str:
     """Add T1_T2 recovery for Pack cases reduced to common final ports.
 
@@ -6029,17 +6340,134 @@ def _apply_final_retained_recovery_profiles_to_draft(
     if not any(profile.get("recovery_nodes") for profile in profiles):
         return draft
 
+    template_internal_nodes = [str(node) for node in (template_internal_nodes or [])]
+    template_node_to_row = {node: row for row, node in enumerate(template_internal_nodes)}
+
+    for row, node in enumerate(template_internal_nodes or []):
+        c_name = _c_identifier_name(str(node), f"K{row + 1}")
+        draft = draft.replace(
+            f"    {c_name} = get_CODE(&Vk_code, {row}, 0);\n",
+            "",
+        )
+
+    def recovery_profile_c_name(profile: dict, node: object, row: int) -> str:
+        node_key = str(node)
+        c_names = profile.get("recovery_node_c_names") or {}
+        return _c_identifier_name(str(c_names.get(node_key, node_key)), f"K{row + 1}")
+
+    def super_profile_c_name(profile: dict, node: object, col: int) -> str:
+        node_key = str(node)
+        c_names = profile.get("super_node_c_names") or {}
+        return _c_identifier_name(str(c_names.get(node_key, node_key)), f"V{col + 1}")
+
+    def can_use_template_vk_recovery() -> bool:
+        if not template_node_to_row:
+            return False
+        if "    /* One variable per eliminated node, in effective k order. */\n" not in draft:
+            return False
+        for profile in profiles:
+            for node in profile.get("recovery_nodes") or []:
+                if str(node) not in template_node_to_row:
+                    return False
+        return True
+
+    def default_recovery_preamble() -> str:
+        start_marker = "    /* Internal-node voltage recovery after solved retained-node voltages are available. */\n"
+        assignment_marker = "    /* One variable per eliminated node, in effective k order. */\n"
+        start = draft.find(start_marker)
+        if start < 0:
+            return ""
+        assignment_start = draft.find(assignment_marker, start)
+        if assignment_start < 0:
+            return ""
+        return draft[start:assignment_start].rstrip("\n")
+
+    def case_indented_recovery_preamble(preamble: str) -> list[str]:
+        lines: list[str] = []
+        for line in preamble.splitlines():
+            if line.startswith("    "):
+                line = line[4:]
+            lines.append(("        " + line) if line else "")
+        return lines
+
+    def guard_recovery_only_matrix_setup(next_draft: str, active_case_ids: Sequence[int]) -> str:
+        if not active_case_ids:
+            return next_draft
+        shared_matrix_markers = (
+            "MATRIX_ Grr_code",
+            "MATRIX_ Grk_code",
+            "MATRIX_ Gred_code",
+            "MATRIX_ Ihisr_code",
+            "MATRIX_ Ihisred_code",
+            "tmp_Grk_W_code",
+            "tmp_Grk_W_Gkr_code",
+            "tmp_Grk_W_Ihisk_code",
+        )
+        if any(marker in next_draft for marker in shared_matrix_markers):
+            return next_draft
+
+        def indent_case_body(block: str) -> list[str]:
+            out: list[str] = []
+            for line in block.rstrip("\n").splitlines():
+                if line.startswith("    "):
+                    line = line[4:]
+                out.append(("        " + line) if line else "")
+            return out
+
+        ram_start_marker = "    err += matrixDim(&Gkr_code"
+        ram_end_marker = "    matrix_register(&tmp_W_Gkr_Vr_code);\n"
+        ram_start = next_draft.find(ram_start_marker)
+        ram_end = next_draft.find(ram_end_marker, ram_start)
+        if ram_start >= 0 and ram_end >= 0:
+            ram_end += len(ram_end_marker)
+            ram_block = next_draft[ram_start:ram_end]
+            guarded_ram = [
+                "    /* Recovery-only matrix setup is skipped for Pack cases with no recovered internal nodes. */",
+                f"    switch ({case_id_symbol}) {{",
+            ]
+            for case_id in active_case_ids:
+                guarded_ram.append(f"    case {case_id}:")
+            guarded_ram.extend(indent_case_body(ram_block))
+            guarded_ram.extend([
+                "        break;",
+                "    default:",
+                "        break;",
+                "    }",
+            ])
+            next_draft = next_draft[:ram_start] + "\n".join(guarded_ram) + "\n" + next_draft[ram_end:]
+
+        code_start_marker = "    if (!rtds_matrix_code_ready) {\n"
+        code_end_marker = "        rtds_matrix_code_ready = 1;\n    }\n"
+        code_start = next_draft.find(code_start_marker)
+        code_end = next_draft.find(code_end_marker, code_start)
+        if code_start >= 0 and code_end >= 0:
+            code_end += len(code_end_marker)
+            code_block = next_draft[code_start:code_end]
+            condition = _case_condition_from_ids(case_id_symbol, active_case_ids)
+            guarded_code = [
+                "    /* Recovery-only MATRIX_ conditioning is needed only when this Pack case recovers internals. */",
+                f"    if ({condition}) {{",
+                *indent_case_body(code_block),
+                "    }",
+            ]
+            next_draft = next_draft[:code_start] + "\n".join(guarded_code) + "\n" + next_draft[code_end:]
+
+        return next_draft
+
     declared = set(re.findall(r"\bdouble\s+([A-Za-z_]\w*)\b", draft))
     recovery_names: list[str] = []
     recovery_name_set: set[str] = set()
     recovery_symbol_names: set[str] = set()
     external_c_names: set[str] = set()
+    use_template_vk_recovery = can_use_template_vk_recovery()
+    recovery_preamble = default_recovery_preamble() if use_template_vk_recovery else ""
+    active_recovery_case_ids: list[int] = []
 
     for profile in profiles:
         for col, node in enumerate(profile.get("super_nodes") or []):
-            external_c_names.add(_c_identifier_name(node, f"V{col + 1}"))
+            external_c_names.add(super_profile_c_name(profile, node, col))
         for row, node in enumerate(profile.get("recovery_nodes") or []):
-            c_name = _c_identifier_name(node, f"K{row + 1}")
+            c_name = recovery_profile_c_name(profile, node, row)
             if c_name not in recovery_name_set:
                 recovery_name_set.add(c_name)
                 recovery_names.append(c_name)
@@ -6051,7 +6479,8 @@ def _apply_final_retained_recovery_profiles_to_draft(
                 matrix = sp.Matrix(value)
             except Exception:
                 continue
-            recovery_symbol_names.update(_symbols_in_matrices(matrix))
+            if not use_template_vk_recovery:
+                recovery_symbol_names.update(_symbols_in_matrices(matrix))
 
     declarations: list[str] = []
     for name in recovery_names:
@@ -6089,9 +6518,20 @@ def _apply_final_retained_recovery_profiles_to_draft(
         case_ids = [int(case_id) for case_id in (profile.get("case_ids") or [])]
         if not case_ids:
             continue
+        if use_template_vk_recovery and (profile.get("recovery_nodes") or []):
+            active_recovery_case_ids.extend(case_ids)
         for case_id in case_ids:
             lines.append(f"    case {case_id}:")
-        assignment_lines = _recovery_assignment_lines(profile)
+        if use_template_vk_recovery:
+            assignment_lines = []
+            for row, node in enumerate(profile.get("recovery_nodes") or []):
+                template_row = template_node_to_row[str(node)]
+                c_name = recovery_profile_c_name(profile, node, row)
+                assignment_lines.append(f"        {c_name} = get_CODE(&Vk_code, {template_row}, 0);")
+            if assignment_lines and recovery_preamble:
+                lines.extend(case_indented_recovery_preamble(recovery_preamble))
+        else:
+            assignment_lines = _recovery_assignment_lines(profile)
         if assignment_lines:
             lines.extend(assignment_lines)
         else:
@@ -6110,6 +6550,27 @@ def _apply_final_retained_recovery_profiles_to_draft(
     for comment in stale_comments:
         draft = draft.replace(comment + "\n", "")
         draft = draft.replace(comment, "")
+    if use_template_vk_recovery:
+        if recovery_preamble:
+            draft = _remove_default_voltage_recovery_block(draft)
+            marker = "T1_T2:\n"
+            if marker in draft:
+                draft = draft.replace(marker, marker + "\n".join(lines) + "\n", 1)
+                return guard_recovery_only_matrix_setup(draft, active_recovery_case_ids)
+        assignment_marker = "    /* One variable per eliminated node, in effective k order. */\n"
+        start = draft.find(assignment_marker)
+        if start >= 0:
+            pos = start + len(assignment_marker)
+            assignment_re = re.compile(r"    [A-Za-z_]\w* = get_CODE\(&Vk_code, \d+, 0\);\n")
+            while True:
+                match = assignment_re.match(draft, pos)
+                if not match:
+                    break
+                pos = match.end()
+            if draft.startswith("\n", pos):
+                pos += 1
+            return draft[:start] + "\n".join(lines) + "\n" + draft[pos:]
+    draft = _remove_default_voltage_recovery_block(draft)
     marker = "T1_T2:\n"
     if marker in draft:
         return draft.replace(marker, marker + "\n".join(lines) + "\n", 1)
@@ -6205,6 +6666,14 @@ def _recovery_assignment_lines(item: dict, *, indent: str = "        ") -> list[
     if not recovery_nodes:
         return []
     external_nodes = list(item.get("super_nodes") or [])
+    super_node_c_names = {
+        str(key): str(value)
+        for key, value in (item.get("super_node_c_names") or {}).items()
+    }
+    recovery_node_c_names = {
+        str(key): str(value)
+        for key, value in (item.get("recovery_node_c_names") or {}).items()
+    }
     K_v = item.get("K_v")
     K_h = item.get("K_h")
     K_v = sp.Matrix(K_v) if K_v is not None else sp.zeros(len(recovery_nodes), len(external_nodes))
@@ -6216,12 +6685,14 @@ def _recovery_assignment_lines(item: dict, *, indent: str = "        ") -> list[
             coeff = sp.sympify(K_v[row, col])
             if sp.simplify(coeff) == 0:
                 continue
-            terms.append(f"({_ccode(coeff)})*{_c_identifier_name(external, f'V{col + 1}')}")
+            external_name = super_node_c_names.get(str(external), str(external))
+            terms.append(f"({_ccode(coeff)})*{_c_identifier_name(external_name, f'V{col + 1}')}")
         history = sp.sympify(K_h[row, 0])
         if sp.simplify(history) != 0:
             terms.append(_ccode(history))
         rhs = " + ".join(terms) if terms else "0.0"
-        lines.append(f"{indent}{_c_identifier_name(node, f'K{row + 1}')} = {rhs};")
+        recovery_name = recovery_node_c_names.get(str(node), str(node))
+        lines.append(f"{indent}{_c_identifier_name(recovery_name, f'K{row + 1}')} = {rhs};")
     return lines
 
 
@@ -6784,6 +7255,8 @@ def _build_dummy_finalized_matrix_dag_c_draft(
         profiles=alias_model["profiles"],
         aliases=aliases,
         gkk_template=_template_gkk_from_payload(template_payload),
+        recovery_profiles=alias_model.get("final_recovery_profiles") or [],
+        template_internal_nodes=result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],
     )
     draft = _apply_multicase_conditional_diagonal_scalar_paths(
         draft,
