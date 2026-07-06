@@ -180,7 +180,8 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertIn("RETAINED_NODES_CASE_n is the active retained-node count", draft)
         self.assertIn("INTERNAL_NODES is the number of eliminated internal nodes", draft)
         self.assertNotIn("for (int col = 0; col < NR; col++)", draft)
-        self.assertIn("for (int col = 0; col < node_active; col++)", draft)
+        self.assertIn("network_node_recover_vk_diag(node_active, INTERNAL_NODES", draft)
+        self.assertIn("network_node_recover_vk_matrix(node_active, INTERNAL_NODES", draft)
         self.assertIn("Case-resolved diagonal Gkk scalar Schur/Ihis path", draft)
         scalar_marker = draft.index("Case-resolved diagonal Gkk scalar Schur/Ihis path")
         diagonal_block_start = draft.index("case 4:", scalar_marker)
@@ -191,7 +192,7 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertIn("double IC_his0 = 0.0;", draft)
         self.assertNotIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("get_CODE(&Grk_code, row, k) * get_CODE(&W_code, k, k)", diagonal_block)
-        self.assertIn("get_CODE(&Ihisk_code, k, 0) * get_CODE(&W_code, k, k)", draft)
+        self.assertIn("get_CODE(Ihisk_code, k, 0) * get_CODE(W_code, k, k)", draft)
         self.assertEqual(diagonal_block.count("/ get_CODE(&Gkk_code, k, k)"), 0)
         self.assertNotIn("/ gkk_diag", diagonal_block)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", diagonal_block)
@@ -201,6 +202,19 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", fallback_block)
         self.assertIn("Symmetric product: only upper triangle of tmp_Grk_W_Gkr_code is needed downstream.", fallback_block)
         self.assertIn("for (int col = row; col < node_active; col++)", fallback_block)
+        self.assertIn("CODE_FUNCTIONS:", draft)
+        code_functions = draft.split("CODE_FUNCTIONS:", 1)[1].split("CODE:", 1)[0]
+        self.assertIn("void network_node_recover_vk_diag", code_functions)
+        self.assertIn("void network_node_recover_vk_matrix", code_functions)
+        self.assertNotIn("void network_node_recover_vk_from_wgkr_only", code_functions)
+        vk_switch = draft.split("Case-resolved diagonal Gkk scalar Vk recovery path", 1)[1].split(
+            "/* One variable per eliminated node",
+            1,
+        )[0]
+        self.assertIn("network_node_recover_vk_diag(node_active, INTERNAL_NODES", vk_switch)
+        self.assertIn("network_node_recover_vk_matrix(node_active, INTERNAL_NODES", vk_switch)
+        self.assertNotIn("for (int k = 0; k < INTERNAL_NODES; k++)", vk_switch)
+        self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", vk_switch)
 
 
 if __name__ == "__main__":

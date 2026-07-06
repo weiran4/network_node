@@ -4126,11 +4126,19 @@ def _replace_enum_for_internal_layouts(draft: str, profiles: Sequence[Mapping]) 
     return draft[:enum_match.start()] + replacement + draft[enum_match.end():]
 
 
+def _internal_default_profile_index(profiles: Sequence[Mapping]) -> int:
+    for profile in profiles:
+        if int(profile.get("active_internal_count") or 0) == 0:
+            return int(str(profile.get("profile_id") or "INTERNAL_CASE_0").rsplit("_", 1)[-1])
+    return int(str((profiles[0].get("profile_id") if profiles else "INTERNAL_CASE_0") or "INTERNAL_CASE_0").rsplit("_", 1)[-1])
+
+
 def _insert_internal_profile_state(draft: str, profiles: Sequence[Mapping]) -> str:
     if "int internal_active =" in draft:
         return draft
-    default = str(profiles[0].get("profile_id") or "INTERNAL_CASE_0")
-    default_count = "INTERNAL_NODES_CASE_0"
+    default_index = _internal_default_profile_index(profiles)
+    default = f"INTERNAL_CASE_{default_index}"
+    default_count = f"INTERNAL_NODES_CASE_{default_index}"
     lines = [
         f"    int internal_profile = {default};",
         f"    int internal_active = {default_count};",
@@ -4162,10 +4170,11 @@ def _insert_internal_profile_selection(
             f"        internal_active = INTERNAL_NODES_CASE_{profile_index};",
             "        break;",
         ])
+    default_index = _internal_default_profile_index(profiles)
     lines.extend([
         "    default:",
-        "        internal_profile = INTERNAL_CASE_0;",
-        "        internal_active = INTERNAL_NODES_CASE_0;",
+        f"        internal_profile = INTERNAL_CASE_{default_index};",
+        f"        internal_active = INTERNAL_NODES_CASE_{default_index};",
         "        break;",
         "    }",
     ])
@@ -4191,7 +4200,88 @@ def _apply_internal_active_matrix_dimensions(draft: str) -> str:
     }
     for old, new in replacements.items():
         draft = draft.replace(old, new)
+    return _guard_internal_active_matrix_lifecycle(draft)
+
+
+_INTERNAL_ACTIVE_MATRIX_OBJECTS = {
+    "Grk_code",
+    "Gkr_code",
+    "Gkk_code",
+    "W_code",
+    "Ihisk_code",
+    "Vk_code",
+    "tmp_Grk_W_code",
+    "tmp_Grk_W_Ihisk_code",
+    "tmp_W_Gkr_code",
+    "tmp_W_Gkr_Vr_code",
+    "tmp_W_Ihisk_code",
+    "tmp_Vk_sum_code",
+}
+
+
+def _line_touches_internal_active_matrix(line: str, verb: str) -> bool:
+    for name in _INTERNAL_ACTIVE_MATRIX_OBJECTS:
+        if f"{verb}(&{name}" in line:
+            return True
+    return False
+
+
+def _guard_internal_active_lines(draft: str, *, verb: str) -> str:
+    lines = draft.splitlines()
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if _line_touches_internal_active_matrix(line, verb):
+            indent = line[: len(line) - len(line.lstrip(" "))]
+            if out and out[-1].strip() == "if (internal_active > 0) {":
+                out.append(line)
+                index += 1
+                continue
+            out.append(f"{indent}if (internal_active > 0) {{")
+            while index < len(lines) and _line_touches_internal_active_matrix(lines[index], verb):
+                out.append("    " + lines[index])
+                index += 1
+            out.append(f"{indent}}}")
+            continue
+        out.append(line)
+        index += 1
+    return "\n".join(out) + ("\n" if draft.endswith("\n") else "")
+
+
+def _guard_internal_active_matrix_lifecycle(draft: str) -> str:
+    for verb in ("matrixDim", "matrix_register", "conditionMatrixForCODE"):
+        draft = _guard_internal_active_lines(draft, verb=verb)
     return draft
+
+
+def _guard_internal_active_ihis_schur(draft: str) -> str:
+    if "internal_active" not in draft or "No active internal nodes: Ihisred = Ihisr." in draft:
+        return draft
+    old = "\n".join([
+        "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+        "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
+        "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+        "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+    ])
+    if old not in draft:
+        return draft
+    new = "\n".join([
+        "    if (internal_active > 0) {",
+        "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+        "        /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
+        "        matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+        "        matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+        "    }",
+        "    else {",
+        "        int row;",
+        "        /* No active internal nodes: Ihisred = Ihisr. */",
+        "        for (row = 0; row < RETAINED_NODES; row++) {",
+        "            set_CODE(&Ihisred_code, row, 0, get_CODE(&Ihisr_code, row, 0));",
+        "        }",
+        "    }",
+    ])
+    return draft.replace(old, new, 1)
 
 
 _SET_CODE_RE = re.compile(
@@ -4466,6 +4556,7 @@ def _apply_internal_layout_profile_compaction(
         gkk_template=gkk_template,
         template_internal_nodes=template_internal_nodes,
     )
+    draft = _guard_internal_active_ihis_schur(draft)
     draft = draft.replace("for (int k = 0; k < INTERNAL_NODES; k++)", "for (int k = 0; k < internal_active; k++)")
     draft = draft.replace("for (int row = 0; row < INTERNAL_NODES; row++)", "for (int row = 0; row < internal_active; row++)")
     return draft
@@ -4778,16 +4869,9 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
                 "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
             ]))
     vk_fallback = [
-        "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
-        "    for (int row = 0; row < INTERNAL_NODES; row++) {",
-        f"        for (int col = 0; col < {active_nr_expr}; col++) {{",
-        "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
-        "        }",
-        "    }",
-        "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
-        "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
-        "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
-        "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+        f"    network_node_recover_vk_matrix({active_nr_expr}, INTERNAL_NODES, "
+        "&tmp_Grk_W_code, &tmp_W_Gkr_code, &Vr_code, &W_code, &Ihisk_code, "
+        "&tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code, &tmp_Vk_sum_code, &Vk_code);",
     ]
     vk_new = "\n".join(
         ["    /* Case-resolved diagonal Gkk scalar Vk recovery path. */"]
@@ -4795,13 +4879,17 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
             case_id_symbol=case_id_symbol,
             diagonal_cases=diagonal_cases,
             fallback_cases=fallback_cases,
-            diagonal_lines=_diagonal_gkk_scalar_vk_lines(active_nr_expr),
+            diagonal_lines=[
+                f"        network_node_recover_vk_diag({active_nr_expr}, INTERNAL_NODES, "
+                "&tmp_Grk_W_code, &Vr_code, &Ihisk_code, &W_code, &Vk_code);",
+            ],
             fallback_lines=vk_fallback,
         )
     )
     for candidate in vk_candidates:
         if candidate in draft:
             draft = draft.replace(candidate, vk_new, 1)
+            draft = _ensure_vk_recovery_code_functions(draft)
             break
     else:
         draft = draft.replace("for (int col = 0; col < NR; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
@@ -6767,6 +6855,101 @@ def _remove_default_voltage_recovery_block(draft: str) -> str:
     return draft[:start] + draft[pos:]
 
 
+def _vk_recovery_code_functions_blocks() -> dict[str, str]:
+    return {
+        "diag": """void network_node_recover_vk_diag(int retained_count, int internal_count,
+                                  MATRIX_ *tmp_Grk_W_code,
+                                  MATRIX_ *Vr_code,
+                                  MATRIX_ *Ihisk_code,
+                                  MATRIX_ *W_code,
+                                  MATRIX_ *Vk_code)
+{
+    int k;
+    int col;
+
+    /* Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W). */
+    /* Preconditions: W is diagonal, Gkr = transpose(Grk), tmp_Grk_W_code = Grk * W. */
+    for (k = 0; k < internal_count; k++) {
+        double core_v = 0.0;
+        for (col = 0; col < retained_count; col++) {
+            core_v += get_CODE(tmp_Grk_W_code, col, k) * get_CODE(Vr_code, col, 0);
+        }
+        double hist_v = get_CODE(Ihisk_code, k, 0) * get_CODE(W_code, k, k);
+        set_CODE(Vk_code, k, 0, -(core_v + hist_v));
+    }
+}""",
+
+        "matrix": """void network_node_recover_vk_matrix(int retained_count, int internal_count,
+                                    MATRIX_ *tmp_Grk_W_code,
+                                    MATRIX_ *tmp_W_Gkr_code,
+                                    MATRIX_ *Vr_code,
+                                    MATRIX_ *W_code,
+                                    MATRIX_ *Ihisk_code,
+                                    MATRIX_ *tmp_W_Gkr_Vr_code,
+                                    MATRIX_ *tmp_W_Ihisk_code,
+                                    MATRIX_ *tmp_Vk_sum_code,
+                                    MATRIX_ *Vk_code)
+{
+    int row;
+    int col;
+
+    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */
+    /* Preconditions: W is fully populated and symmetric, Gkr = transpose(Grk), tmp_Grk_W_code = Grk * W. */
+    for (row = 0; row < internal_count; row++) {
+        for (col = 0; col < retained_count; col++) {
+            set_CODE(tmp_W_Gkr_code, row, col, get_CODE(tmp_Grk_W_code, col, row));
+        }
+    }
+    matrix_matXvec_CODE(tmp_W_Gkr_Vr_code, tmp_W_Gkr_code, Vr_code);
+    matrix_matXvec_CODE(tmp_W_Ihisk_code, W_code, Ihisk_code);
+    matrix_add_CODE(tmp_Vk_sum_code, tmp_W_Gkr_Vr_code, tmp_W_Ihisk_code);
+    matrix_scalarMult_CODE(Vk_code, tmp_Vk_sum_code, -1.0);
+}""",
+
+        "wgkr_only": """void network_node_recover_vk_from_wgkr_only(int retained_count, int internal_count,
+                                            MATRIX_ *tmp_W_Gkr_code,
+                                            MATRIX_ *Vr_code,
+                                            MATRIX_ *Vk_code)
+{
+    int row;
+    int col;
+
+    /* Legacy/static path: tmp_W_Gkr_code already stores W * Gkr, and no W*Ihisk term is present. */
+    for (row = 0; row < internal_count; row++) {
+        double core_v = 0.0;
+        for (col = 0; col < retained_count; col++) {
+            core_v += get_CODE(tmp_W_Gkr_code, row, col) * get_CODE(Vr_code, col, 0);
+        }
+        set_CODE(Vk_code, row, 0, -core_v);
+    }
+}""",
+    }
+
+
+def _ensure_vk_recovery_code_functions(draft: str) -> str:
+    helper_specs = [
+        ("diag", "network_node_recover_vk_diag(", "void network_node_recover_vk_diag"),
+        ("matrix", "network_node_recover_vk_matrix(", "void network_node_recover_vk_matrix"),
+        ("wgkr_only", "network_node_recover_vk_from_wgkr_only(", "void network_node_recover_vk_from_wgkr_only"),
+    ]
+    blocks_by_name = _vk_recovery_code_functions_blocks()
+    needed_blocks: list[str] = []
+    for key, call_marker, definition_marker in helper_specs:
+        if definition_marker in draft:
+            continue
+        if call_marker in draft:
+            needed_blocks.append(blocks_by_name[key])
+    if not needed_blocks:
+        return draft
+    block = "\n\n".join(needed_blocks).rstrip()
+    if "CODE_FUNCTIONS:" in draft:
+        return draft.replace("CODE_FUNCTIONS:\n", "CODE_FUNCTIONS:\n\n" + block + "\n", 1)
+    for marker in ("CODE:\n", "BEGIN_T0:\n", "T1_T2:\n"):
+        if marker in draft:
+            return draft.replace(marker, "CODE_FUNCTIONS:\n\n" + block + "\n\n" + marker, 1)
+    return draft.rstrip() + "\n\nCODE_FUNCTIONS:\n\n" + block + "\n"
+
+
 def _apply_final_retained_recovery_profiles_to_draft(
     draft: str,
     *,
@@ -6854,11 +7037,31 @@ def _apply_final_retained_recovery_profiles_to_draft(
             compute.append(line)
         return hoisted, "\n".join(compute).rstrip("\n")
 
-    def scalarize_diagonal_vk_recovery(block: str, active_nr_expr: str) -> str:
-        scalar_internal_expr = "internal_active" if "internal_active" in draft else "INTERNAL_NODES"
-        scalar_recovery = "\n".join(
-            _diagonal_gkk_scalar_vk_lines(active_nr_expr, internal_expr=scalar_internal_expr, indent=4)
+    def vk_internal_count_expr() -> str:
+        return "internal_active" if "internal_active" in draft else "INTERNAL_NODES"
+
+    def vk_diag_helper_call(active_nr_expr: str) -> str:
+        return (
+            f"    network_node_recover_vk_diag({active_nr_expr}, {vk_internal_count_expr()}, "
+            "&tmp_Grk_W_code, &Vr_code, &Ihisk_code, &W_code, &Vk_code);"
         )
+
+    def vk_matrix_helper_call(active_nr_expr: str) -> str:
+        return (
+            f"    network_node_recover_vk_matrix({active_nr_expr}, {vk_internal_count_expr()}, "
+            "&tmp_Grk_W_code, &tmp_W_Gkr_code, &Vr_code, &W_code, &Ihisk_code, "
+            "&tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code, &tmp_Vk_sum_code, &Vk_code);"
+        )
+
+    def vk_wgkr_only_helper_call(active_nr_expr: str) -> str:
+        return (
+            f"    network_node_recover_vk_from_wgkr_only({active_nr_expr}, {vk_internal_count_expr()}, "
+            "&tmp_W_Gkr_code, &Vr_code, &Vk_code);"
+        )
+
+    def replace_vk_recovery_with_helper(block: str, active_nr_expr: str, *, diagonal: bool) -> str:
+        helper_call = vk_diag_helper_call(active_nr_expr) if diagonal else vk_matrix_helper_call(active_nr_expr)
+        full_matrix_replaced = False
         for internal_expr in ("INTERNAL_NODES", "internal_active"):
             matrix_recovery = "\n".join([
                 "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
@@ -6872,7 +7075,18 @@ def _apply_final_retained_recovery_profiles_to_draft(
                 "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
                 "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
             ])
-            block = block.replace(matrix_recovery, scalar_recovery)
+            if matrix_recovery in block:
+                block = block.replace(matrix_recovery, helper_call)
+                full_matrix_replaced = True
+        simple_matrix_recovery = "\n".join([
+            "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+            "    matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);",
+        ])
+        if simple_matrix_recovery in block:
+            block = block.replace(simple_matrix_recovery, vk_wgkr_only_helper_call(active_nr_expr))
+            full_matrix_replaced = True
+        if not full_matrix_replaced and block.strip():
+            return helper_call
         return block
 
     def diagonal_w_case_ids_from_draft() -> set[int]:
@@ -6979,10 +7193,19 @@ def _apply_final_retained_recovery_profiles_to_draft(
     diagonal_w_case_ids: set[int] = set()
     if recovery_preamble:
         hoisted_recovery_preamble, case_recovery_preamble = split_recovery_preamble(recovery_preamble)
-        scalar_case_recovery_preamble = scalarize_diagonal_vk_recovery(case_recovery_preamble, "RETAINED_NODES")
-        scalar_case_recovery_preamble = scalarize_diagonal_vk_recovery(scalar_case_recovery_preamble, "node_active")
-        if scalar_case_recovery_preamble != case_recovery_preamble:
+        matrix_case_recovery_preamble = replace_vk_recovery_with_helper(
+            case_recovery_preamble,
+            "node_active" if "node_active" in case_recovery_preamble else "RETAINED_NODES",
+            diagonal=False,
+        )
+        scalar_case_recovery_preamble = replace_vk_recovery_with_helper(
+            case_recovery_preamble,
+            "node_active" if "node_active" in case_recovery_preamble else "RETAINED_NODES",
+            diagonal=True,
+        )
+        if scalar_case_recovery_preamble != matrix_case_recovery_preamble:
             diagonal_w_case_ids = diagonal_w_case_ids_from_draft()
+        case_recovery_preamble = matrix_case_recovery_preamble
     active_recovery_case_ids: list[int] = []
 
     for profile in profiles:
@@ -7086,7 +7309,8 @@ def _apply_final_retained_recovery_profiles_to_draft(
                 hoisted = "\n".join(hoisted_recovery_preamble).rstrip("\n")
                 prefix = (hoisted + "\n") if hoisted else ""
                 draft = draft.replace(marker, marker + prefix + "\n".join(lines) + "\n", 1)
-                return guard_recovery_only_matrix_setup(draft, active_recovery_case_ids)
+                draft = guard_recovery_only_matrix_setup(draft, active_recovery_case_ids)
+                return _ensure_vk_recovery_code_functions(draft)
         assignment_marker = "    /* One variable per eliminated node, in effective k order. */\n"
         start = draft.find(assignment_marker)
         if start >= 0:

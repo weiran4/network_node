@@ -3566,6 +3566,14 @@
       "Ihis: 0 (fixed)": "Ihis: 0 (fixed)",
       "强制最终消去；不恢复电压。": "Forced final elimination; voltage recovery disabled.",
       "Pack 外部节点必须保持": "Required Pack external nodes",
+      "Pack 外部端口必须保持原来的槽位、顺序和名称：": "Pack external ports must keep their original slots, order, and names:",
+      "当前不一致：": "Mismatch:",
+      "需要保持：": "Must keep:",
+      "当前为：": "Current:",
+      "需要端口身份：": "Expected port identities:",
+      "当前端口身份：": "Current port identities:",
+      "端口身份是后端固定 ID，用来判断外部端口槽位和顺序；即使节点显示名相同，端口身份变了也不能保存。": "Port identity is the fixed backend ID used to validate external port slots and order; saving is blocked if it changes even when the displayed node name is unchanged.",
+      "缺失": "Missing",
       "完成保存前，外部节点数量、名字、顺序必须与上表一致。": "Before saving, the external node count, names, and order must match this list.",
       "外部端口不一致，不能完成这个 Pack 工况": "External ports are inconsistent; this Pack case cannot be finished",
       "内部节点不一致，不能完成这个 Pack 工况": "Internal nodes are inconsistent; this Pack case cannot be finished",
@@ -13305,28 +13313,66 @@
       }
     }
 
+    function packageCasePortDisplayName(group, index) {
+      return String(group?.display || group?.id || "").trim() || `N${index + 1}`;
+    }
+
+    function packageCasePortIdentity(group, index) {
+      return String(group?.globalNet || group?.id || `N${index + 1}`).trim() || `N${index + 1}`;
+    }
+
     function packageCaseGroupSignature(groups = []) {
-      return groups.map(group => String(group.display || group.id || "").trim());
+      return (groups || []).map((group, index) => `${packageCasePortIdentity(group, index)}::${packageCasePortDisplayName(group, index)}`);
     }
 
     function packageCasePortRows(groups = []) {
-      return (groups || []).map((group, index) => {
-        const name = String(group.display || group.id || "").trim() || `N${index + 1}`;
-        const netId = String(group.globalNet || group.id || `N${index + 1}`).trim() || `N${index + 1}`;
-        return `${netId}. ${name}`;
-      });
+      return (groups || []).map((group, index) => `${index + 1}. ${packageCasePortDisplayName(group, index)}`);
+    }
+
+    function packageCasePortDebugLabel(group, index) {
+      return `${packageCasePortIdentity(group, index)} / ${packageCasePortDisplayName(group, index)}`;
     }
 
     function packageCasePortMismatchMessage(expectedGroups, actualGroups, message) {
-      const expected = packageCasePortRows(expectedGroups || []);
-      const current = packageCasePortRows(actualGroups || []);
-      const same = expected.length === current.length && expected.every((row, index) => {
-        const expectedName = packageCaseGroupSignature(expectedGroups || [])[index] || "";
-        const currentName = packageCaseGroupSignature(actualGroups || [])[index] || "";
-        return expectedName === currentName;
-      });
+      const expectedList = expectedGroups || [];
+      const actualList = actualGroups || [];
+      const expected = packageCasePortRows(expectedList);
+      const current = packageCasePortRows(actualList);
+      const expectedSignatures = packageCaseGroupSignature(expectedList);
+      const currentSignatures = packageCaseGroupSignature(actualList);
+      const same = expectedSignatures.length === currentSignatures.length && expectedSignatures.every((signature, index) => signature === currentSignatures[index]);
       if (same) return "";
-      return `${tr(message)}\nExpected: ${expected.join(", ") || "-"}\nCurrent: ${current.join(", ") || "-"}`;
+      const maxLen = Math.max(expectedSignatures.length, currentSignatures.length);
+      const mismatches = [];
+      for (let index = 0; index < maxLen; index++) {
+        if (expectedSignatures[index] === currentSignatures[index]) continue;
+        const expectedName = expectedList[index] ? packageCasePortDisplayName(expectedList[index], index) : tr("缺失");
+        const currentName = actualList[index] ? packageCasePortDisplayName(actualList[index], index) : tr("缺失");
+        const expectedId = expectedList[index] ? packageCasePortIdentity(expectedList[index], index) : tr("缺失");
+        const currentId = actualList[index] ? packageCasePortIdentity(actualList[index], index) : tr("缺失");
+        mismatches.push(optText(
+          `第 ${index + 1} 个外部端口应为 ${expectedName}（端口身份 ${expectedId}），当前为 ${currentName}（端口身份 ${currentId}）`,
+          `External port ${index + 1} should be ${expectedName} (port identity ${expectedId}); current is ${currentName} (port identity ${currentId})`
+        ));
+      }
+      const expectedDebug = expectedList.map((group, index) => `${index + 1}. ${packageCasePortDebugLabel(group, index)}`);
+      const currentDebug = actualList.map((group, index) => `${index + 1}. ${packageCasePortDebugLabel(group, index)}`);
+      const expectedIdentities = expectedList.map((group, index) => `${index + 1}. ${packageCasePortIdentity(group, index)}`);
+      const currentIdentities = actualList.map((group, index) => `${index + 1}. ${packageCasePortIdentity(group, index)}`);
+      console.warn("Pack external port mismatch", { expected: expectedDebug, current: currentDebug });
+      return [
+        tr(message),
+        "",
+        tr("Pack 外部端口必须保持原来的槽位、顺序和名称："),
+        `${tr("需要保持：")} ${expected.join(", ") || "-"}`,
+        `${tr("当前为：")} ${current.join(", ") || "-"}`,
+        tr("端口身份是后端固定 ID，用来判断外部端口槽位和顺序；即使节点显示名相同，端口身份变了也不能保存。"),
+        `${tr("需要端口身份：")} ${expectedIdentities.join(", ") || "-"}`,
+        `${tr("当前端口身份：")} ${currentIdentities.join(", ") || "-"}`,
+        "",
+        tr("当前不一致："),
+        ...(mismatches.length ? mismatches : [tr(message)])
+      ].join("\n");
     }
 
     function validatePackageCaseExternalSignature(branch, subsystem) {

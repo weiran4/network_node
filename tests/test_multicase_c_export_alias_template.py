@@ -1047,8 +1047,11 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn('getNodeNum(comp, "A")', draft)
         self.assertNotIn('getNodeNum(comp, "X")', draft)
         self.assertIn("T1_T2:", draft)
-        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", draft)
-        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", draft)
+        self.assertIn("void network_node_recover_vk_from_wgkr_only", draft)
+        self.assertIn("network_node_recover_vk_from_wgkr_only(RETAINED_NODES, internal_active", draft)
+        code_functions = draft.split("CODE_FUNCTIONS:", 1)[1].split("CODE:", 1)[0]
+        self.assertNotIn("void network_node_recover_vk_diag", code_functions)
+        self.assertNotIn("void network_node_recover_vk_matrix", code_functions)
         self.assertIn("case 1:", draft)
         self.assertIn("X = get_CODE(&Vk_code, 0, 0);", draft)
         self.assertNotIn("X = (G1/(G1 + G2))*A + (G2/(G1 + G2))*B;", draft)
@@ -1162,11 +1165,30 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertEqual(multi["fast_path"], "case_alias_template")
         self.assertIn("INTERNAL_NODES = 2", draft)
         self.assertIn("internal_active", draft)
-        self.assertIn("matrixDim(&Gkk_code, internal_active, internal_active);", draft)
-        self.assertIn("matrixDim(&W_code, internal_active, internal_active);", draft)
-        self.assertIn("matrixDim(&Gkr_code, internal_active, RETAINED_NODES);", draft)
-        self.assertIn("matrixDim(&Grk_code, RETAINED_NODES, internal_active);", draft)
-        self.assertIn("matrixDim(&Vk_code, internal_active, 1);", draft)
+        zero_profile = re.search(r"INTERNAL_NODES_CASE_(\d+) = 0", draft)
+        self.assertIsNotNone(zero_profile)
+        zero_profile_index = zero_profile.group(1)
+        self.assertIn(f"int internal_active = INTERNAL_NODES_CASE_{zero_profile_index};", draft)
+        self.assertIn(f"internal_profile = INTERNAL_CASE_{zero_profile_index};", draft)
+        self.assertIn(
+            "if (internal_active > 0) {\n"
+            "        err += matrixDim(&Grk_code, RETAINED_NODES, internal_active);",
+            draft,
+        )
+        self.assertIn("        err += matrixDim(&Gkk_code, internal_active, internal_active);", draft)
+        self.assertIn("        err += matrixDim(&W_code, internal_active, internal_active);", draft)
+        self.assertIn("        err += matrixDim(&Gkr_code, internal_active, RETAINED_NODES);", draft)
+        self.assertIn("        err += matrixDim(&Vk_code, internal_active, 1);", draft)
+        self.assertIn(
+            "if (internal_active > 0) {\n"
+            "        matrix_register(&Grk_code);",
+            draft,
+        )
+        self.assertIn(
+            "if (internal_active > 0) {\n"
+            "            conditionMatrixForCODE(&Grk_code);",
+            draft,
+        )
         self.assertIn("W_code", draft)
         self.assertIn("Gkr_code", draft)
         self.assertIn('getNodeNum(comp, "N1")', draft)
@@ -1193,18 +1215,27 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("set_CODE(&Vr_code, 0, 0, N1);", hoisted_recovery)
         self.assertIn("set_CODE(&Vr_code, 3, 0, N4);", hoisted_recovery)
         self.assertNotIn("set_CODE(&Vr_code", case_recovery)
+        self.assertIn("CODE_FUNCTIONS:", draft)
+        self.assertLess(draft.index("CODE_FUNCTIONS:"), draft.index("CODE:"))
+        code_functions = draft.split("CODE_FUNCTIONS:", 1)[1].split("CODE:", 1)[0]
+        self.assertEqual(code_functions.count("void network_node_recover_vk_diag"), 1)
+        self.assertEqual(code_functions.count("void network_node_recover_vk_matrix"), 1)
+        self.assertNotIn("void network_node_recover_vk_from_wgkr_only", code_functions)
+        self.assertIn("Preconditions: W is diagonal", code_functions)
+        self.assertIn("Preconditions: W is fully populated and symmetric", code_functions)
+        self.assertIn("for (k = 0; k < internal_count; k++)", code_functions)
+        self.assertIn("matrix_matXvec_CODE(tmp_W_Gkr_Vr_code, tmp_W_Gkr_code, Vr_code);", code_functions)
         recovery_case1 = case_recovery.split("case 1:", 1)[1].split("case 2:", 1)[0]
         recovery_case2 = case_recovery.split("case 2:", 1)[1].split("case 3:", 1)[0]
         recovery_case3 = case_recovery.split("case 3:", 1)[1].split("default:", 1)[0]
-        self.assertIn("Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W).", recovery_case1)
-        self.assertIn("Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W).", recovery_case2)
-        self.assertIn("for (int k = 0; k < internal_active; k++)", recovery_case1)
-        self.assertIn("for (int k = 0; k < internal_active; k++)", recovery_case2)
-        self.assertNotIn("for (int k = 0; k < INTERNAL_NODES; k++)", recovery_case1)
-        self.assertNotIn("for (int k = 0; k < INTERNAL_NODES; k++)", recovery_case2)
+        self.assertIn("network_node_recover_vk_diag(RETAINED_NODES, internal_active", recovery_case1)
+        self.assertIn("network_node_recover_vk_diag(RETAINED_NODES, internal_active", recovery_case2)
+        self.assertIn("network_node_recover_vk_matrix(RETAINED_NODES, internal_active", recovery_case3)
+        self.assertNotIn("for (int k = 0; k < internal_active; k++)", case_recovery)
+        self.assertNotIn("for (int k = 0; k < INTERNAL_NODES; k++)", case_recovery)
         self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case1)
         self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case2)
-        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case3)
+        self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case3)
         self.assertIn("Case-resolved Gkk inverse over active internal profile", draft)
         w_switch = draft.split("Case-resolved Gkk inverse over active internal profile", 1)[1].split(
             "/* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP",
@@ -1219,7 +1250,12 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", w_case1_case2)
         self.assertNotIn("set_CODE(&W_code, 1, 1", w_case1_case2)
         self.assertIn("mat_2x2_sym_inv_code", w_case3)
-        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertIn(
+            "if (internal_active > 0) {\n"
+            "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+            draft,
+        )
+        self.assertIn("No active internal nodes: Ihisred = Ihisr.", draft)
 
     def test_case_specific_recovery_reuses_template_vk_block_when_available(self):
         draft = """STATIC:
@@ -1260,8 +1296,12 @@ T1_T2:
         )
 
         self.assertIn("case 0:", updated)
-        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", updated)
-        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", updated)
+        self.assertIn("CODE_FUNCTIONS:", updated)
+        self.assertIn("void network_node_recover_vk_from_wgkr_only", updated)
+        self.assertIn("network_node_recover_vk_from_wgkr_only(RETAINED_NODES, INTERNAL_NODES", updated)
+        code_functions = updated.split("CODE_FUNCTIONS:", 1)[1].split("T1_T2:", 1)[0]
+        self.assertNotIn("void network_node_recover_vk_diag", code_functions)
+        self.assertNotIn("void network_node_recover_vk_matrix", code_functions)
         self.assertIn("pkg_internal_C2_0 = get_CODE(&Vk_code, 0, 0);", updated)
         self.assertIn("case 1:", updated)
         case1_block = updated.split("case 1:", 1)[1].split("default:", 1)[0]
@@ -1368,15 +1408,17 @@ T1_T2:
         self.assertIn("switch (case_id)", draft)
         self.assertNotIn("C2_case_id", draft)
         self.assertNotIn("Decode the optional global case selector into per-element local cases", draft)
-        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", draft)
-        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", draft)
+        self.assertIn("void network_node_recover_vk_from_wgkr_only", draft)
+        self.assertIn("network_node_recover_vk_from_wgkr_only(RETAINED_NODES, internal_active", draft)
+        code_functions = draft.split("CODE_FUNCTIONS:", 1)[1].split("CODE:", 1)[0]
+        self.assertNotIn("void network_node_recover_vk_diag", code_functions)
+        self.assertNotIn("void network_node_recover_vk_matrix", code_functions)
         self.assertIn("N2 = get_CODE(&Vk_code, 0, 0);", draft)
         self.assertIn("Recovery-only matrix setup is skipped", draft)
         recovery_switch = draft.split("Case-specific voltage recovery", 1)[1]
         case0_block = recovery_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
         case1_block = recovery_switch.split("case 1:", 1)[1].split("default:", 1)[0]
-        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", case0_block)
-        self.assertIn("matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);", case0_block)
+        self.assertIn("network_node_recover_vk_from_wgkr_only(RETAINED_NODES, internal_active", case0_block)
         self.assertNotIn("matrix_matXvec_CODE", case1_block)
         self.assertNotIn("matrix_scalarMult_CODE", case1_block)
         setup_switch = draft.split("Recovery-only matrix setup is skipped", 1)[1].split("CODE:", 1)[0]
