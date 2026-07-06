@@ -7771,6 +7771,296 @@ def _build_dummy_finalized_multi_case_c_draft(
     return _use_readable_dimension_names(_ensure_static_blank_line("\n".join(lines)))
 
 
+def _force_scalar_profile_results(payload: dict) -> tuple[object, list[dict], list[str], list[dict]]:
+    profiles = payload.get("case_profiles") or []
+    profile_set = build_finalization_profiles(profiles)
+    final_results: list[dict] = []
+    warnings: list[str] = [
+        "Info: force_scalar codegen expands each init-time case to scalar Schur formulas and skips runtime Gkk/W MATRIX_ objects."
+    ]
+    diagnoses: list[dict] = []
+
+    for case_index, source_profile in enumerate(profiles):
+        case_payload = source_profile.get("payload") or {}
+        super_result = _reduced_super_result_from_payload(case_payload)
+        final_profile = profile_set.case_profiles[case_index]
+        final = finalize_profile_result(
+            super_result["G"],
+            super_result["Ihis"],
+            super_result["external_nodes"],
+            final_profile,
+        )
+        display_names = {
+            str(key): str(value)
+            for key, value in (case_payload.get("node_display_names") or {}).items()
+        }
+        internal_count = len(super_result["internal_nodes"])
+        if internal_count > 3:
+            warnings.append(
+                f"Warning: case {case_index} force_scalar expands {internal_count} internal nodes; "
+                "generated C may become large."
+            )
+        diagnoses.append({
+            "case_id": case_index,
+            "internal_active": internal_count,
+            "recommended_mode": "scalar",
+            "reason": (
+                "No active internal node; scalar path bypasses Schur matrices."
+                if internal_count == 0
+                else "force_scalar requested; Schur result is emitted as case-specific scalar formulas."
+            ),
+        })
+        final_results.append({
+            "index": case_index,
+            "name": source_profile.get("name") or f"Case {case_index}",
+            "profile": final_profile,
+            "final": final,
+            "symbol_table": case_payload.get("symbol_dependency_table_tagged") or case_payload.get("symbol_dependency_table") or {},
+            "recovery_nodes": super_result["internal_nodes"],
+            "super_nodes": super_result["external_nodes"],
+            "K_v": super_result["K_v"],
+            "K_h": super_result["K_h"],
+            "super_node_c_names": display_names,
+            "recovery_node_c_names": display_names,
+            "node_c_names": display_names,
+        })
+
+    return profile_set, final_results, list(dict.fromkeys(warnings)), diagnoses
+
+
+def _build_force_scalar_multi_case_c_draft(
+    case_id_symbol: str,
+    profile_set,
+    final_results: list[dict],
+) -> tuple[str, list[dict]]:
+    max_dim = max((item["final"].G.rows for item in final_results), default=0)
+    symbols = _symbols_in_matrices(
+        *(item["final"].G for item in final_results),
+        *(item["final"].Ihis for item in final_results),
+        *(sp.Matrix(item.get("K_v") or []) for item in final_results),
+        *(sp.Matrix(item.get("K_h") or []) for item in final_results),
+    )
+    declarations = [f"    double {name} = 0.0;" for name in symbols if _c_identifier_name(name, name) == name]
+    ccode_cache: dict[str, str] = {}
+    stage_cache: dict[tuple[int, str], str] = {}
+    dynamic_gvalues: dict[tuple[str, str], dict] = {}
+    dynamic_case_assignments: dict[int, list[str]] = {}
+    gvalue_conditions: list[dict] = []
+
+    def emit_c(expr: object) -> str:
+        key = str(expr)
+        if key not in ccode_cache:
+            ccode_cache[key] = _ccode(expr)
+        return ccode_cache[key]
+
+    def stage_of(expr: sp.Expr, symbol_table: dict[str, str]) -> str:
+        key = (id(symbol_table), str(expr))
+        if key not in stage_cache:
+            stage_cache[key] = _expr_stage(expr, symbol_table)
+        return stage_cache[key]
+
+    def node_c_name(item: dict, node: object, index: int) -> str:
+        names = item.get("node_c_names") or {}
+        return _c_identifier_name(str(names.get(str(node), node)), f"N{index + 1}")
+
+    for item in final_results:
+        case_index = int(item.get("index", 0))
+        final = item["final"]
+        symbol_table = item.get("symbol_table") or {}
+        nodes = list(final.nodes)
+        for row in range(final.G.rows):
+            for col in range(row, final.G.cols):
+                expr = sp.sympify(final.G[row, col])
+                if expr == 0 or stage_of(expr, symbol_table) == "RAM":
+                    continue
+                left = str(nodes[row])
+                right = str(nodes[col])
+                left_name = node_c_name(item, left, row)
+                right_name = node_c_name(item, right, col)
+                var = f"varG_{left_name}_{right_name}"
+                entry = dynamic_gvalues.setdefault((left, right), {
+                    "var": var,
+                    "left": left,
+                    "right": right,
+                    "cases": [],
+                })
+                entry["cases"].append(case_index)
+                dynamic_case_assignments.setdefault(case_index, []).append(f"{var} = {emit_c(expr)};")
+
+    lines = [
+        "/* Multi-case C draft with forced scalar Schur expansion.",
+        "   Each init-time case is reduced to scalar final G/Ihis formulas;",
+        "   runtime Gkk/W MATRIX_ objects are intentionally not generated. */",
+        f"enum {{ NR_SUPER = {len(profile_set.super_node_order)}, NR_FINAL_MAX = {max_dim}, NCASE = {len(final_results)} }};",
+        "",
+        "LOCAL_STATIC:",
+        *(declarations or ["    /* No user symbols are required by the scalar-expanded formulas. */"]),
+        "",
+        "RAM_PASS1:",
+        "    int err = 0;",
+        "    /* Case-specific scalar-expanded RAM G stamp. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for item in final_results:
+        case_index = int(item.get("index", 0))
+        final = item["final"]
+        nodes = list(final.nodes)
+        dim = len(nodes)
+        lines.append(f"    case {case_index}:")
+        for node_index, node in enumerate(nodes):
+            lines.append(f"        g_mat_nods[{node_index}] = getNodeNum(comp, \"{node}\");")
+        lines.extend([
+            f"        for (int row = 0; row < {dim}; row++) {{",
+            f"            for (int col = 0; col < {dim}; col++) {{",
+            "                g_mat_over[row][col] = 0.0;",
+            "            }",
+            "        }",
+        ])
+        for row in range(final.G.rows):
+            for col in range(final.G.cols):
+                expr = sp.sympify(final.G[row, col])
+                if expr == 0 or stage_of(expr, item.get("symbol_table") or {}) != "RAM":
+                    continue
+                lines.append(f"        g_mat_over[{row}][{col}] = {emit_c(expr)};")
+        lines.extend([
+            f"        setupGMatrix({dim});",
+            "        break;",
+        ])
+    lines.extend([
+        "    default:",
+        "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
+        f"                       \"Unknown force-scalar multi-case profile %d for component %s.\", {case_id_symbol}, Name);",
+        "        break;",
+        "    }",
+        "    if (err > 0) {",
+        "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
+        "                       \"RTDS force-scalar allocation failed for component %s.\", Name);",
+        "    }",
+        "",
+    ])
+    if dynamic_gvalues:
+        lines.extend([
+            "GVALUES:",
+            "    /* Dynamic scalar-expanded final-G stamp handles. */",
+        ])
+        for entry in dynamic_gvalues.values():
+            condition = " || ".join(f"{case_id_symbol} == {case_index}" for case_index in sorted(set(entry["cases"])))
+            lines.append(
+                f"    double {entry['var']} = createGValue(\"{entry['var']}\", "
+                f"\"{entry['left']}\", \"{entry['right']}\", 0, \"{condition}\");"
+            )
+            gvalue_conditions.append({
+                "var": entry["var"],
+                "left": entry["left"],
+                "right": entry["right"],
+                "condition": condition,
+            })
+        lines.append("")
+    lines.extend([
+        "CODE:",
+        "BEGIN_T0:",
+    ])
+    if dynamic_case_assignments:
+        lines.extend([
+            "    /* Case-specific CODE-side scalar GValue refresh. */",
+            f"    switch ({case_id_symbol}) {{",
+        ])
+        for case_index in sorted(dynamic_case_assignments):
+            lines.append(f"    case {case_index}:")
+            lines.extend(f"        {assignment}" for assignment in dynamic_case_assignments[case_index])
+            lines.append("        break;")
+        lines.extend([
+            "    default:",
+            "        break;",
+            "    }",
+            "",
+        ])
+    lines.extend([
+        "    /* Node injection currents follow the scalar-expanded retained-node order. */",
+        f"    switch ({case_id_symbol}) {{",
+    ])
+    for item in final_results:
+        case_index = int(item.get("index", 0))
+        final = item["final"]
+        lines.append(f"    case {case_index}:")
+        for row, node in enumerate(final.nodes):
+            lines.append(f"        Inj{node_c_name(item, node, row)} = {emit_c(final.Ihis[row, 0])};")
+        lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+        "",
+        "T1_T2:",
+    ])
+    if any(item.get("recovery_nodes") for item in final_results):
+        lines.extend([
+            "    /* Case-specific scalar-expanded internal-node voltage recovery. */",
+            f"    switch ({case_id_symbol}) {{",
+        ])
+        for item in final_results:
+            case_index = int(item.get("index", 0))
+            lines.append(f"    case {case_index}:")
+            recovery_lines = _recovery_assignment_lines(item)
+            if recovery_lines:
+                lines.extend(recovery_lines)
+            else:
+                lines.append("        /* This Pack case has no recovered internal nodes. */")
+            lines.append("        break;")
+        lines.extend([
+            "    default:",
+            "        break;",
+            "    }",
+        ])
+    else:
+        lines.append("    /* No internal nodes were eliminated, so there is no Vk recovery step. */")
+    return _use_readable_dimension_names(_ensure_static_blank_line("\n".join(lines))), gvalue_conditions
+
+
+def _build_force_scalar_multi_case_response(payload: dict) -> dict:
+    profiles = payload.get("case_profiles") or []
+    case_id_symbol = str(payload.get("case_id_symbol") or "case_id")
+    profile_set, final_results, warnings, diagnoses = _force_scalar_profile_results(payload)
+    c_draft, gvalue_conditions = _build_force_scalar_multi_case_c_draft(
+        case_id_symbol,
+        profile_set,
+        final_results,
+    )
+    return {
+        "ok": True,
+        "mode": "multi_case_c_export",
+        "case_id_symbol": case_id_symbol,
+        "case_profiles": [
+            {
+                "index": index,
+                "name": str(profile.get("name") or f"Case {index}"),
+                "case_map": dict(profile.get("case_map") or {}),
+            }
+            for index, profile in enumerate(profiles)
+        ],
+        "warnings": warnings,
+        "multi_case": {
+            "codegen_mode": "force scalar Schur expansion",
+            "fast_path": "case_scalar_schur_expansion",
+            "profile_count": len(profiles),
+            "aliases": {},
+            "gvalue_conditions": gvalue_conditions,
+            "uses_case_conditional_gvalue": bool(gvalue_conditions),
+            "external_nodes": profile_set.super_node_order,
+            "effective_internal_nodes": [],
+            "block_type": "scalar_expanded",
+            "recovery_profiles": diagnoses,
+            "template_summary": {
+                "super_nodes": profile_set.super_node_order,
+                "NR_SUPER": len(profile_set.super_node_order),
+                "NR_FINAL_MAX": max((item["final"].G.rows for item in final_results), default=0),
+                "profile_dimensions": [item["final"].G.rows for item in final_results],
+            },
+            "c_draft": c_draft,
+        },
+    }
+
+
 def _dummy_finalized_formula_cost(final_results: list[dict]) -> int:
     cost = 0
     for item in final_results:
@@ -8242,11 +8532,14 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
         getattr(profile, "isolated_dummy_nodes", ())
         for profile in profile_set.case_profiles
     )
+    codegen_mode = str(payload.get("elimination_codegen_mode") or payload.get("codegen_mode") or "auto")
     use_matrix_dag_draft = bool(
         alias_model is not None
         and aliases
         and (
-            has_isolated_dummy_final_nodes
+            codegen_mode == "prefer_matrix"
+            or codegen_mode == "matrix"
+            or has_isolated_dummy_final_nodes
             or _dummy_finalized_matrix_dag_is_preferred(final_results)
         )
     )
@@ -8512,6 +8805,10 @@ def build_multi_case_response(payload: dict) -> dict:
         payload,
     )
     payload = {**payload, "case_profiles": profiles}
+    codegen_mode = str(payload.get("elimination_codegen_mode") or payload.get("codegen_mode") or "auto")
+    if codegen_mode == "force_scalar":
+        response = time_call("generate_c_text", _build_force_scalar_multi_case_response, payload)
+        return _attach_multicase_diagnostics(response, started, dummy_role_classification, timing_ms)
     has_dummy_finalization = time_call("build_finalization_profiles", _profiles_have_dummy_finalization, profiles)
     if has_dummy_finalization:
         response = time_call("dummy_finalization_pipeline", _build_dummy_finalized_multi_case_response, payload)

@@ -61,6 +61,23 @@ In that shape, generated CODE must keep Schur refresh logic case-specific:
 
 The RAM final-G replacement also must stop before the matrix lifecycle section. Accidentally swallowing `matrixDim`/`matrix_register` setup causes undeclared or unallocated runtime matrices later in CODE.
 
+## Elimination Codegen Mode
+
+Multi-case export now accepts `elimination_codegen_mode`:
+
+- `auto`: keep the default matrix-oriented structured path.
+- `prefer_matrix`: prefer the shared matrix DAG when a path has a matrix/formula heuristic.
+- `force_scalar`: expert/test mode. Each init-time case is reduced to scalar final `G/Ihis/Kv/Kh` formulas and the generated C skips runtime `Gkk/W/Grk/Gkr` `MATRIX_` objects.
+
+The force-scalar path is still Schur elimination mathematically. It only changes code generation: per-case scalar final stamps, case-conditional `GValue` entries for CODE-owned final G terms, and direct scalar internal-node recovery. It preserves the important guards:
+
+- zero-internal cases produce no internal matrix or recovery work;
+- dynamic GValue refresh is scoped to the cases that need it;
+- recovered internal nodes use user-facing node names from `node_display_names`;
+- dummy internal placeholders are never emitted as `Gkk = 1` / `W = 0` rows.
+
+Rollback point before this feature: commit `4bd3464 Guard pack dynamic internal profile codegen` on branch `codex/ui-engineering-polish`.
+
 ## Pack G Constant Edit Sync
 
 The side-panel G constant controls edit the Pack branch view, but export uses the active `packageOriginal.networkCases[index]` snapshot. Any `packedG.*` edit or batch "set all constant/non-constant" action must copy the current packaged branches back into the active network case before rendering/exporting.
@@ -85,6 +102,8 @@ Use the term "port identity" and explain that it is a fixed backend ID used to v
 - Do not let `default` internal profile fall back to the maximum-internal profile when a zero-internal profile exists.
 - Do not run CODE-side Schur refresh unconditionally just because one Pack case has CODE-owned GValues.
 - Do not let conditional RAM final-G replacement consume the matrix lifecycle block.
+- Do not treat `force_scalar` as a new mathematical reduction. It is a C codegen mode and must produce the same final Schur equations.
+- Do not let force-scalar CODE-owned G terms leak into RAM-only cases.
 - Do not trust Pack branch G constant edits unless the active network-case snapshot has been synchronized.
 - Do not expose backend IDs as if they were user node names.
 - Do not use display names alone for Pack external-port validation. Display names can be edited to hide a slot/order mistake.
@@ -99,4 +118,5 @@ python -m pytest tests/test_frontend_optimized_reuse.py -q
 python -m pytest tests/test_multicase_c_export_alias_template.py tests/test_multicase_common_dummy_internal_codegen.py tests/test_multicase_dummy_node_block.py tests/test_runtime_mutable_case_group.py -q
 python -m pytest tests/test_structured_formula_elimination.py tests/test_optimized_elimination.py -q
 python -m py_compile optimized_elimination_api.py
+git diff --check
 ```

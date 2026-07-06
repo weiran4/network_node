@@ -1557,6 +1557,124 @@ T1_T2:
         self.assertNotIn("get_CODE(&Gkk_code", case1_block)
         self.assertNotIn("get_CODE(&Gkr_code", case1_block)
 
+    def test_trf_ctest_dummy_small_varg_force_scalar_avoids_internal_matrix_dag(self):
+        fixture = Path("exports/Trf_Ctest_dummy_small_varG.json")
+        if not fixture.exists():
+            self.skipTest("Trf_Ctest_dummy_small_varG.json fixture is not available")
+        data = json.loads(fixture.read_text(encoding="utf-8"))
+        branch = next(
+            item for item in data.get("branches", [])
+            if item.get("packageOriginal", {}).get("networkCases")
+        )
+        cases = branch["packageOriginal"]["networkCases"]
+
+        def payload_from_saved_case(case: dict, package_branch_id: str) -> dict:
+            final_external = [
+                str(group.get("display") or group.get("globalNet") or group.get("id") or f"N{index + 1}")
+                for index, group in enumerate(case.get("finalExternalGroups") or [])
+            ]
+            final_internal = [
+                f"pkg-internal:{package_branch_id}:{index}"
+                for index, group in enumerate(case.get("finalInternalGroups") or [])
+            ]
+            display_names = {}
+            for node, group in zip(final_external, case.get("finalExternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            for node, group in zip(final_internal, case.get("finalInternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            all_nodes = [*final_external, *final_internal]
+            node_index = {node: index for index, node in enumerate(all_nodes)}
+            terminal_node: dict[str, str] = {}
+            for node, group in [
+                *zip(final_external, case.get("finalExternalGroups") or []),
+                *zip(final_internal, case.get("finalInternalGroups") or []),
+            ]:
+                for member in group.get("members") or []:
+                    terminal_node[str(member)] = node
+            G_full = sp.zeros(len(all_nodes), len(all_nodes))
+            Ihis_full = sp.zeros(len(all_nodes), 1)
+
+            def add_entry(row_node: str | None, col_node: str | None, expr: object) -> None:
+                if row_node not in node_index or col_node not in node_index:
+                    return
+                G_full[node_index[row_node], node_index[col_node]] += optimized_api._parse_expr(expr)
+
+            def add_ihis(row_node: str | None, expr: object) -> None:
+                if row_node not in node_index:
+                    return
+                Ihis_full[node_index[row_node], 0] += optimized_api._parse_expr(expr)
+
+            for saved_branch in case.get("branches") or []:
+                branch_id = str(saved_branch.get("id") or "")
+                if saved_branch.get("kind") != "two_node_branch":
+                    continue
+                node_a = terminal_node.get(f"{branch_id}.A")
+                node_b = terminal_node.get(f"{branch_id}.B")
+                g = optimized_api._parse_expr(saved_branch.get("g") or "0")
+                ihis = optimized_api._parse_expr(saved_branch.get("ihis") or "0")
+                add_entry(node_a, node_a, g)
+                add_entry(node_a, node_b, -g)
+                add_entry(node_b, node_a, -g)
+                add_entry(node_b, node_b, g)
+                add_ihis(node_a, ihis)
+                add_ihis(node_b, -ihis)
+
+            return {
+                "all_nodes": all_nodes,
+                "external_nodes": list(final_external),
+                "internal_nodes": list(final_internal),
+                "ground_nodes": [],
+                "node_display_names": display_names,
+                "G_full": optimized_api._clean_matrix(G_full),
+                "G_full_tagged": optimized_api._clean_matrix(G_full),
+                "Ihis_full": optimized_api._clean_vector(Ihis_full),
+                "Ihis_full_tagged": optimized_api._clean_vector(Ihis_full),
+                "direct_retained_stamps": [],
+                "finalExternalGroups": case.get("finalExternalGroups"),
+                "finalInternalGroups": case.get("finalInternalGroups"),
+                "finalGMatrix": case.get("finalGMatrix"),
+                "finalIhisVector": case.get("finalIhisVector"),
+                "finalK_v": case.get("finalK_v"),
+                "finalK_h": case.get("finalK_h"),
+            }
+
+        profiles = [
+            {
+                "case_id": index,
+                "name": case.get("name") or f"case {index}",
+                "case_map": {branch.get("id") or "C1": index},
+                "payload": payload_from_saved_case(case, branch.get("id") or "C1"),
+            }
+            for index, case in enumerate(cases)
+        ]
+        request = _request(profiles, deps=_deps("R", code=("Gvar",)), case_id="case_id")
+        response = build_multi_case_response({
+            **request,
+            "elimination_codegen_mode": "force_scalar",
+        })
+        draft = response["multi_case"]["c_draft"]
+
+        self.assertEqual(response["multi_case"]["codegen_mode"], "force scalar Schur expansion")
+        self.assertEqual(response["multi_case"]["fast_path"], "case_scalar_schur_expansion")
+        self.assertNotIn("MATRIX_ Gkk_code", draft)
+        self.assertNotIn("MATRIX_ W_code", draft)
+        self.assertNotIn("matrixDim(&Gkk_code", draft)
+        self.assertNotIn("matrix_mult_CODE", draft)
+        self.assertNotIn("get_CODE(&Gkk_code", draft)
+        self.assertIn("createGValue", draft)
+        self.assertIn("case_id == 0", draft)
+        self.assertIn("Gvar", draft)
+        self.assertIn("case 1:", draft)
+        case1_code = draft.split("CODE:", 1)[1].split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertNotIn("Gvar", case1_code)
+        self.assertNotIn("Gkk", case1_code)
+        recovery = draft.split("T1_T2:", 1)[1]
+        case0_recovery = recovery.split("case 0:", 1)[1].split("case 1:", 1)[0]
+        case1_recovery = recovery.split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertIn("N2 =", case0_recovery)
+        self.assertIn("This Pack case has no recovered internal nodes.", case1_recovery)
+        self.assertNotIn("get_CODE", recovery)
+
     def test_final_retained_adapter_allows_different_raw_internal_counts(self):
         def final_pack_payload(raw_internal: list[str], final_internal: list[str], g: str) -> dict:
             raw_nodes = ["N1", "N2", *raw_internal]

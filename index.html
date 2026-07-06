@@ -3072,6 +3072,7 @@
       optimizedEliminationSimplify: "light",
       optimizedEliminationAssumeSpd: true,
       optimizedEliminationUseSuggestedOrder: true,
+      eliminationCodegenMode: "auto",
       optimizedSymbolDependencyOverrides: "",
       multiCaseProfilesText: "",
       multiCaseProfilesKey: "",
@@ -3099,7 +3100,7 @@
     const CACHE_LIMIT = 16;
     const REDUCED_CACHE_VERSION = "reduced-safe-simplified-v1";
     const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v5-source-cse-static-assign";
-    const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v5-direct-residual-split";
+    const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v6-codegen-mode";
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
     const pythonDraftCache = new Map();
@@ -7009,7 +7010,8 @@
           editorGroups: structuredClone(state.editorGroups || {}),
           multiCaseProfilesText: state.multiCaseProfilesText || "",
           multiCaseProfilesKey: state.multiCaseProfilesKey || "",
-          multiCaseIdSymbol: state.multiCaseIdSymbol || "case_id"
+          multiCaseIdSymbol: state.multiCaseIdSymbol || "case_id",
+          eliminationCodegenMode: state.eliminationCodegenMode || "auto"
         },
         canvasOrder: canvases.map(item => item.id),
         canvases,
@@ -7031,6 +7033,7 @@
         multiCaseProfilesText: state.multiCaseProfilesText || "",
         multiCaseProfilesKey: state.multiCaseProfilesKey || "",
         multiCaseIdSymbol: state.multiCaseIdSymbol || "case_id",
+        eliminationCodegenMode: state.eliminationCodegenMode || "auto",
         selectedId: state.selectedId,
         selectedIds: structuredClone(state.selectedIds || []),
         selectedNetIds: structuredClone(state.selectedNetIds || []),
@@ -7062,6 +7065,7 @@
       state.multiCaseProfilesText = ui.multiCaseProfilesText ?? data?.multiCaseProfilesText ?? state.multiCaseProfilesText ?? "";
       state.multiCaseProfilesKey = ui.multiCaseProfilesKey ?? data?.multiCaseProfilesKey ?? state.multiCaseProfilesKey ?? "";
       state.multiCaseIdSymbol = ui.multiCaseIdSymbol ?? data?.multiCaseIdSymbol ?? state.multiCaseIdSymbol ?? "case_id";
+      state.eliminationCodegenMode = ui.eliminationCodegenMode ?? data?.eliminationCodegenMode ?? state.eliminationCodegenMode ?? "auto";
       applyPanelWidth();
     }
 
@@ -9923,6 +9927,7 @@
         runtime_case_groups,
         display_mode: state.optimizedEliminationDisplay || "compact",
         simplify_level: state.optimizedEliminationSimplify || "light",
+        elimination_codegen_mode: state.eliminationCodegenMode || "auto",
         assume_spd: state.optimizedEliminationAssumeSpd !== false,
         use_suggested_order: state.optimizedEliminationUseSuggestedOrder !== false,
         eligible_branches: branches.map(branch => ({
@@ -10000,6 +10005,7 @@
     function renderOptimizedControls() {
       const display = state.optimizedEliminationDisplay || "compact";
       const simplify = state.optimizedEliminationSimplify || "light";
+      const codegenMode = state.eliminationCodegenMode || "auto";
       const spd = state.optimizedEliminationAssumeSpd !== false;
       const overrides = state.optimizedSymbolDependencyOverrides || "";
       return `
@@ -10026,6 +10032,14 @@
                 <option value="full" ${simplify === "full" ? "selected" : ""}>完整 / Full</option>
               </select>
             </label>
+            <label class="field">
+              <span>${optText("消元代码生成", "Elimination codegen")}</span>
+              <select data-optimized-control="codegenMode">
+                <option value="auto" ${codegenMode === "auto" ? "selected" : ""}>${optText("自动推荐", "Auto")}</option>
+                <option value="prefer_matrix" ${codegenMode === "prefer_matrix" ? "selected" : ""}>${optText("优先矩阵", "Prefer matrix")}</option>
+                <option value="force_scalar" ${codegenMode === "force_scalar" ? "selected" : ""}>${optText("强制标量展开", "Force scalar")}</option>
+              </select>
+            </label>
             <label class="field checkbox-field">
               <span>${optText("对称正定/对称假设", "SPD / symmetric assumption")}</span>
               <input data-optimized-control="spd" type="checkbox" ${spd ? "checked" : ""}>
@@ -10035,7 +10049,7 @@
             <span>${optText("符号类别覆盖 JSON", "Symbol dependency overrides JSON")}</span>
             <textarea data-optimized-control="symbolDeps" rows="4" spellcheck="false" placeholder='{"Gtap":"CODE_VARIABLE","Ihis_a":"STEP_HISTORY"}'>${escapeHtml(overrides)}</textarea>
           </label>
-          <div class="actual-block-caption">${optText("默认：常数 G 符号进入 RAM_CONSTANT，非常数 G 符号进入 CODE_VARIABLE，Ihis/历史项符号进入 STEP_HISTORY；这里可以手动覆盖。", "Default: constant G symbols map to RAM_CONSTANT, non-constant G symbols to CODE_VARIABLE, and Ihis/history symbols to STEP_HISTORY. Use this JSON field for manual overrides.")}</div>
+          <div class="actual-block-caption">${optText("默认：常数 G 符号进入 RAM_CONSTANT，非常数 G 符号进入 CODE_VARIABLE，Ihis/历史项符号进入 STEP_HISTORY；强制标量展开是专家测试模式，会跳过运行时 Gkk/W 矩阵路线。", "Default: constant G symbols map to RAM_CONSTANT, non-constant G symbols to CODE_VARIABLE, and Ihis/history symbols to STEP_HISTORY. Force scalar is an expert test mode that skips runtime Gkk/W matrix codegen.")}</div>
         </div>
       `;
     }
@@ -11106,6 +11120,7 @@
       return JSON.stringify({
         version: MULTI_CASE_EXPORT_CACHE_VERSION,
         case_id_symbol: payload.case_id_symbol,
+        elimination_codegen_mode: payload.elimination_codegen_mode,
         eligible_branches: payload.eligible_branches,
         runtime_case_groups: payload.runtime_case_groups?.map(group => ({
           branch_id: group.branch_id,
@@ -16990,9 +17005,11 @@ function startResizeDrag(branch, handle, event) {
       const kind = control.dataset.optimizedControl;
       if (kind === "display") state.optimizedEliminationDisplay = control.value || "compact";
       if (kind === "simplify") state.optimizedEliminationSimplify = control.value || "light";
+      if (kind === "codegenMode") state.eliminationCodegenMode = control.value || "auto";
       if (kind === "spd") state.optimizedEliminationAssumeSpd = Boolean(control.checked);
       if (kind === "symbolDeps") state.optimizedSymbolDependencyOverrides = control.value || "";
       optimizedEliminationRenderToken += 1;
+      multiCaseExportRenderToken += 1;
       renderOutput();
     });
     function handleCodeDraftKeydown(event) {

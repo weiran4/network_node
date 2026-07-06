@@ -290,10 +290,10 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         source = Path("index.html").read_text(encoding="utf-8")
 
         self.assertIn(
-            'const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v5-direct-residual-split";',
+            'const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v6-codegen-mode";',
             source,
         )
-        self.assertNotIn("multi-case-runtime-mutable-v4-source-stage-split", source)
+        self.assertNotIn("multi-case-runtime-mutable-v5-direct-residual-split", source)
 
     def test_optimized_cache_version_invalidates_stale_source_cse_drafts(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -615,6 +615,18 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         batch_end = source.index("function applyCaseGConstBatch", batch_start)
         batch_source = source[batch_start:batch_end]
         self.assertIn("syncActivePackageNetworkCaseBranches(branch);", batch_source)
+
+    def test_multi_case_export_includes_elimination_codegen_mode_control(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn('eliminationCodegenMode: "auto"', source)
+        self.assertIn('state.eliminationCodegenMode || "auto"', source)
+        self.assertIn('elimination_codegen_mode: state.eliminationCodegenMode || "auto"', source)
+        self.assertIn('data-optimized-control="codegenMode"', source)
+        self.assertIn('<option value="auto"', source)
+        self.assertIn('<option value="prefer_matrix"', source)
+        self.assertIn('<option value="force_scalar"', source)
+        self.assertIn('if (kind === "codegenMode") state.eliminationCodegenMode = control.value || "auto";', source)
 
     def test_packaged_n_dummy_ports_are_marked_and_payload_uses_current_groups(self):
         source = Path("index.html").read_text(encoding="utf-8")
