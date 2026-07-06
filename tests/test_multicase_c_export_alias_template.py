@@ -1161,6 +1161,12 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         draft = multi["c_draft"]
         self.assertEqual(multi["fast_path"], "case_alias_template")
         self.assertIn("INTERNAL_NODES = 2", draft)
+        self.assertIn("internal_active", draft)
+        self.assertIn("matrixDim(&Gkk_code, internal_active, internal_active);", draft)
+        self.assertIn("matrixDim(&W_code, internal_active, internal_active);", draft)
+        self.assertIn("matrixDim(&Gkr_code, internal_active, RETAINED_NODES);", draft)
+        self.assertIn("matrixDim(&Grk_code, RETAINED_NODES, internal_active);", draft)
+        self.assertIn("matrixDim(&Vk_code, internal_active, 1);", draft)
         self.assertIn("W_code", draft)
         self.assertIn("Gkr_code", draft)
         self.assertIn('getNodeNum(comp, "N1")', draft)
@@ -1181,21 +1187,37 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertNotIn("Gkk[k1,k1]", draft)
         self.assertIn("case 3:", draft)
         self.assertNotIn("No internal nodes were eliminated, so there is no Vk recovery step.", draft)
-        self.assertIn("Case-resolved Gkk inverse. Placeholder-only rows are skipped", draft)
-        w_switch = draft.split("Case-resolved Gkk inverse. Placeholder-only rows are skipped", 1)[1].split(
+        t1_t2 = draft.split("T1_T2:", 1)[1]
+        hoisted_recovery = t1_t2.split("Case-specific voltage recovery", 1)[0]
+        case_recovery = t1_t2.split("Case-specific voltage recovery", 1)[1]
+        self.assertIn("set_CODE(&Vr_code, 0, 0, N1);", hoisted_recovery)
+        self.assertIn("set_CODE(&Vr_code, 3, 0, N4);", hoisted_recovery)
+        self.assertNotIn("set_CODE(&Vr_code", case_recovery)
+        recovery_case1 = case_recovery.split("case 1:", 1)[1].split("case 2:", 1)[0]
+        recovery_case2 = case_recovery.split("case 2:", 1)[1].split("case 3:", 1)[0]
+        recovery_case3 = case_recovery.split("case 3:", 1)[1].split("default:", 1)[0]
+        self.assertIn("Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W).", recovery_case1)
+        self.assertIn("Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W).", recovery_case2)
+        self.assertIn("for (int k = 0; k < internal_active; k++)", recovery_case1)
+        self.assertIn("for (int k = 0; k < internal_active; k++)", recovery_case2)
+        self.assertNotIn("for (int k = 0; k < INTERNAL_NODES; k++)", recovery_case1)
+        self.assertNotIn("for (int k = 0; k < INTERNAL_NODES; k++)", recovery_case2)
+        self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case1)
+        self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case2)
+        self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case3)
+        self.assertIn("Case-resolved Gkk inverse over active internal profile", draft)
+        w_switch = draft.split("Case-resolved Gkk inverse over active internal profile", 1)[1].split(
             "/* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP",
             1,
         )[0]
         w_case0 = w_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
-        w_case1 = w_switch.split("case 1:", 1)[1].split("case 2:", 1)[0]
-        w_case2 = w_switch.split("case 2:", 1)[1].split("case 3:", 1)[0]
+        w_case1_case2 = w_switch.split("case 1:", 1)[1].split("case 3:", 1)[0]
         w_case3 = w_switch.split("case 3:", 1)[1].split("default:", 1)[0]
-        self.assertIn("set_CODE(&W_code, 0, 0, 0.0);", w_case0)
-        self.assertIn("set_CODE(&W_code, 1, 1, 0.0);", w_case0)
-        self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", w_case1)
-        self.assertIn("set_CODE(&W_code, 1, 1, 0.0);", w_case1)
-        self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", w_case2)
-        self.assertIn("set_CODE(&W_code, 1, 1, 0.0);", w_case2)
+        self.assertIn("This Pack case has no active internal nodes.", w_case0)
+        self.assertNotIn("set_CODE(&W_code", w_case0)
+        self.assertIn("case 2:", w_case1_case2)
+        self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", w_case1_case2)
+        self.assertNotIn("set_CODE(&W_code, 1, 1", w_case1_case2)
         self.assertIn("mat_2x2_sym_inv_code", w_case3)
         self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
 
@@ -1535,6 +1557,32 @@ T1_T2:
         multi = response["multi_case"]
         draft = multi["c_draft"]
         self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assertEqual(
+            multi["internal_layout_profiles"],
+            [
+                {
+                    "profile_id": "INTERNAL_CASE_0",
+                    "case_ids": [1],
+                    "ordered_active_internal_nodes": ["K1", "K2"],
+                    "active_internal_count": 2,
+                    "internal_to_active_index": {"K1": 0, "K2": 1},
+                    "placeholder_internal_nodes": [],
+                },
+                {
+                    "profile_id": "INTERNAL_CASE_1",
+                    "case_ids": [0],
+                    "ordered_active_internal_nodes": ["K1"],
+                    "active_internal_count": 1,
+                    "internal_to_active_index": {"K1": 0},
+                    "placeholder_internal_nodes": ["K2"],
+                },
+            ],
+        )
+        self.assertIn("internal_profile = INTERNAL_CASE_1;", draft)
+        self.assertIn("internal_active = INTERNAL_NODES_CASE_1;", draft)
+        self.assertIn("matrixDim(&Gkk_code, internal_active, internal_active);", draft)
+        self.assertIn("matrixDim(&Gkr_code, internal_active, RETAINED_NODES);", draft)
+        self.assertNotIn("set_CODE(&W_code, 1, 1, 0.0);", draft)
         self.assertIn("Gkk_code", draft)
         self.assertNotIn("no eliminated internal nodes", draft)
         self.assertIn("Case-specific voltage recovery", draft)

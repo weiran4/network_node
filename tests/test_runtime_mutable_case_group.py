@@ -230,7 +230,16 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         self.assertEqual(diagnostics["runtime_case_count_per_group"], {"UCM": 2})
         self.assertNotEqual(diagnostics["init_time_case_count"], 8)
         self.assertTrue(any(info.get("runtime_mutable") for info in response["multi_case"]["aliases"].values()))
-        self.assertIn("switch (runtime_UCM_case_id)", response["multi_case"]["c_draft"])
+        draft = response["multi_case"]["c_draft"]
+        self.assertIn("switch (runtime_UCM_case_id)", draft)
+        self.assertIn("Decode the optional global case selector into per-element local cases", draft)
+        local_decode = draft.split("Decode the optional global case selector into per-element local cases", 1)[1].split(
+            "/* Resolve",
+            1,
+        )[0]
+        self.assertIn("case 3:", local_decode)
+        self.assertNotIn("case 4:", local_decode)
+        self.assertNotIn("runtime base", local_decode)
 
     def test_unchanged_runtime_expression_does_not_force_runtime_alias(self):
         response = build_multi_case_response(_runtime_request("G_const", "G_const", deps=_deps("G_const")))

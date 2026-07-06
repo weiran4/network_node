@@ -1655,7 +1655,7 @@ def _final_retained_profile_adapter(profiles: list[dict]) -> tuple[list[dict], l
         next_profile["payload"] = next_payload
         normalized_profiles.append(next_profile)
         try:
-            profile_case_id = int(profile.get("case_id", profile_index))
+            profile_case_id = int(profile.get("_init_profile_index", profile.get("case_id", profile_index)))
         except (TypeError, ValueError):
             profile_case_id = profile_index
         recovery_profiles.append({
@@ -1780,7 +1780,7 @@ def _gkk_placeholder_profile_adapter(profiles: list[dict]) -> tuple[list[dict], 
         normalized_profiles.append(next_profile)
 
         try:
-            profile_case_id = int(profile.get("case_id", profile_index))
+            profile_case_id = int(profile.get("_init_profile_index", profile.get("case_id", profile_index)))
         except (TypeError, ValueError):
             profile_case_id = profile_index
         recovery_nodes = [str(node) for node in (reduced.get("internal_nodes") or [])]
@@ -1955,6 +1955,32 @@ def _profiles_with_runtime_case_samples(payload: dict, profiles: list[dict], run
                     "_runtime_branch_id": branch_id,
                 })
     return expanded
+
+
+def _init_profiles_from_sample_profiles(sample_profiles: Sequence[dict]) -> list[dict]:
+    """Return one codegen profile per init-time case.
+
+    Runtime-mutable samples are added only so alias analysis can see the
+    runtime case values. They must not become external case_id entries.
+    """
+    profiles_by_init: dict[int, dict] = {}
+    for sample_index, profile in enumerate(sample_profiles):
+        try:
+            init_index = int(profile.get("_init_profile_index", profile.get("case_id", sample_index)))
+        except (TypeError, ValueError):
+            init_index = sample_index
+        if init_index in profiles_by_init and profile.get("_runtime_branch_id"):
+            continue
+        next_profile = json.loads(json.dumps(profile))
+        next_profile.pop("_runtime_branch_id", None)
+        next_profile["_init_profile_index"] = init_index
+        next_profile["case_id"] = int(next_profile.get("case_id", init_index) or init_index)
+        name = str(next_profile.get("name") or "")
+        suffix = " / runtime base"
+        if name.endswith(suffix):
+            next_profile["name"] = name[: -len(suffix)]
+        profiles_by_init[init_index] = next_profile
+    return [profiles_by_init[index] for index in sorted(profiles_by_init)]
 
 
 def _position_depends_only_on_branch(
@@ -2837,15 +2863,21 @@ def _build_multicase_alias_template_payload(payload: dict) -> dict | None:
     template_payload["symbol_dependency_table"] = dep_table
     template_payload["symbol_dependency_table_tagged"] = tagged_dep_table
     _rewrite_direct_retained_stamps_with_aliases(template_payload, local_direct_replacements)
+    init_profiles = _init_profiles_from_sample_profiles(sample_profiles)
+    internal_layout_profiles = _internal_layout_profiles_from_recovery(
+        final_recovery_profiles,
+        template_payload.get("internal_nodes") or [],
+    )
 
     return {
         "template_payload": template_payload,
         "aliases": aliases,
-        "profiles": sample_profiles,
+        "profiles": init_profiles,
         "sample_profiles": sample_profiles,
         "branch_ids": [branch_id for branch_id in branch_ids if branch_id not in runtime_groups],
         "runtime_case_groups": list(runtime_groups.values()),
         "final_recovery_profiles": final_recovery_profiles,
+        "internal_layout_profiles": internal_layout_profiles,
     }
 
 
@@ -4034,6 +4066,409 @@ def _active_internal_rows_by_case(
         for case_id in profile.get("case_ids") or []:
             rows_by_case[int(case_id)] = set(rows)
     return rows_by_case
+
+
+def _internal_layout_profiles_from_recovery(
+    recovery_profiles: Sequence[Mapping] | None,
+    template_internal_nodes: Sequence[str] | None,
+) -> list[dict]:
+    template_internal_nodes = [str(node) for node in (template_internal_nodes or [])]
+    if not template_internal_nodes:
+        return []
+    grouped: dict[tuple[str, ...], dict] = {}
+    for profile in recovery_profiles or []:
+        active = tuple(
+            node
+            for node in template_internal_nodes
+            if node in {str(item) for item in (profile.get("recovery_nodes") or [])}
+        )
+        placeholder = [node for node in template_internal_nodes if node not in set(active)]
+        entry = grouped.setdefault(
+            active,
+            {
+                "case_ids": [],
+                "ordered_active_internal_nodes": list(active),
+                "active_internal_count": len(active),
+                "internal_to_active_index": {
+                    node: index
+                    for index, node in enumerate(active)
+                },
+                "placeholder_internal_nodes": placeholder,
+            },
+        )
+        for case_id in profile.get("case_ids") or []:
+            case_index = int(case_id)
+            entry["case_ids"].append(case_index)
+    if not grouped:
+        return []
+    profiles = sorted(grouped.values(), key=lambda item: (-int(item["active_internal_count"]), item["case_ids"]))
+    if len(profiles) < 2:
+        return []
+    if int(profiles[0]["active_internal_count"]) == int(profiles[-1]["active_internal_count"]):
+        return []
+    for index, item in enumerate(profiles):
+        item["case_ids"] = sorted(dict.fromkeys(int(case_id) for case_id in item["case_ids"]))
+        item["profile_id"] = f"INTERNAL_CASE_{index}"
+    return profiles
+
+
+def _replace_enum_for_internal_layouts(draft: str, profiles: Sequence[Mapping]) -> str:
+    enum_match = re.search(r"enum \{ ([^}]*INTERNAL_NODES\s*=\s*\d+[^}]*) \};", draft)
+    if enum_match is None:
+        return draft
+    enum_body = enum_match.group(1)
+    additions: list[str] = []
+    for index, profile in enumerate(profiles):
+        additions.append(f"INTERNAL_CASE_{index} = {index}")
+    for index, profile in enumerate(profiles):
+        additions.append(f"INTERNAL_NODES_CASE_{index} = {int(profile.get('active_internal_count') or 0)}")
+    replacement = f"enum {{ {enum_body}, {', '.join(additions)} }};"
+    return draft[:enum_match.start()] + replacement + draft[enum_match.end():]
+
+
+def _insert_internal_profile_state(draft: str, profiles: Sequence[Mapping]) -> str:
+    if "int internal_active =" in draft:
+        return draft
+    default = str(profiles[0].get("profile_id") or "INTERNAL_CASE_0")
+    default_count = "INTERNAL_NODES_CASE_0"
+    lines = [
+        f"    int internal_profile = {default};",
+        f"    int internal_active = {default_count};",
+    ]
+    marker = "    /* Runtime state */\n"
+    if marker in draft:
+        return draft.replace(marker, marker + "\n".join(lines) + "\n", 1)
+    return draft.replace("STATIC:\n", "STATIC:\n" + "\n".join(lines) + "\n", 1)
+
+
+def _insert_internal_profile_selection(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: Sequence[Mapping],
+) -> str:
+    if "Select active internal-node profile" in draft:
+        return draft
+    lines = [
+        "    /* Select active internal-node profile; backend placeholders are pruned before Schur matrix setup. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for profile in profiles:
+        for case_id in profile.get("case_ids") or []:
+            lines.append(f"    case {int(case_id)}:")
+        profile_index = int(str(profile.get("profile_id") or "INTERNAL_CASE_0").rsplit("_", 1)[-1])
+        lines.extend([
+            f"        internal_profile = INTERNAL_CASE_{profile_index};",
+            f"        internal_active = INTERNAL_NODES_CASE_{profile_index};",
+            "        break;",
+        ])
+    lines.extend([
+        "    default:",
+        "        internal_profile = INTERNAL_CASE_0;",
+        "        internal_active = INTERNAL_NODES_CASE_0;",
+        "        break;",
+        "    }",
+    ])
+    marker = "    int err = 0;\n"
+    if marker in draft:
+        return draft.replace(marker, "\n".join(lines) + "\n" + marker, 1)
+    return draft.replace("RAM_PASS1:\n", "RAM_PASS1:\n" + "\n".join(lines) + "\n", 1)
+
+
+def _apply_internal_active_matrix_dimensions(draft: str) -> str:
+    replacements = {
+        "matrixDim(&Grk_code, RETAINED_NODES, INTERNAL_NODES);": "matrixDim(&Grk_code, RETAINED_NODES, internal_active);",
+        "matrixDim(&Gkr_code, INTERNAL_NODES, RETAINED_NODES);": "matrixDim(&Gkr_code, internal_active, RETAINED_NODES);",
+        "matrixDim(&Gkk_code, INTERNAL_NODES, INTERNAL_NODES);": "matrixDim(&Gkk_code, internal_active, internal_active);",
+        "matrixDim(&W_code, INTERNAL_NODES, INTERNAL_NODES);": "matrixDim(&W_code, internal_active, internal_active);",
+        "matrixDim(&Ihisk_code, INTERNAL_NODES, 1);": "matrixDim(&Ihisk_code, internal_active, 1);",
+        "matrixDim(&Vk_code, INTERNAL_NODES, 1);": "matrixDim(&Vk_code, internal_active, 1);",
+        "matrixDim(&tmp_Grk_W_code, RETAINED_NODES, INTERNAL_NODES);": "matrixDim(&tmp_Grk_W_code, RETAINED_NODES, internal_active);",
+        "matrixDim(&tmp_W_Gkr_code, INTERNAL_NODES, RETAINED_NODES);": "matrixDim(&tmp_W_Gkr_code, internal_active, RETAINED_NODES);",
+        "matrixDim(&tmp_W_Gkr_Vr_code, INTERNAL_NODES, 1);": "matrixDim(&tmp_W_Gkr_Vr_code, internal_active, 1);",
+        "matrixDim(&tmp_W_Ihisk_code, INTERNAL_NODES, 1);": "matrixDim(&tmp_W_Ihisk_code, internal_active, 1);",
+        "matrixDim(&tmp_Vk_sum_code, INTERNAL_NODES, 1);": "matrixDim(&tmp_Vk_sum_code, internal_active, 1);",
+    }
+    for old, new in replacements.items():
+        draft = draft.replace(old, new)
+    return draft
+
+
+_SET_CODE_RE = re.compile(
+    r"    set_CODE\(&(?P<name>Grk_code|Gkr_code|Gkk_code|Ihisk_code), "
+    r"(?P<row>\d+), (?P<col>\d+), (?P<expr>[^;]+)\);\n"
+)
+
+
+def _remap_internal_set_code_line(
+    name: str,
+    row: int,
+    col: int,
+    expr: str,
+    active_index: Mapping[str, int],
+    template_internal_nodes: Sequence[str],
+    *,
+    retained_count: int,
+) -> str | None:
+    node_to_global = {node: index for index, node in enumerate(template_internal_nodes)}
+    global_to_active = {
+        node_to_global[node]: int(active)
+        for node, active in active_index.items()
+        if node in node_to_global
+    }
+    if name == "Grk_code":
+        if col not in global_to_active:
+            return None
+        return f"        set_CODE(&Grk_code, {row}, {global_to_active[col]}, {expr});"
+    if name == "Gkr_code":
+        if row not in global_to_active:
+            return None
+        return f"        set_CODE(&Gkr_code, {global_to_active[row]}, {col}, {expr});"
+    if name == "Gkk_code":
+        if row not in global_to_active or col not in global_to_active:
+            return None
+        return f"        set_CODE(&Gkk_code, {global_to_active[row]}, {global_to_active[col]}, {expr});"
+    if name == "Ihisk_code":
+        if row not in global_to_active:
+            return None
+        return f"        set_CODE(&Ihisk_code, {global_to_active[row]}, {col}, {expr});"
+    return None
+
+
+def _replace_internal_matrix_set_code_blocks(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: Sequence[Mapping],
+    template_internal_nodes: Sequence[str],
+    retained_count: int,
+) -> str:
+    matches = list(_SET_CODE_RE.finditer(draft))
+    if not matches:
+        return draft
+    matrix_entries = [
+        (
+            match.group("name"),
+            int(match.group("row")),
+            int(match.group("col")),
+            match.group("expr"),
+        )
+        for match in matches
+    ]
+    lines = [
+        "    /* Active internal profile matrix setup; backend placeholder rows are not written. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for profile in profiles:
+        for case_id in profile.get("case_ids") or []:
+            lines.append(f"    case {int(case_id)}:")
+        active_index = profile.get("internal_to_active_index") or {}
+        if not active_index:
+            lines.append("        /* This Pack case has no active internal nodes. */")
+        else:
+            emitted: list[str] = []
+            for name, row, col, expr in matrix_entries:
+                line = _remap_internal_set_code_line(
+                    name,
+                    row,
+                    col,
+                    expr,
+                    active_index,
+                    template_internal_nodes,
+                    retained_count=retained_count,
+                )
+                if line is not None:
+                    emitted.append(line)
+            lines.extend(dict.fromkeys(emitted))
+        lines.append("        break;")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+    ])
+    insertion = "\n".join(lines) + "\n"
+    parts: list[str] = []
+    last = 0
+    inserted = False
+    for match in matches:
+        parts.append(draft[last:match.start()])
+        if not inserted:
+            parts.append(insertion)
+            inserted = True
+        last = match.end()
+    parts.append(draft[last:])
+    return "".join(parts)
+
+
+def _active_gkk_template(
+    gkk_template: sp.Matrix,
+    profile: Mapping,
+    template_internal_nodes: Sequence[str],
+) -> sp.Matrix:
+    node_to_row = {str(node): index for index, node in enumerate(template_internal_nodes)}
+    rows = [
+        node_to_row[str(node)]
+        for node in (profile.get("ordered_active_internal_nodes") or [])
+        if str(node) in node_to_row
+    ]
+    if not rows:
+        return sp.zeros(0, 0)
+    return sp.Matrix(gkk_template).extract(rows, rows)
+
+
+def _w_inverse_lines_for_internal_profile(
+    *,
+    profile: Mapping,
+    profile_index: int,
+    gkk_template: sp.Matrix,
+    case_profile: Mapping,
+    aliases: Mapping[str, Mapping],
+    template_internal_nodes: Sequence[str],
+    indent: int = 8,
+) -> list[str]:
+    active_count = int(profile.get("active_internal_count") or 0)
+    prefix = " " * indent
+    if active_count == 0:
+        return [f"{prefix}/* This Pack case has no active internal nodes. */"]
+    active_gkk = _active_gkk_template(gkk_template, profile, template_internal_nodes)
+    if _case_resolved_matrix_is_diagonal(active_gkk, case_profile, aliases, profile_index):
+        return _diagonal_w_code_lines(active_count, indent)
+    if active_count == 1:
+        return [f"{prefix}set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));"]
+    if active_count == 2:
+        return [
+            f"{prefix}double W_code_11 = 0.0;",
+            f"{prefix}double W_code_12 = 0.0;",
+            f"{prefix}double W_code_22 = 0.0;",
+            f"{prefix}mat_2x2_sym_inv_code(get_CODE(&Gkk_code, 0, 0), get_CODE(&Gkk_code, 0, 1), get_CODE(&Gkk_code, 1, 1),",
+            f"{prefix}                     &W_code_11, &W_code_12, &W_code_22);",
+            f"{prefix}set_CODE(&W_code, 0, 0, W_code_11);",
+            f"{prefix}set_CODE(&W_code, 0, 1, W_code_12);",
+            f"{prefix}set_CODE(&W_code, 1, 0, W_code_12);",
+            f"{prefix}set_CODE(&W_code, 1, 1, W_code_22);",
+        ]
+    if active_count == 3:
+        return [
+            f"{prefix}double W_code_11 = 0.0;",
+            f"{prefix}double W_code_12 = 0.0;",
+            f"{prefix}double W_code_13 = 0.0;",
+            f"{prefix}double W_code_22 = 0.0;",
+            f"{prefix}double W_code_23 = 0.0;",
+            f"{prefix}double W_code_33 = 0.0;",
+            f"{prefix}mat_3x3_sym_inv_code(get_CODE(&Gkk_code, 0, 0), get_CODE(&Gkk_code, 0, 1), get_CODE(&Gkk_code, 0, 2),",
+            f"{prefix}                     get_CODE(&Gkk_code, 1, 1), get_CODE(&Gkk_code, 1, 2), get_CODE(&Gkk_code, 2, 2),",
+            f"{prefix}                     &W_code_11, &W_code_12, &W_code_13, &W_code_22, &W_code_23, &W_code_33);",
+            f"{prefix}set_CODE(&W_code, 0, 0, W_code_11);",
+            f"{prefix}set_CODE(&W_code, 0, 1, W_code_12);",
+            f"{prefix}set_CODE(&W_code, 0, 2, W_code_13);",
+            f"{prefix}set_CODE(&W_code, 1, 0, W_code_12);",
+            f"{prefix}set_CODE(&W_code, 1, 1, W_code_22);",
+            f"{prefix}set_CODE(&W_code, 1, 2, W_code_23);",
+            f"{prefix}set_CODE(&W_code, 2, 0, W_code_13);",
+            f"{prefix}set_CODE(&W_code, 2, 1, W_code_23);",
+            f"{prefix}set_CODE(&W_code, 2, 2, W_code_33);",
+        ]
+    return [f"{prefix}MATH_matx_invert(&W_code, &Gkk_code);"]
+
+
+def _replace_internal_profile_w_inverse(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: Sequence[Mapping],
+    case_profiles: Sequence[Mapping],
+    aliases: Mapping[str, Mapping],
+    gkk_template: sp.Matrix,
+    template_internal_nodes: Sequence[str],
+) -> str:
+    marker = "    /* Case-resolved Gkk inverse"
+    start = draft.find(marker)
+    if start < 0:
+        return draft
+    end_marker = "    /* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP"
+    end = draft.find(end_marker, start)
+    if end < 0:
+        for fallback_marker in (
+            "    /* Node injection currents follow the retained-node order of the reduced system. */",
+            "\nT1_T2:",
+        ):
+            end = draft.find(fallback_marker, start)
+            if end >= 0:
+                break
+    if end < 0:
+        return draft
+    case_by_id = {
+        int(profile.get("case_id", index) or index): profile
+        for index, profile in enumerate(case_profiles)
+    }
+    lines = [
+        "    /* Case-resolved Gkk inverse over active internal profile; backend placeholders are pruned. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for profile in profiles:
+        profile_cases = [int(case_id) for case_id in (profile.get("case_ids") or [])]
+        for case_id in profile_cases:
+            lines.append(f"    case {case_id}:")
+        representative = profile_cases[0] if profile_cases else 0
+        lines.append("    {")
+        lines.extend(
+            _w_inverse_lines_for_internal_profile(
+                profile=profile,
+                profile_index=representative,
+                gkk_template=gkk_template,
+                case_profile=case_by_id.get(representative, {}),
+                aliases=aliases,
+                template_internal_nodes=template_internal_nodes,
+                indent=8,
+            )
+        )
+        lines.append("        break;")
+        lines.append("    }")
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+        "",
+    ])
+    return draft[:start] + "\n".join(lines) + draft[end:]
+
+
+def _apply_internal_layout_profile_compaction(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: Sequence[Mapping],
+    aliases: Mapping[str, Mapping],
+    gkk_template: sp.Matrix,
+    template_internal_nodes: Sequence[str],
+    internal_layout_profiles: Sequence[Mapping],
+    retained_count: int,
+) -> str:
+    if not internal_layout_profiles:
+        return draft
+    draft = _replace_enum_for_internal_layouts(draft, internal_layout_profiles)
+    draft = _insert_internal_profile_state(draft, internal_layout_profiles)
+    draft = _insert_internal_profile_selection(draft, case_id_symbol=case_id_symbol, profiles=internal_layout_profiles)
+    draft = _apply_internal_active_matrix_dimensions(draft)
+    draft = _replace_internal_matrix_set_code_blocks(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=internal_layout_profiles,
+        template_internal_nodes=template_internal_nodes,
+        retained_count=retained_count,
+    )
+    draft = _replace_internal_profile_w_inverse(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=internal_layout_profiles,
+        case_profiles=profiles,
+        aliases=aliases,
+        gkk_template=gkk_template,
+        template_internal_nodes=template_internal_nodes,
+    )
+    draft = draft.replace("for (int k = 0; k < INTERNAL_NODES; k++)", "for (int k = 0; k < internal_active; k++)")
+    draft = draft.replace("for (int row = 0; row < INTERNAL_NODES; row++)", "for (int row = 0; row < internal_active; row++)")
+    return draft
 
 
 def _apply_multicase_conditional_diagonal_w_builder(
@@ -5674,7 +6109,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
     display_names = template_payload.get("node_display_names") or {}
     c_external_nodes = [str(display_names.get(node, node)) for node in template_external]
     symbol_table = {}
-    for profile in alias_model["profiles"]:
+    for profile in alias_model.get("sample_profiles") or alias_model["profiles"]:
         symbol_table.update((profile.get("payload") or {}).get("symbol_dependency_table") or {})
     warnings = list(result.get("warnings") or [])
     for alias, info in aliases.items():
@@ -5763,6 +6198,16 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 aliases=aliases,
                 gkk_template=_template_gkk_from_payload(template_payload),
                 active_nr_expr="NR",
+            )
+            draft = _apply_internal_layout_profile_compaction(
+                draft,
+                case_id_symbol=case_id_symbol,
+                profiles=alias_model["profiles"],
+                aliases=aliases,
+                gkk_template=_template_gkk_from_payload(template_payload),
+                template_internal_nodes=result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],
+                internal_layout_profiles=alias_model.get("internal_layout_profiles") or [],
+                retained_count=len(template_payload.get("external_nodes") or result.get("external_nodes") or []),
             )
             codegen_mode = "case-agnostic alias template"
             fast_path = "case_alias_template"
@@ -5882,6 +6327,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 }
                 for group in alias_model.get("runtime_case_groups") or []
             ],
+            "internal_layout_profiles": alias_model.get("internal_layout_profiles") or [],
             "gvalue_conditions": gvalue_conditions,
             "uses_case_conditional_gvalue": bool(gvalue_conditions),
             **(
@@ -6390,6 +6836,72 @@ def _apply_final_retained_recovery_profiles_to_draft(
             lines.append(("        " + line) if line else "")
         return lines
 
+    def split_recovery_preamble(preamble: str) -> tuple[list[str], str]:
+        """Hoist common Vr loads while keeping Vk math case-specific."""
+        hoisted: list[str] = []
+        compute: list[str] = []
+        in_vr_setup = True
+        for line in preamble.splitlines():
+            stripped = line.strip()
+            if in_vr_setup and (
+                stripped == "/* Internal-node voltage recovery after solved retained-node voltages are available. */"
+                or stripped.startswith("set_CODE(&Vr_code,")
+                or not stripped
+            ):
+                hoisted.append(line)
+                continue
+            in_vr_setup = False
+            compute.append(line)
+        return hoisted, "\n".join(compute).rstrip("\n")
+
+    def scalarize_diagonal_vk_recovery(block: str, active_nr_expr: str) -> str:
+        scalar_internal_expr = "internal_active" if "internal_active" in draft else "INTERNAL_NODES"
+        scalar_recovery = "\n".join(
+            _diagonal_gkk_scalar_vk_lines(active_nr_expr, internal_expr=scalar_internal_expr, indent=4)
+        )
+        for internal_expr in ("INTERNAL_NODES", "internal_active"):
+            matrix_recovery = "\n".join([
+                "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
+                f"    for (int row = 0; row < {internal_expr}; row++) {{",
+                f"        for (int col = 0; col < {active_nr_expr}; col++) {{",
+                "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
+                "        }",
+                "    }",
+                "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+                "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
+                "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
+                "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+            ])
+            block = block.replace(matrix_recovery, scalar_recovery)
+        return block
+
+    def diagonal_w_case_ids_from_draft() -> set[int]:
+        marker = "Case-resolved Gkk inverse."
+        start = draft.find(marker)
+        if start < 0:
+            return set()
+        end = draft.find("CODE-SIDE IHIS VALUE SETUP", start)
+        if end < 0:
+            end = draft.find("set_CODE(&Ihisr_code", start)
+        block = draft[start:end if end >= 0 else len(draft)]
+        scalar_cases: set[int] = set()
+        pending_cases: list[int] = []
+        body_lines: list[str] = []
+        for line in block.splitlines():
+            match = re.match(r"\s*case\s+(\d+):", line)
+            if match:
+                pending_cases.append(int(match.group(1)))
+                continue
+            if pending_cases:
+                body_lines.append(line)
+                if "break;" in line:
+                    body = "\n".join(body_lines)
+                    if "1.0 / get_CODE(&Gkk_code" in body and "mat_" not in body:
+                        scalar_cases.update(pending_cases)
+                    pending_cases = []
+                    body_lines = []
+        return scalar_cases
+
     def guard_recovery_only_matrix_setup(next_draft: str, active_case_ids: Sequence[int]) -> str:
         if not active_case_ids:
             return next_draft
@@ -6461,6 +6973,16 @@ def _apply_final_retained_recovery_profiles_to_draft(
     external_c_names: set[str] = set()
     use_template_vk_recovery = can_use_template_vk_recovery()
     recovery_preamble = default_recovery_preamble() if use_template_vk_recovery else ""
+    hoisted_recovery_preamble: list[str] = []
+    case_recovery_preamble = recovery_preamble
+    scalar_case_recovery_preamble = ""
+    diagonal_w_case_ids: set[int] = set()
+    if recovery_preamble:
+        hoisted_recovery_preamble, case_recovery_preamble = split_recovery_preamble(recovery_preamble)
+        scalar_case_recovery_preamble = scalarize_diagonal_vk_recovery(case_recovery_preamble, "RETAINED_NODES")
+        scalar_case_recovery_preamble = scalarize_diagonal_vk_recovery(scalar_case_recovery_preamble, "node_active")
+        if scalar_case_recovery_preamble != case_recovery_preamble:
+            diagonal_w_case_ids = diagonal_w_case_ids_from_draft()
     active_recovery_case_ids: list[int] = []
 
     for profile in profiles:
@@ -6525,11 +7047,17 @@ def _apply_final_retained_recovery_profiles_to_draft(
         if use_template_vk_recovery:
             assignment_lines = []
             for row, node in enumerate(profile.get("recovery_nodes") or []):
-                template_row = template_node_to_row[str(node)]
+                template_row = row if "internal_active" in draft else template_node_to_row[str(node)]
                 c_name = recovery_profile_c_name(profile, node, row)
                 assignment_lines.append(f"        {c_name} = get_CODE(&Vk_code, {template_row}, 0);")
-            if assignment_lines and recovery_preamble:
-                lines.extend(case_indented_recovery_preamble(recovery_preamble))
+            selected_preamble = case_recovery_preamble
+            if (
+                len(profile.get("recovery_nodes") or []) == 1
+                or (diagonal_w_case_ids and all(case_id in diagonal_w_case_ids for case_id in case_ids))
+            ):
+                selected_preamble = scalar_case_recovery_preamble
+            if assignment_lines and selected_preamble:
+                lines.extend(case_indented_recovery_preamble(selected_preamble))
         else:
             assignment_lines = _recovery_assignment_lines(profile)
         if assignment_lines:
@@ -6555,7 +7083,9 @@ def _apply_final_retained_recovery_profiles_to_draft(
             draft = _remove_default_voltage_recovery_block(draft)
             marker = "T1_T2:\n"
             if marker in draft:
-                draft = draft.replace(marker, marker + "\n".join(lines) + "\n", 1)
+                hoisted = "\n".join(hoisted_recovery_preamble).rstrip("\n")
+                prefix = (hoisted + "\n") if hoisted else ""
+                draft = draft.replace(marker, marker + prefix + "\n".join(lines) + "\n", 1)
                 return guard_recovery_only_matrix_setup(draft, active_recovery_case_ids)
         assignment_marker = "    /* One variable per eliminated node, in effective k order. */\n"
         start = draft.find(assignment_marker)
@@ -7266,6 +7796,16 @@ def _build_dummy_finalized_matrix_dag_c_draft(
         gkk_template=_template_gkk_from_payload(template_payload),
         active_nr_expr="node_active",
     )
+    draft = _apply_internal_layout_profile_compaction(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=alias_model["profiles"],
+        aliases=aliases,
+        gkk_template=_template_gkk_from_payload(template_payload),
+        template_internal_nodes=result.get("effective_internal_nodes") or template_payload.get("internal_nodes") or [],
+        internal_layout_profiles=alias_model.get("internal_layout_profiles") or [],
+        retained_count=len(template_payload.get("external_nodes") or result.get("external_nodes") or []),
+    )
     draft = _apply_retained_layout_profile_compaction(
         draft,
         case_id_symbol=case_id_symbol,
@@ -7459,6 +7999,7 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
                 "internal_order": (matrix_dag_result or {}).get("effective_internal_nodes") or [],
             },
             "retained_layout_profiles": (matrix_dag_result or {}).get("retained_layout_profiles") or [],
+            "internal_layout_profiles": (alias_model or {}).get("internal_layout_profiles") or [],
             "finalization_profiles": [
                 {
                     "profile_id": profile.profile_id,
@@ -7517,6 +8058,7 @@ def _attach_multicase_diagnostics(
     effective_internal = list(multi.get("effective_internal_nodes") or [])
     final_profiles = multi.get("finalization_profiles") or []
     retained_layout_profiles = multi.get("retained_layout_profiles") or []
+    internal_layout_profiles = multi.get("internal_layout_profiles") or []
     recovery_profiles = multi.get("recovery_profiles") or []
     dummy_blocks = multi.get("dummy_node_blocks") or {}
     runtime_groups = multi.get("runtime_case_groups") or []
@@ -7604,6 +8146,8 @@ def _attach_multicase_diagnostics(
         "dummy_finalization_profile_count": len(final_profiles),
         "retained_layout_profile_count": len(retained_layout_profiles),
         "retained_profile_dimensions": [int(item.get("nr_active") or 0) for item in retained_layout_profiles],
+        "internal_layout_profile_count": len(internal_layout_profiles),
+        "internal_profile_dimensions": [int(item.get("active_internal_count") or 0) for item in internal_layout_profiles],
         "super_then_slice_runtime_calculations": 0 if retained_layout_profiles else None,
         "dummy_node_block_count": int(dummy_blocks.get("count") or 0) if isinstance(dummy_blocks, dict) else 0,
         "c_output_length": len(c_draft),

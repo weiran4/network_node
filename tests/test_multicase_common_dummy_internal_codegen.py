@@ -187,6 +187,7 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         diagonal_block_end = draft.index("case 0:", diagonal_block_start)
         diagonal_block = draft[diagonal_block_start:diagonal_block_end]
         self.assertIn("case 6:", diagonal_block)
+        self.assertNotIn("case 11:", draft)
         self.assertIn("double IC_his0 = 0.0;", draft)
         self.assertNotIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("get_CODE(&Grk_code, row, k) * get_CODE(&W_code, k, k)", diagonal_block)
