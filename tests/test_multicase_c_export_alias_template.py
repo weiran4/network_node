@@ -1435,6 +1435,128 @@ T1_T2:
         self.assertNotIn("N2 = (1.0/2.0)*N1 + (1.0/2.0)*N4;", draft)
         self.assertIn("Internal-node voltage recovery after solved retained-node voltages", draft)
 
+    def test_trf_ctest_dummy_small_varg_keeps_scalar_recovery_self_contained(self):
+        fixture = Path("exports/Trf_Ctest_dummy_small_varG.json")
+        if not fixture.exists():
+            self.skipTest("Trf_Ctest_dummy_small_varG.json fixture is not available")
+        data = json.loads(fixture.read_text(encoding="utf-8"))
+        branch = next(
+            item for item in data.get("branches", [])
+            if item.get("packageOriginal", {}).get("networkCases")
+        )
+        cases = branch["packageOriginal"]["networkCases"]
+
+        def payload_from_saved_case(case: dict, package_branch_id: str) -> dict:
+            final_external = [
+                str(group.get("display") or group.get("globalNet") or group.get("id") or f"N{index + 1}")
+                for index, group in enumerate(case.get("finalExternalGroups") or [])
+            ]
+            final_internal = [
+                f"pkg-internal:{package_branch_id}:{index}"
+                for index, group in enumerate(case.get("finalInternalGroups") or [])
+            ]
+            display_names = {}
+            for node, group in zip(final_external, case.get("finalExternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            for node, group in zip(final_internal, case.get("finalInternalGroups") or []):
+                display_names[node] = str(group.get("display") or node)
+            all_nodes = [*final_external, *final_internal]
+            node_index = {node: index for index, node in enumerate(all_nodes)}
+            terminal_node: dict[str, str] = {}
+            for node, group in [
+                *zip(final_external, case.get("finalExternalGroups") or []),
+                *zip(final_internal, case.get("finalInternalGroups") or []),
+            ]:
+                for member in group.get("members") or []:
+                    terminal_node[str(member)] = node
+            G_full = sp.zeros(len(all_nodes), len(all_nodes))
+            Ihis_full = sp.zeros(len(all_nodes), 1)
+
+            def add_entry(row_node: str | None, col_node: str | None, expr: object) -> None:
+                if row_node not in node_index or col_node not in node_index:
+                    return
+                G_full[node_index[row_node], node_index[col_node]] += optimized_api._parse_expr(expr)
+
+            def add_ihis(row_node: str | None, expr: object) -> None:
+                if row_node not in node_index:
+                    return
+                Ihis_full[node_index[row_node], 0] += optimized_api._parse_expr(expr)
+
+            for saved_branch in case.get("branches") or []:
+                branch_id = str(saved_branch.get("id") or "")
+                if saved_branch.get("kind") != "two_node_branch":
+                    continue
+                node_a = terminal_node.get(f"{branch_id}.A")
+                node_b = terminal_node.get(f"{branch_id}.B")
+                g = optimized_api._parse_expr(saved_branch.get("g") or "0")
+                ihis = optimized_api._parse_expr(saved_branch.get("ihis") or "0")
+                add_entry(node_a, node_a, g)
+                add_entry(node_a, node_b, -g)
+                add_entry(node_b, node_a, -g)
+                add_entry(node_b, node_b, g)
+                add_ihis(node_a, ihis)
+                add_ihis(node_b, -ihis)
+
+            return {
+                "all_nodes": all_nodes,
+                "external_nodes": list(final_external),
+                "internal_nodes": list(final_internal),
+                "ground_nodes": [],
+                "node_display_names": display_names,
+                "G_full": optimized_api._clean_matrix(G_full),
+                "G_full_tagged": optimized_api._clean_matrix(G_full),
+                "Ihis_full": optimized_api._clean_vector(Ihis_full),
+                "Ihis_full_tagged": optimized_api._clean_vector(Ihis_full),
+                "direct_retained_stamps": [],
+                "finalExternalGroups": case.get("finalExternalGroups"),
+                "finalInternalGroups": case.get("finalInternalGroups"),
+                "finalGMatrix": case.get("finalGMatrix"),
+                "finalIhisVector": case.get("finalIhisVector"),
+                "finalK_v": case.get("finalK_v"),
+                "finalK_h": case.get("finalK_h"),
+            }
+
+        profiles = [
+            {
+                "case_id": index,
+                "name": case.get("name") or f"case {index}",
+                "case_map": {branch.get("id") or "C1": index},
+                "payload": payload_from_saved_case(case, branch.get("id") or "C1"),
+            }
+            for index, case in enumerate(cases)
+        ]
+        draft = build_multi_case_response(
+            _request(profiles, deps=_deps("R", code=("Gvar",)), case_id="case_id")
+        )["multi_case"]["c_draft"]
+
+        self.assertIn("matrixDim(&Grr_code, RETAINED_NODES, RETAINED_NODES);", draft)
+        self.assertIn("matrixDim(&Gred_code, RETAINED_NODES, RETAINED_NODES);", draft)
+        self.assertIn("matrixDim(&Grk_code, RETAINED_NODES, internal_active);", draft)
+        self.assertIn("matrixDim(&Gkk_code, internal_active, internal_active);", draft)
+        self.assertNotIn("network_node_recover_vk_diag", draft)
+        self.assertNotIn("&Ihisk_code", draft)
+        self.assertNotIn("&W_code", draft)
+        code_refresh = draft.split("Case-specific CODE-side Schur update for cases with dynamic final GValues", 1)[1].split(
+            "Stamp dynamic Gred entries",
+            1,
+        )[0]
+        self.assertIn("switch (case_id)", code_refresh)
+        code_case0 = code_refresh.split("case 0:", 1)[1].rsplit("case 1:", 1)[0]
+        code_case1 = code_refresh.rsplit("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertIn("set_CODE(&Grr_code", code_case0)
+        self.assertIn("Diagonal Gkk scalar CODE path", code_case0)
+        self.assertIn("This Pack case has no CODE-side Schur update.", code_case1)
+        self.assertNotIn("set_CODE(&Grr_code", code_case1)
+        self.assertNotIn("get_CODE(&Gkk_code", code_case1)
+        self.assertNotIn("set_CODE(&Gred_code", code_case1)
+        recovery_switch = draft.split("Case-specific voltage recovery", 1)[1]
+        case0_block = recovery_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
+        self.assertIn("vk_sum += get_CODE(&Gkr_code, k, j) * get_CODE(&Vr_code, j, 0);", case0_block)
+        case1_block = recovery_switch.split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertIn("This Pack case has no recovered internal nodes.", case1_block)
+        self.assertNotIn("get_CODE(&Gkk_code", case1_block)
+        self.assertNotIn("get_CODE(&Gkr_code", case1_block)
+
     def test_final_retained_adapter_allows_different_raw_internal_counts(self):
         def final_pack_payload(raw_internal: list[str], final_internal: list[str], g: str) -> dict:
             raw_nodes = ["N1", "N2", *raw_internal]
@@ -1633,6 +1755,88 @@ T1_T2:
         self.assertIn("case 1:", draft)
         self.assertIn("K2 =", draft)
         self.assertNotIn("multi-case topology invariant failed", draft)
+
+    def test_internal_profile_compaction_survives_code_owned_g_aliases(self):
+        def chain_payload(internal_nodes: list[str], edges: list[tuple[str, str, str]]) -> dict:
+            all_nodes = ["N1", "N2", *internal_nodes]
+            node_index = {node: index for index, node in enumerate(all_nodes)}
+            matrix = sp.zeros(len(all_nodes), len(all_nodes))
+            for left, right, conductance in edges:
+                g = sp.Symbol(conductance)
+                i = node_index[left]
+                j = node_index[right]
+                matrix[i, i] += g
+                matrix[j, j] += g
+                matrix[i, j] -= g
+                matrix[j, i] -= g
+            return {
+                "all_nodes": all_nodes,
+                "external_nodes": ["N1", "N2"],
+                "internal_nodes": internal_nodes,
+                "ground_nodes": [],
+                "node_display_names": {node: node for node in all_nodes},
+                "G_full": optimized_api._clean_matrix(matrix),
+                "G_full_tagged": optimized_api._clean_matrix(matrix),
+                "Ihis_full": ["0" for _node in all_nodes],
+                "Ihis_full_tagged": ["0" for _node in all_nodes],
+                "direct_retained_stamps": [],
+                "finalExternalGroups": [
+                    {"display": "N1", "globalNet": "N1"},
+                    {"display": "N2", "globalNet": "N2"},
+                ],
+                "finalInternalGroups": [
+                    {"display": node, "globalNet": node}
+                    for node in internal_nodes
+                ],
+                "finalGMatrix": [["Gedge", "-Gedge"], ["-Gedge", "Gedge"]],
+                "finalIhisVector": ["0", "0"],
+                "finalK_v": [
+                    ["1", "0"] if index == 0 else ["0", "1"]
+                    for index, _node in enumerate(internal_nodes)
+                ],
+                "finalK_h": [f"Ihis_{node}" for node in internal_nodes],
+            }
+
+        request = _request(
+            [
+                {
+                    "case_id": 0,
+                    "name": "one internal dynamic G",
+                    "case_map": {"Pack": 0},
+                    "payload": chain_payload(
+                        ["K1"],
+                        [("N1", "K1", "Ga"), ("K1", "N2", "Gb")],
+                    ),
+                },
+                {
+                    "case_id": 1,
+                    "name": "two internals dynamic G",
+                    "case_map": {"Pack": 1},
+                    "payload": chain_payload(
+                        ["K1", "K2"],
+                        [("N1", "K1", "Ga"), ("K1", "K2", "Gb"), ("K2", "N2", "Gc")],
+                    ),
+                },
+            ],
+            deps=_deps("Ga", "Gb", "Gc", "Gedge", code=("Ga", "Gc")),
+            case_id="case_id",
+        )
+
+        response = build_multi_case_response(request)
+        multi = response["multi_case"]
+        draft = multi["c_draft"]
+        self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assertIn("internal_active", draft)
+        self.assertIn("matrixDim(&Gkk_code, internal_active, internal_active);", draft)
+        self.assertIn("Case-resolved Gkk inverse over active internal profile", draft)
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertIn("network_node_recover_vk_from_grkw_only(RETAINED_NODES, internal_active", draft)
+        self.assertIn("set_CODE(&Gkk_code", draft)
+        self.assertNotIn("col < NR", draft)
+        self.assertNotIn("set_CODE(&Gkk_code, 1, 1, 1.0);", draft)
+        self.assertNotIn("set_CODE(&W_code, 1, 1, 0.0);", draft)
+        self.assertIn("K1 = get_CODE(&Vk_code, 0, 0);", draft)
+        self.assertIn("K2 = get_CODE(&Vk_code, 1, 0);", draft)
 
     def test_rejects_case_that_changes_topology(self):
         bad_payload = _series_payload("X", internal=False)

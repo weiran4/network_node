@@ -39,12 +39,31 @@ Missing internal nodes are backend placeholders only. They are not physical node
 - `network_node_recover_vk_diag(...)`
 - `network_node_recover_vk_matrix(...)`
 - `network_node_recover_vk_from_wgkr_only(...)`
+- `network_node_recover_vk_from_grkw_only(...)`
 
 Important assumptions:
 
 - Diagonal helper assumes `W` is diagonal, `Gkr = transpose(Grk)`, and `tmp_Grk_W_code = Grk * W`.
 - Matrix helper assumes `W` is fully populated and symmetric, not just upper triangular.
 - The `from_wgkr_only` helper is only for legacy/static paths where `tmp_W_Gkr_code` already stores `W * Gkr` and no `W * Ihisk` term exists.
+- The `from_grkw_only` helper is only for recovery-only paths where `tmp_Grk_W_code = Grk * W`, symmetry gives `W * Gkr = transpose(Grk * W)`, and no `W * Ihisk` term exists.
+- Do not replace scalar diagonal recovery with a helper unless all matrices used by that helper are declared and allocated on that path.
+
+## Dynamic GValues And Internal Profiles
+
+Mixed Pack cases can combine different internal profiles with different G constant ownership. For example, one case can have an active internal node and a CODE-owned variable G, while another case has no internal nodes and only RAM constants.
+
+In that shape, generated CODE must keep Schur refresh logic case-specific:
+
+- cases with CODE-owned final GValues may update `Grr/Grk/Gkr/Gkk`, invert/update `W`, and refresh `Gred`;
+- cases with no CODE-owned final GValues must not run the dynamic Schur update block;
+- zero-internal cases must still bypass internal matrix reads even if another case in the same Pack needs them.
+
+The RAM final-G replacement also must stop before the matrix lifecycle section. Accidentally swallowing `matrixDim`/`matrix_register` setup causes undeclared or unallocated runtime matrices later in CODE.
+
+## Pack G Constant Edit Sync
+
+The side-panel G constant controls edit the Pack branch view, but export uses the active `packageOriginal.networkCases[index]` snapshot. Any `packedG.*` edit or batch "set all constant/non-constant" action must copy the current packaged branches back into the active network case before rendering/exporting.
 
 ## Frontend Port Identity UX
 
@@ -64,6 +83,9 @@ Use the term "port identity" and explain that it is a fixed backend ID used to v
 - Do not treat a 0x0 matrix as safe. The RTDS `matrixLIB` path should be assumed not to support zero-dimensional matrices.
 - Do not set missing internal dummy `Gkk` rows to `1` and `W` rows to `0` in generated code. That is mathematically harmless in some formulas but still leaves dummy work in CODE.
 - Do not let `default` internal profile fall back to the maximum-internal profile when a zero-internal profile exists.
+- Do not run CODE-side Schur refresh unconditionally just because one Pack case has CODE-owned GValues.
+- Do not let conditional RAM final-G replacement consume the matrix lifecycle block.
+- Do not trust Pack branch G constant edits unless the active network-case snapshot has been synchronized.
 - Do not expose backend IDs as if they were user node names.
 - Do not use display names alone for Pack external-port validation. Display names can be edited to hide a slot/order mistake.
 - Do not helperize `Vk` recovery in a way that drops the `W * Ihisk` history-source term.
@@ -75,5 +97,6 @@ Run these after changing this area:
 ```powershell
 python -m pytest tests/test_frontend_optimized_reuse.py -q
 python -m pytest tests/test_multicase_c_export_alias_template.py tests/test_multicase_common_dummy_internal_codegen.py tests/test_multicase_dummy_node_block.py tests/test_runtime_mutable_case_group.py -q
+python -m pytest tests/test_structured_formula_elimination.py tests/test_optimized_elimination.py -q
 python -m py_compile optimized_elimination_api.py
 ```

@@ -13077,6 +13077,14 @@
       return voltageTerms.length ? voltageTerms.join(" + ") : "0";
     }
 
+    function syncActivePackageNetworkCaseBranches(branch) {
+      const pkg = branch?.packageOriginal;
+      if (!pkg?.networkCases?.length) return;
+      const index = activePackageNetworkCaseIndex(branch);
+      if (!pkg.networkCases[index]) return;
+      pkg.networkCases[index].branches = structuredClone(pkg.branches || []);
+    }
+
     function updateBranchField(field, value) {
       const branch = findBranch(state.selectedId);
       if (!branch) return;
@@ -13142,6 +13150,7 @@
           else if (key === "gIsConstant") inner.gIsConstant = value === true || value === "1" || value === "true";
           else if (key === "constantGSymbols") inner.constantGSymbols = String(value || "").trim();
         }
+        syncActivePackageNetworkCaseBranches(branch);
         renderAfterSidePanelEdit();
         return;
       }
@@ -14553,6 +14562,7 @@
       packagedGBranches(branch).forEach(({ inner }) => {
         inner.gIsConstant = Boolean(isConstant);
       });
+      syncActivePackageNetworkCaseBranches(branch);
       render();
     }
 

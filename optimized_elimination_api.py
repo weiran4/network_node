@@ -5723,14 +5723,17 @@ def _conditional_ram_stamp_block(
 
 def _replace_ram_g_setup_with_conditional_ram_block(draft: str, ram_block: str) -> str:
     start_marker = "    /* ************************************************************************\n     * RAM-SIDE G MATRIX VALUE SETUP"
-    end_marker = "    if (err > 0) {"
     start = draft.find(start_marker)
     if start < 0:
         return draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
-    end = draft.find(end_marker, start)
-    if end < 0:
-        gvalues_marker = "\nGVALUES:"
-        end = draft.find(gvalues_marker, start)
+    end_candidates = [
+        draft.find("\n    err += matrixDim(", start),
+        draft.find("\n    if (internal_active > 0) {\n        err += matrixDim(", start),
+        draft.find("\n    if (err > 0) {", start),
+        draft.find("\nGVALUES:", start),
+    ]
+    end_candidates = [index for index in end_candidates if index >= 0]
+    end = min(end_candidates) if end_candidates else -1
     if end < 0:
         return draft.replace("    /* No RAM-side G entries: no fixed G overlay is registered. */", ram_block, 1)
     header_end = draft.find("*/", start)
@@ -5739,6 +5742,59 @@ def _replace_ram_g_setup_with_conditional_ram_block(draft: str, ram_block: str) 
     header_end += 2
     replacement = draft[start:header_end] + "\n\n\n" + ram_block + "\n\n"
     return draft[:start] + replacement + draft[end:]
+
+
+def _guard_code_schur_update_for_conditional_gvalues(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: Sequence[Mapping],
+    entry_plans: Sequence[Mapping],
+) -> str:
+    if "Case-specific CODE-side Schur update for cases with dynamic final GValues." in draft:
+        return draft
+    code_case_indices = sorted({
+        int(item["index"])
+        for plan in entry_plans
+        for item in (plan.get("code_cases") or [])
+    })
+    if not code_case_indices:
+        return draft
+    profile_indices = list(range(len(profiles)))
+    if set(code_case_indices) == set(profile_indices):
+        return draft
+    start_marker = "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */"
+    end_marker = "    /* Stamp dynamic Gred entries"
+    start = draft.find(start_marker)
+    end = draft.find(end_marker, start)
+    if start < 0 or end < 0:
+        return draft
+    block = draft[start:end].rstrip("\n")
+    non_code_case_indices = [index for index in profile_indices if index not in set(code_case_indices)]
+    lines = [
+        "    /* Case-specific CODE-side Schur update for cases with dynamic final GValues. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for index in code_case_indices:
+        lines.append(f"    case {index}:")
+    lines.extend(_indent_c_block(block, 4))
+    lines.extend([
+        "        break;",
+    ])
+    for index in non_code_case_indices:
+        lines.append(f"    case {index}:")
+    if non_code_case_indices:
+        lines.extend([
+            "        /* This Pack case has no CODE-side Schur update. */",
+            "        break;",
+        ])
+    lines.extend([
+        "    default:",
+        "        break;",
+        "    }",
+        "",
+    ])
+    return draft[:start] + "\n".join(lines) + draft[end:]
 
 
 def _case_switch_assignment_lines(case_id_symbol: str, case_indices: Sequence[int], assignments: Sequence[str]) -> list[str]:
@@ -6114,6 +6170,12 @@ def _apply_conditional_final_gvalues_to_structured_draft(
                 _multi_case_symbol_table(profiles),
             )
             draft = _lift_repeated_code_source_temps_from_text(draft)
+            draft = _guard_code_schur_update_for_conditional_gvalues(
+                draft,
+                case_id_symbol=case_id_symbol,
+                profiles=profiles,
+                entry_plans=entry_plans,
+            )
             return draft, gvalue_conditions
 
     grouped_assignments: dict[tuple[int, ...], list[str]] = {}
@@ -6159,6 +6221,12 @@ def _apply_conditional_final_gvalues_to_structured_draft(
         _multi_case_symbol_table(profiles),
     )
     draft = _lift_repeated_code_source_temps_from_text(draft)
+    draft = _guard_code_schur_update_for_conditional_gvalues(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=profiles,
+        entry_plans=entry_plans,
+    )
     return draft, gvalue_conditions
 
 
@@ -6923,6 +6991,25 @@ def _vk_recovery_code_functions_blocks() -> dict[str, str]:
         set_CODE(Vk_code, row, 0, -core_v);
     }
 }""",
+
+        "grkw_only": """void network_node_recover_vk_from_grkw_only(int retained_count, int internal_count,
+                                             MATRIX_ *tmp_Grk_W_code,
+                                             MATRIX_ *Vr_code,
+                                             MATRIX_ *Vk_code)
+{
+    int row;
+    int col;
+
+    /* Recovery-only path: tmp_Grk_W_code stores Grk * W, and no W*Ihisk term is present. */
+    /* Preconditions: W is fully populated and symmetric, Gkr = transpose(Grk), tmp_Grk_W_code = Grk * W. */
+    for (row = 0; row < internal_count; row++) {
+        double core_v = 0.0;
+        for (col = 0; col < retained_count; col++) {
+            core_v += get_CODE(tmp_Grk_W_code, col, row) * get_CODE(Vr_code, col, 0);
+        }
+        set_CODE(Vk_code, row, 0, -core_v);
+    }
+}""",
     }
 
 
@@ -6931,6 +7018,7 @@ def _ensure_vk_recovery_code_functions(draft: str) -> str:
         ("diag", "network_node_recover_vk_diag(", "void network_node_recover_vk_diag"),
         ("matrix", "network_node_recover_vk_matrix(", "void network_node_recover_vk_matrix"),
         ("wgkr_only", "network_node_recover_vk_from_wgkr_only(", "void network_node_recover_vk_from_wgkr_only"),
+        ("grkw_only", "network_node_recover_vk_from_grkw_only(", "void network_node_recover_vk_from_grkw_only"),
     ]
     blocks_by_name = _vk_recovery_code_functions_blocks()
     needed_blocks: list[str] = []
@@ -7059,34 +7147,56 @@ def _apply_final_retained_recovery_profiles_to_draft(
             "&tmp_W_Gkr_code, &Vr_code, &Vk_code);"
         )
 
+    def vk_grkw_only_helper_call(active_nr_expr: str) -> str:
+        return (
+            f"    network_node_recover_vk_from_grkw_only({active_nr_expr}, {vk_internal_count_expr()}, "
+            "&tmp_Grk_W_code, &Vr_code, &Vk_code);"
+        )
+
     def replace_vk_recovery_with_helper(block: str, active_nr_expr: str, *, diagonal: bool) -> str:
         helper_call = vk_diag_helper_call(active_nr_expr) if diagonal else vk_matrix_helper_call(active_nr_expr)
         full_matrix_replaced = False
-        for internal_expr in ("INTERNAL_NODES", "internal_active"):
-            matrix_recovery = "\n".join([
-                "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
-                f"    for (int row = 0; row < {internal_expr}; row++) {{",
-                f"        for (int col = 0; col < {active_nr_expr}; col++) {{",
-                "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
-                "        }",
-                "    }",
-                "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
-                "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
-                "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
-                "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
-            ])
-            if matrix_recovery in block:
-                block = block.replace(matrix_recovery, helper_call)
-                full_matrix_replaced = True
+        retained_exprs = list(dict.fromkeys([active_nr_expr, "RETAINED_NODES", "NR", "node_active"]))
         simple_matrix_recovery = "\n".join([
             "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
             "    matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);",
         ])
+        for internal_expr in ("INTERNAL_NODES", "internal_active"):
+            for retained_expr in retained_exprs:
+                symmetry_reuse = "\n".join([
+                    "    /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
+                    f"    for (int row = 0; row < {internal_expr}; row++) {{",
+                    f"        for (int col = 0; col < {retained_expr}; col++) {{",
+                    "            set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));",
+                    "        }",
+                    "    }",
+                ])
+                matrix_recovery = "\n".join([
+                    symmetry_reuse,
+                    "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+                    "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
+                    "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
+                    "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+                ])
+                if matrix_recovery in block:
+                    block = block.replace(matrix_recovery, helper_call)
+                    full_matrix_replaced = True
+                simple_recovery_from_grkw = "\n".join([
+                    symmetry_reuse,
+                    simple_matrix_recovery,
+                ])
+                if simple_recovery_from_grkw in block:
+                    block = block.replace(
+                        simple_recovery_from_grkw,
+                        "\n".join([
+                            "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+                            vk_grkw_only_helper_call(active_nr_expr),
+                        ]),
+                    )
+                    full_matrix_replaced = True
         if simple_matrix_recovery in block:
             block = block.replace(simple_matrix_recovery, vk_wgkr_only_helper_call(active_nr_expr))
             full_matrix_replaced = True
-        if not full_matrix_replaced and block.strip():
-            return helper_call
         return block
 
     def diagonal_w_case_ids_from_draft() -> set[int]:

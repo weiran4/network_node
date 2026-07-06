@@ -597,6 +597,25 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn('inner.gIsConstant = true;', source)
         self.assertIn('inner.constantGSymbols = "G_EPSILON";', source)
 
+    def test_packaged_g_constant_edits_sync_active_network_case(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function syncActivePackageNetworkCaseBranches", source)
+        sync_start = source.index("function syncActivePackageNetworkCaseBranches")
+        sync_end = source.index("function updateBranchField", sync_start)
+        sync_source = source[sync_start:sync_end]
+        self.assertIn("pkg.networkCases[index].branches = structuredClone(pkg.branches || []);", sync_source)
+
+        update_start = source.index('if (field.startsWith("packedG."))')
+        update_end = source.index('if (field === "gIsConstant")', update_start)
+        update_source = source[update_start:update_end]
+        self.assertIn("syncActivePackageNetworkCaseBranches(branch);", update_source)
+
+        batch_start = source.index("function setPackagedGConstAll")
+        batch_end = source.index("function applyCaseGConstBatch", batch_start)
+        batch_source = source[batch_start:batch_end]
+        self.assertIn("syncActivePackageNetworkCaseBranches(branch);", batch_source)
+
     def test_packaged_n_dummy_ports_are_marked_and_payload_uses_current_groups(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
