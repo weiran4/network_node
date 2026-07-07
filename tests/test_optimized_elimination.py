@@ -412,6 +412,87 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertNotRegex(recovery_section, r"double scalar_t1t2_inv_den_\d+ =")
         self.assertEqual(response["structured"]["scalar_cse"]["denominator_temps"], 2)
 
+    def test_force_scalar_code_owned_user_symbols_are_static(self):
+        import optimized_elimination_api as api
+
+        payload = {
+            "mode": "structured_formula",
+            "all_nodes": ["A", "B", "C"],
+            "external_nodes": ["A", "B"],
+            "internal_nodes": ["C"],
+            "ground_nodes": [],
+            "G_full": [
+                ["Gc", "0", "-Gc"],
+                ["0", "1/R", "-1/R"],
+                ["-Gc", "-1/R", "Gc + 1/R"],
+            ],
+            "Ihis_full": ["0", "0", "IhisC"],
+            "node_display_names": {"A": "A", "B": "B", "C": "C"},
+            "symbol_dependency_table": {
+                "Gc": "CODE_VARIABLE",
+                "R": "CODE_VARIABLE",
+                "IhisC": "CODE_PER_STEP",
+            },
+            "elimination_codegen_mode": "force_scalar",
+            "simplify_level": "full",
+        }
+
+        response = api.build_optimized_response(payload)
+
+        self.assertTrue(response["ok"], response)
+        draft = response["structured"]["c_draft"]
+        static_section = draft.split("STATIC:", 1)[1].split("LOCAL_STATIC:", 1)[0]
+        local_static_section = draft.split("LOCAL_STATIC:", 1)[1].split("RAM_PASS1:", 1)[0]
+        code_section = draft.split("BEGIN_T0:", 1)[1].split("T1_T2:", 1)[0]
+        recovery_section = draft.split("T1_T2:", 1)[1]
+        for name in ("Gc", "R", "IhisC"):
+            self.assertIn(f"double {name} = 0.0;", static_section)
+            self.assertNotIn(f"double {name} = 0.0;", local_static_section)
+        self.assertIn("Gc", code_section)
+        self.assertIn("R", code_section)
+        self.assertIn("IhisC", recovery_section)
+
+    def test_force_scalar_ram_denominators_are_hoisted_across_runtime_sections(self):
+        import optimized_elimination_api as api
+
+        payload = {
+            "mode": "structured_formula",
+            "all_nodes": ["A", "B", "inner"],
+            "external_nodes": ["A", "B"],
+            "internal_nodes": ["inner"],
+            "ground_nodes": [],
+            "G_full": [
+                ["Gc", "0", "-Gc"],
+                ["0", "1/R", "-1/R"],
+                ["-Gc", "-1/R", "Gc + 1/R"],
+            ],
+            "Ihis_full": ["0", "0", "IhisC"],
+            "node_display_names": {"A": "A", "B": "B", "inner": "inner"},
+            "symbol_dependency_table": {
+                "Gc": "RAM_CONSTANT",
+                "R": "RAM_CONSTANT",
+                "IhisC": "CODE_PER_STEP",
+            },
+            "elimination_codegen_mode": "force_scalar",
+            "simplify_level": "full",
+        }
+
+        response = api.build_optimized_response(payload)
+
+        self.assertTrue(response["ok"], response)
+        draft = response["structured"]["c_draft"]
+        static_section = draft.split("STATIC:", 1)[1].split("LOCAL_STATIC:", 1)[0]
+        ram_section = draft.split("RAM_PASS1:", 1)[1].split("CODE:", 1)[0]
+        code_section = draft.split("BEGIN_T0:", 1)[1].split("T1_T2:", 1)[0]
+        recovery_section = draft.split("T1_T2:", 1)[1]
+        self.assertRegex(static_section, r"double scalar_shared_inv_den_\d+ = 0\.0;")
+        self.assertRegex(ram_section, r"scalar_shared_inv_den_\d+ = 1\.0/\(Gc\*R \+ 1\.0\);")
+        self.assertIn("scalar_shared_inv_den_", code_section)
+        self.assertIn("scalar_shared_inv_den_", recovery_section)
+        self.assertNotIn("scalar_code_inv_den_", draft)
+        self.assertNotIn("scalar_t1t2_inv_den_", draft)
+        self.assertNotIn("1.0/(Gc*R + 1.0)", recovery_section)
+
     def test_code_stage_g_matrices_are_not_prefilled_with_ram_set_calls(self):
         G1, G2 = sp.symbols("G1 G2")
         nodes = ["A", "X", "B"]

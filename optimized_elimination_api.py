@@ -415,24 +415,26 @@ def _scalar_temp_declarations(stats: Mapping[str, object]) -> list[str]:
 
 def _shared_scalar_denominator_temps(
     ram_exprs: Sequence[sp.Expr],
+    code_exprs: Sequence[sp.Expr],
     recovery_exprs: Sequence[sp.Expr],
     *,
     symbol_table: Mapping[str, str],
     temp_prefix: str,
 ) -> tuple[list[tuple[str, sp.Expr]], dict[sp.Expr, sp.Symbol], dict[str, object]]:
-    ram_by_key = {
-        _source_expr_key(base): base
-        for base, _count in _scalar_denominator_candidates([sp.sympify(expr) for expr in ram_exprs])
-    }
-    recovery_by_key = {
-        _source_expr_key(base): base
-        for base, _count in _scalar_denominator_candidates([sp.sympify(expr) for expr in recovery_exprs])
-    }
+    ordered_bases: dict[str, sp.Expr] = {}
+    runtime_keys: set[str] = set()
+    for base, _count in _scalar_denominator_candidates(
+        [sp.sympify(expr) for expr in [*ram_exprs, *code_exprs, *recovery_exprs]]
+    ):
+        ordered_bases.setdefault(_source_expr_key(base), base)
+    for base, _count in _scalar_denominator_candidates([sp.sympify(expr) for expr in [*code_exprs, *recovery_exprs]]):
+        runtime_keys.add(_source_expr_key(base))
     temps: list[tuple[str, sp.Expr]] = []
     substitutions: dict[sp.Expr, sp.Symbol] = {}
     stats = _empty_scalar_cse_stats()
-    for key in sorted(set(ram_by_key) & set(recovery_by_key)):
-        base = ram_by_key[key]
+    for key, base in ordered_bases.items():
+        if key not in runtime_keys:
+            continue
         if _expr_stage(base, dict(symbol_table)) != "RAM":
             continue
         name = f"{temp_prefix}_shared_inv_den_{len(temps)}"
@@ -1012,8 +1014,16 @@ def _build_single_case_scalar_expanded_c_draft(
             "recovery_node_c_names": {node: node_display_names.get(node, node) for node in internal_nodes},
         }
     )
+    code_assignments: list[tuple[str, sp.Expr]] = [
+        (var, sp.sympify(expr))
+        for _row, _col, expr, var, _left, _right in dynamic_entries
+    ]
+    for row, node in enumerate(external_nodes):
+        display = node_display_names.get(node, node)
+        code_assignments.append((f"Inj{_c_identifier_name(display, f'N{row + 1}')}", sp.sympify(Ihisred[row, 0])))
     shared_temps, shared_substitutions, shared_stats = _shared_scalar_denominator_temps(
         [expr for _row, _col, expr in ram_entries],
+        [expr for _lhs, expr in code_assignments],
         [expr for _lhs, expr in recovery_assignments],
         symbol_table=symbol_table,
         temp_prefix="scalar",
@@ -1030,17 +1040,11 @@ def _build_single_case_scalar_expanded_c_draft(
             declare_temps=False,
         )
         _merge_scalar_cse_stats(scalar_cse_stats, ram_stats)
-    code_assignments: list[tuple[str, sp.Expr]] = [
-        (var, sp.sympify(expr))
-        for _row, _col, expr, var, _left, _right in dynamic_entries
-    ]
-    for row, node in enumerate(external_nodes):
-        display = node_display_names.get(node, node)
-        code_assignments.append((f"Inj{_c_identifier_name(display, f'N{row + 1}')}", sp.sympify(Ihisred[row, 0])))
     code_lines, code_stats = _emit_scalar_reuse_assignment_lines(
         code_assignments,
         temp_prefix="scalar_code",
         indent=4,
+        substitutions=shared_substitutions,
         declare_temps=False,
     )
     _merge_scalar_cse_stats(scalar_cse_stats, code_stats)
@@ -1056,13 +1060,29 @@ def _build_single_case_scalar_expanded_c_draft(
         )
         _merge_scalar_cse_stats(scalar_cse_stats, recovery_stats)
 
+    def symbols_in_exprs(exprs: Sequence[sp.Expr]) -> set[str]:
+        out: set[str] = set()
+        for expr in exprs:
+            out.update(str(symbol) for symbol in sp.sympify(expr).free_symbols)
+        return out
+
+    recovery_runtime_exprs = [
+        _apply_source_temp_substitutions(expr, shared_substitutions)
+        for _lhs, expr in recovery_assignments
+    ]
+    code_runtime_exprs = [
+        _apply_source_temp_substitutions(expr, shared_substitutions)
+        for _lhs, expr in code_assignments
+    ]
+    static_user_symbols = symbols_in_exprs(code_runtime_exprs + recovery_runtime_exprs)
     static_declarations = [
+        *[f"    double {name} = 0.0;" for name in symbols if name in static_user_symbols],
         *[f"    double {name} = 0.0;" for name, _expr in shared_temps],
         *_scalar_temp_declarations(code_stats),
         *_scalar_temp_declarations(recovery_stats),
     ]
     local_static_declarations = [
-        *declarations,
+        *[f"    double {name} = 0.0;" for name in symbols if name not in static_user_symbols],
         *_scalar_temp_declarations(ram_stats),
     ]
 
@@ -8400,8 +8420,17 @@ def _build_force_scalar_multi_case_c_draft(
                     continue
                 ram_assignments.append((f"g_mat_over[{row}][{col}]", expr))
         recovery_assignments = _recovery_assignment_pairs(item)
+        inj_assignments = [
+            (f"Inj{node_c_name(item, node, row)}", sp.sympify(final.Ihis[row, 0]))
+            for row, node in enumerate(final.nodes)
+        ]
+        runtime_assignments = [
+            *dynamic_case_assignments.get(case_index, []),
+            *inj_assignments,
+        ]
         shared_temps, shared_substitutions, shared_stats = _shared_scalar_denominator_temps(
             [expr for _lhs, expr in ram_assignments],
+            [expr for _lhs, expr in runtime_assignments],
             [expr for _lhs, expr in recovery_assignments],
             symbol_table=symbol_table,
             temp_prefix=f"scalar_case{case_index}",
@@ -8426,20 +8455,18 @@ def _build_force_scalar_multi_case_c_draft(
                 dynamic_case_assignments[case_index],
                 temp_prefix=f"scalar_case{case_index}_code",
                 indent=8,
+                substitutions=shared_substitutions,
                 declare_temps=False,
             )
             case_code_lines[case_index] = code_lines
             _merge_scalar_cse_stats(scalar_cse_stats, code_stats)
             static_declarations.extend(_scalar_temp_declarations(code_stats))
 
-        inj_assignments = [
-            (f"Inj{node_c_name(item, node, row)}", sp.sympify(final.Ihis[row, 0]))
-            for row, node in enumerate(final.nodes)
-        ]
         inj_lines, inj_stats = _emit_scalar_reuse_assignment_lines(
             inj_assignments,
             temp_prefix=f"scalar_case{case_index}_inj",
             indent=8,
+            substitutions=shared_substitutions,
             declare_temps=False,
         )
         case_inj_lines[case_index] = inj_lines

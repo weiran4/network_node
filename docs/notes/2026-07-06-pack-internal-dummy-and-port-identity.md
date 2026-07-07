@@ -94,7 +94,8 @@ Scalar-expanded codegen also has its own conservative reuse layer:
 - no `MATRIX_`, `matrixDim`, `matrix_register`, or `conditionMatrixForCODE` output;
 - repeated same-stage denominators such as `1.0/(G1 + G2)` are reused;
 - RAM-only temporaries stay in `LOCAL_STATIC:` unless a later CODE/T1_T2 section needs the same value;
-- RAM-computed values reused by T1_T2 must be persistent `STATIC:` variables assigned during RAM.
+- RAM-computed values reused by CODE or T1_T2 must be persistent `STATIC:` variables assigned during RAM;
+- RAM-stage denominator temps should be hoisted once and shared across RAM/CODE/T1_T2 when the denominator base depends only on RAM constants. Do not regenerate equivalent `scalar_code_inv_den_*` or `scalar_t1t2_inv_den_*` temps for the same RAM-only denominator.
 
 Rollback point before this feature: commit `4bd3464 Guard pack dynamic internal profile codegen` on branch `codex/ui-engineering-polish`.
 
@@ -155,6 +156,8 @@ Use the term "port identity" and explain that it is a fixed backend ID used to v
 - Do not fix C99 `for (int ...)` only in one export branch. The no-C99-loop rule applies to scalar-expanded, matrix Schur, dummy-finalized, retained-layout, and alias-template generated C.
 - Do not put RAM-only temporary scalars in `STATIC:` unless CODE/T1_T2 also needs them; use `LOCAL_STATIC:` for RAM-only temporaries.
 - Do not put a RAM-computed scalar that T1_T2 needs in `LOCAL_STATIC:`; `LOCAL_STATIC` should not be assumed available across runtime phases.
+- Do not declare user symbols used by scalar-expanded CODE/T1_T2 formulas in `LOCAL_STATIC:`. If a symbol appears in runtime assignments or voltage recovery, it belongs in `STATIC:` even if some RAM formulas also reference it.
+- Do not optimize denominator reuse per section only. First find RAM-only denominator bases used by runtime sections, hoist them to `STATIC:` temps assigned in RAM, then substitute those temps into RAM/CODE/T1_T2.
 - Do not trust Pack branch G constant edits unless the active network-case snapshot has been synchronized.
 - Do not expose backend IDs as if they were user node names.
 - Do not use display names alone for Pack external-port validation. Display names can be edited to hide a slot/order mistake.
