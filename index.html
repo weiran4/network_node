@@ -7114,7 +7114,6 @@
     function applyProjectUiState(data) {
       const ui = data?.ui || data || {};
       clearDerivedResultCaches();
-      state.language = ui.language || data?.language || state.language || "en";
       state.activeOutput = ui.activeOutput || data?.activeOutput || state.activeOutput || "formulas";
       state.showLocalLabels = ui.showLocalLabels ?? data?.showLocalLabels ?? state.showLocalLabels;
       state.showReducedBranchCurrents = ui.showReducedBranchCurrents ?? data?.showReducedBranchCurrents ?? state.showReducedBranchCurrents;

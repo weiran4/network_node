@@ -1680,6 +1680,33 @@ T1_T2:
         self.assertIn("This Pack case has no recovered internal nodes.", case1_recovery)
         self.assertNotIn("get_CODE", recovery)
 
+    def test_force_scalar_multicase_reuses_shared_retained_layout(self):
+        response = build_multi_case_response({
+            **_request(
+                [
+                    {"name": "cap case", "case_map": {"Pack": 0}, "payload": _series_payload("Gc", "Gr")},
+                    {"name": "ind case", "case_map": {"Pack": 1}, "payload": _series_payload("GL", "Gr")},
+                ],
+                deps=_deps("Gc", "GL", "Gr"),
+                case_id="case_id",
+            ),
+            "elimination_codegen_mode": "force_scalar",
+        })
+
+        draft = response["multi_case"]["c_draft"]
+        ram_pass1 = draft.split("RAM_PASS1:", 1)[1].split("CODE:", 1)[0]
+        self.assertEqual(response["multi_case"]["fast_path"], "case_scalar_schur_expansion")
+        self.assertNotIn("NR_SUPER", draft)
+        self.assertNotIn("NR_FINAL_MAX", draft)
+        self.assertNotIn("CASE_COUNT", draft)
+        self.assertEqual(ram_pass1.count('g_mat_nods[0] = getNodeNum(comp, "A");'), 1)
+        self.assertEqual(ram_pass1.count('g_mat_nods[1] = getNodeNum(comp, "B");'), 1)
+        self.assertEqual(ram_pass1.count("g_mat_over[row][col] = 0.0;"), 1)
+        self.assertEqual(ram_pass1.count("setupGMatrix(2);"), 1)
+        self.assertIn("case 0:", ram_pass1)
+        self.assertIn("case 1:", ram_pass1)
+        self.assertIn("g_mat_over[0][0]", ram_pass1)
+
     def test_force_scalar_preflight_blocks_large_multicase_before_c_codegen(self):
         large_expr = sp.Add(*[
             sp.Symbol(f"G{i}") * sp.Symbol(f"H{i}")

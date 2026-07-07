@@ -174,6 +174,130 @@ class MultiCaseDummyCExportTests(unittest.TestCase):
             case1_reuse,
         )
 
+    def test_prefer_matrix_no_internal_dummy_layout_uses_constant_setup_dimensions(self):
+        response = build_multi_case_response({
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "elimination_codegen_mode": "prefer_matrix",
+            "case_profiles": [
+                {
+                    "name": "Case 0 physical N4",
+                    "case_map": {"YBox1": 0},
+                    "payload": _payload([
+                        ["1/R", "-1/R", "0"],
+                        ["-1/R", "2/R", "-1/R"],
+                        ["0", "-1/R", "1/R"],
+                    ]),
+                },
+                {
+                    "name": "Case 1 dummy N4",
+                    "case_map": {"YBox1": 1},
+                    "payload": _payload([
+                        ["1/R", "-1/R", "0"],
+                        ["-1/R", "1/R + G_EPSILON", "-G_EPSILON"],
+                        ["0", "-G_EPSILON", "G_EPSILON"],
+                    ]),
+                    "dummy_finalization": {
+                        "dummy_leaves": [
+                            {
+                                "dummy_node": "N4",
+                                "anchor_node": "N2",
+                                "branch_id": "Dummy12",
+                                "conductance": "G_EPSILON",
+                            }
+                        ]
+                    },
+                },
+            ],
+        })
+
+        draft = response["multi_case"]["c_draft"]
+        self.assertEqual(response["multi_case"]["fast_path"], "dummy_finalization_alias_template_matrix_dag")
+        self.assertNotIn("setupGMatrix(node_active);", draft)
+        self.assertIn("setupGMatrix(RETAINED_NODES_CASE_0);", draft)
+        self.assertIn("setupGMatrix(RETAINED_NODES_CASE_1);", draft)
+        self.assertNotIn("double G_EPSILON = 0.0;", draft)
+        self.assertNotIn("G_EPSILON;", draft)
+
+    def test_prefer_matrix_direct_retained_dummy_aliases_drop_removed_nodes(self):
+        case0_payload = _payload([
+            ["1/R", "-1/R", "0"],
+            ["-1/R", "2/R", "-1/R"],
+            ["0", "-1/R", "1/R"],
+        ])
+        case0_payload["direct_retained_stamps"] = [
+            {
+                "id": "YBox1",
+                "name": "YBox1",
+                "support_nodes": ["N1", "N2", "N4"],
+                "G": [
+                    {"row": "N1", "col": "N1", "expr": "1/R", "tagged": "1/R"},
+                    {"row": "N1", "col": "N2", "expr": "-1/R", "tagged": "-1/R"},
+                    {"row": "N2", "col": "N1", "expr": "-1/R", "tagged": "-1/R"},
+                    {"row": "N2", "col": "N2", "expr": "2/R", "tagged": "2/R"},
+                    {"row": "N2", "col": "N4", "expr": "-1/R", "tagged": "-1/R"},
+                    {"row": "N4", "col": "N2", "expr": "-1/R", "tagged": "-1/R"},
+                    {"row": "N4", "col": "N4", "expr": "1/R", "tagged": "1/R"},
+                ],
+                "Ihis": [],
+            }
+        ]
+        case1_payload = _payload([
+            ["1/R", "-1/R", "0"],
+            ["-1/R", "1/R + G_EPSILON", "-G_EPSILON"],
+            ["0", "-G_EPSILON", "G_EPSILON"],
+        ])
+        case1_payload["direct_retained_stamps"] = [
+            {
+                "id": "YBox1",
+                "name": "YBox1",
+                "support_nodes": ["N1", "N2", "N4"],
+                "G": [
+                    {"row": "N1", "col": "N1", "expr": "1/R", "tagged": "1/R"},
+                    {"row": "N1", "col": "N2", "expr": "-1/R", "tagged": "-1/R"},
+                    {"row": "N2", "col": "N1", "expr": "-1/R", "tagged": "-1/R"},
+                    {"row": "N2", "col": "N2", "expr": "1/R + G_EPSILON", "tagged": "1/R + G_EPSILON"},
+                    {"row": "N2", "col": "N4", "expr": "-G_EPSILON", "tagged": "-G_EPSILON"},
+                    {"row": "N4", "col": "N2", "expr": "-G_EPSILON", "tagged": "-G_EPSILON"},
+                    {"row": "N4", "col": "N4", "expr": "G_EPSILON", "tagged": "G_EPSILON"},
+                ],
+                "Ihis": [],
+            }
+        ]
+
+        response = build_multi_case_response({
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "elimination_codegen_mode": "prefer_matrix",
+            "case_profiles": [
+                {
+                    "name": "Case 0 physical N4",
+                    "case_map": {"YBox1": 0},
+                    "payload": case0_payload,
+                },
+                {
+                    "name": "Case 1 dummy N4",
+                    "case_map": {"YBox1": 1},
+                    "payload": case1_payload,
+                    "dummy_finalization": {
+                        "dummy_leaves": [
+                            {
+                                "dummy_node": "N4",
+                                "anchor_node": "N2",
+                                "branch_id": "Dummy12",
+                                "conductance": "G_EPSILON",
+                            }
+                        ]
+                    },
+                },
+            ],
+        })
+
+        draft = response["multi_case"]["c_draft"]
+        self.assertEqual(response["multi_case"]["fast_path"], "dummy_finalization_alias_template_matrix_dag")
+        self.assertNotIn("double G_EPSILON = 0.0;", draft)
+        self.assertNotIn("G_EPSILON;", draft)
+
     def test_dynamic_physical_dummy_pair_gets_profile_conditional_gvalue(self):
         deps = {"R": "RAM_CONSTANT", "G_EPSILON": "RAM_CONSTANT", "G_DYN": "CODE_VARIABLE"}
         response = build_multi_case_response({

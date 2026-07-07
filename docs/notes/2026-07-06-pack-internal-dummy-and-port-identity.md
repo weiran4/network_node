@@ -96,6 +96,11 @@ Scalar-expanded codegen also has its own conservative reuse layer:
 - RAM-only temporaries stay in `LOCAL_STATIC:` unless a later CODE/T1_T2 section needs the same value;
 - RAM-computed values reused by CODE or T1_T2 must be persistent `STATIC:` variables assigned during RAM;
 - RAM-stage denominator temps should be hoisted once and shared across RAM/CODE/T1_T2 when the denominator base depends only on RAM constants. Do not regenerate equivalent `scalar_code_inv_den_*` or `scalar_t1t2_inv_den_*` temps for the same RAM-only denominator.
+- Multi-case force-scalar RAM overlays should reuse retained-node layout work when every case has the same final node order: set `g_mat_nods`, clear `g_mat_over`, and call `setupGMatrix(dim)` once around the case switch; keep only case-specific formula assignments inside the switch.
+- Do not emit explanatory dimension enums in force-scalar multi-case C unless the generated C actually references them. Unused `NR_SUPER` / `NR_FINAL_MAX` / `CASE_COUNT` constants are noise and can trigger compiler warnings.
+- In matrix-mode dummy multi-case exports with no eliminated internal nodes, alias case values must be synchronized from finalized per-case `G/Ihis`, not raw source matrices. Otherwise dummy conductances such as `G_EPSILON` can leak back through RAM alias switches after the dummy node has been removed.
+- The same dummy-finalized alias synchronization must include `direct_retained_stamps`, not only `G_full` / `Ihis_full`. Shared aliases can cover multiple equivalent physical positions; per case, resolve all surviving positions and rewrite the alias only when they agree, or use `0` when no position survives.
+- `setupGMatrix(...)` must receive a concrete retained dimension for each layout profile. Do not emit `setupGMatrix(node_active)` for dummy cases whose external retained count differs; branch by `retained_profile` and call `setupGMatrix(RETAINED_NODES_CASE_n)`.
 
 Rollback point before this feature: commit `4bd3464 Guard pack dynamic internal profile codegen` on branch `codex/ui-engineering-polish`.
 
@@ -158,6 +163,11 @@ Use the term "port identity" and explain that it is a fixed backend ID used to v
 - Do not put a RAM-computed scalar that T1_T2 needs in `LOCAL_STATIC:`; `LOCAL_STATIC` should not be assumed available across runtime phases.
 - Do not declare user symbols used by scalar-expanded CODE/T1_T2 formulas in `LOCAL_STATIC:`. If a symbol appears in runtime assignments or voltage recovery, it belongs in `STATIC:` even if some RAM formulas also reference it.
 - Do not optimize denominator reuse per section only. First find RAM-only denominator bases used by runtime sections, hoist them to `STATIC:` temps assigned in RAM, then substitute those temps into RAM/CODE/T1_T2.
+- Do not repeat `g_mat_nods`, zero-fill loops, or `setupGMatrix` per force-scalar case when all cases stamp the same retained ports in the same order.
+- Do not reuse raw source alias case values after dummy finalization. The C draft should only see dummy conductances if a surviving physical final node really depends on them.
+- Do not scan only `G_full` / `Ihis_full` when cleaning dummy-finalized aliases; matrix-mode no-internal exports can source RAM aliases from `direct_retained_stamps`.
+- Do not pass runtime-selected retained dimensions into `setupGMatrix`; use generated constants per retained layout.
+- Do not restore `state.language` from saved circuit/project JSON. Startup demo files and shared project exports may carry old `"language": "zh"` metadata; loading them should not override the app/session default language.
 - Do not trust Pack branch G constant edits unless the active network-case snapshot has been synchronized.
 - Do not expose backend IDs as if they were user node names.
 - Do not use display names alone for Pack external-port validation. Display names can be edited to hide a slot/order mistake.

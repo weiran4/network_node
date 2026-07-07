@@ -5521,7 +5521,14 @@ def _apply_active_ram_overlay_dimension(draft: str, *, y_profile: dict, d_profil
         "for (int row = 0; row < node_active; row++) {\n        for (int col = 0; col < node_active; col++) {\n            g_mat_over[row][col] = 0.0;",
         draft,
     )
-    draft = re.sub(r"setupGMatrix\(\d+\);", "setupGMatrix(node_active);", draft, count=1)
+    setup_lines = [
+        f"if (retained_profile == {y_profile['profile_id']}) {{",
+        f"        setupGMatrix({y_profile['retained_nodes_id']});",
+        "    } else {",
+        f"        setupGMatrix({d_profile['retained_nodes_id']});",
+        "    }",
+    ]
+    draft = re.sub(r"setupGMatrix\(\d+\);", "\n".join(setup_lines), draft, count=1)
 
     lines = draft.splitlines()
     guarded: list[str] = []
@@ -5705,6 +5712,98 @@ def _apply_retained_layout_profile_compaction(
     draft = _guard_profile_y_dynamic_schur_lines(draft, y_profile=profiles[0])
     draft = _rename_internal_node_constant_for_retained_layouts(draft)
     return draft
+
+
+def _sync_dummy_finalized_alias_values(
+    aliases: dict[str, dict],
+    template_payload: dict,
+    final_results: Sequence[Mapping],
+) -> None:
+    if not aliases or not final_results:
+        return
+    template_nodes = [str(node) for node in (template_payload.get("external_nodes") or [])]
+    alias_positions: dict[str, list[tuple[str, int, int]]] = {}
+
+    def record_expr(expr: object, kind: str, row: int, col: int) -> None:
+        parsed = _parse_expr(expr)
+        if not parsed.is_Symbol:
+            return
+        alias = str(parsed)
+        if alias in aliases:
+            position = (kind, row, col)
+            positions = alias_positions.setdefault(alias, [])
+            if position not in positions:
+                positions.append(position)
+
+    for row, values in enumerate(template_payload.get("G_full") or []):
+        for col, expr in enumerate(values or []):
+            record_expr(expr, "G", row, col)
+    for row, expr in enumerate(template_payload.get("Ihis_full") or []):
+        record_expr(expr, "Ihis", row, 0)
+    node_index = {node: index for index, node in enumerate(template_nodes)}
+    for stamp in template_payload.get("direct_retained_stamps") or []:
+        for entry in stamp.get("G") or []:
+            row = node_index.get(str(entry.get("row")))
+            col = node_index.get(str(entry.get("col")))
+            if row is not None and col is not None:
+                record_expr(entry.get("expr"), "G", row, col)
+        for entry in stamp.get("Ihis") or []:
+            row = node_index.get(str(entry.get("row")))
+            if row is not None:
+                record_expr(entry.get("expr"), "Ihis", row, 0)
+
+    def resolved_final_value(
+        item: Mapping,
+        kind: str,
+        row: int,
+        col: int,
+    ) -> tuple[bool, sp.Expr | None]:
+        if row >= len(template_nodes) or (kind == "G" and col >= len(template_nodes)):
+            return False, None
+        row_node = template_nodes[row]
+        col_node = template_nodes[col] if kind == "G" else None
+        final = item.get("final")
+        final_nodes = [str(node) for node in (getattr(final, "nodes", []) if final is not None else [])]
+        if row_node not in final_nodes or (kind == "G" and col_node not in final_nodes):
+            return True, None
+        final_row = final_nodes.index(row_node)
+        if kind == "G":
+            final_col = final_nodes.index(str(col_node))
+            return True, sp.sympify(final.G[final_row, final_col])
+        return True, sp.sympify(final.Ihis[final_row, 0])
+
+    for alias, positions in alias_positions.items():
+        next_values: dict[str, str] = {}
+        next_owners: dict[int, str] = {}
+        unresolved = False
+        for item in final_results:
+            case_index = int(item.get("index", 0))
+            active_values: list[sp.Expr] = []
+            for kind, row, col in positions:
+                ok, position_value = resolved_final_value(item, kind, row, col)
+                if not ok:
+                    unresolved = True
+                    break
+                if position_value is not None:
+                    active_values.append(position_value)
+            if unresolved:
+                break
+            if not active_values:
+                value = sp.Integer(0)
+            else:
+                value = active_values[0]
+                if any(not _expr_equal_light(value, other) for other in active_values[1:]):
+                    unresolved = True
+                    break
+            next_values[str(case_index)] = _expr_to_payload_text(value)
+            next_owners[case_index] = _expr_stage(value, item.get("symbol_table") or {})
+        if unresolved:
+            continue
+        info = aliases[alias]
+        if next_values and next_values != info.get("case_values"):
+            info["case_values"] = next_values
+            info["case_owners"] = next_owners
+            info["owner"] = _promote_owner(next_owners.values())
 
 
 def _profile_symbol_table(profile: dict) -> dict:
@@ -8345,7 +8444,6 @@ def _build_force_scalar_multi_case_c_draft(
     profile_set,
     final_results: list[dict],
 ) -> tuple[str, list[dict], dict[str, object]]:
-    max_dim = max((item["final"].G.rows for item in final_results), default=0)
     symbols = _symbols_in_matrices(
         *(item["final"].G for item in final_results),
         *(item["final"].Ihis for item in final_results),
@@ -8375,6 +8473,16 @@ def _build_force_scalar_multi_case_c_draft(
     def node_c_name(item: dict, node: object, index: int) -> str:
         names = item.get("node_c_names") or {}
         return _c_identifier_name(str(names.get(str(node), node)), f"N{index + 1}")
+
+    final_node_orders = [
+        tuple(str(node) for node in item["final"].nodes)
+        for item in final_results
+    ]
+    shared_retained_nodes = (
+        list(final_node_orders[0])
+        if final_node_orders and all(order == final_node_orders[0] for order in final_node_orders)
+        else None
+    )
 
     for item in final_results:
         case_index = int(item.get("index", 0))
@@ -8489,7 +8597,6 @@ def _build_force_scalar_multi_case_c_draft(
         "/* Multi-case C draft with scalar-expanded Schur formulas.",
         "   Each init-time case is reduced to scalar final G/Ihis formulas;",
         "   runtime Gkk/W MATRIX_ objects are intentionally not generated. */",
-        f"enum {{ NR_SUPER = {len(profile_set.super_node_order)}, NR_FINAL_MAX = {max_dim}, NCASE = {len(final_results)} }};",
         "",
         "STATIC:",
         *dict.fromkeys(static_declarations),
@@ -8501,37 +8608,63 @@ def _build_force_scalar_multi_case_c_draft(
         "    int err = 0;",
         "    int row;",
         "    int col;",
-        "    /* Case-specific scalar-expanded RAM G stamp. */",
-        f"    switch ({case_id_symbol}) {{",
     ]
+    if shared_retained_nodes is not None:
+        shared_dim = len(shared_retained_nodes)
+        lines.append("    /* Shared retained-node layout for scalar-expanded RAM G stamps. */")
+        for node_index, node in enumerate(shared_retained_nodes):
+            lines.append(f"    g_mat_nods[{node_index}] = getNodeNum(comp, \"{node}\");")
+        lines.extend([
+            f"    for (row = 0; row < {shared_dim}; row++) {{",
+            f"        for (col = 0; col < {shared_dim}; col++) {{",
+            "            g_mat_over[row][col] = 0.0;",
+            "        }",
+            "    }",
+            "    /* Case-specific scalar-expanded RAM G values. */",
+            f"    switch ({case_id_symbol}) {{",
+        ])
+    else:
+        lines.extend([
+            "    /* Case-specific scalar-expanded RAM G stamp. */",
+            f"    switch ({case_id_symbol}) {{",
+        ])
     for item in final_results:
         case_index = int(item.get("index", 0))
         final = item["final"]
         nodes = list(final.nodes)
         dim = len(nodes)
         lines.append(f"    case {case_index}:")
-        for node_index, node in enumerate(nodes):
-            lines.append(f"        g_mat_nods[{node_index}] = getNodeNum(comp, \"{node}\");")
-        lines.extend([
-            f"        for (row = 0; row < {dim}; row++) {{",
-            f"            for (col = 0; col < {dim}; col++) {{",
-            "                g_mat_over[row][col] = 0.0;",
-            "            }",
-            "        }",
-        ])
+        if shared_retained_nodes is None:
+            for node_index, node in enumerate(nodes):
+                lines.append(f"        g_mat_nods[{node_index}] = getNodeNum(comp, \"{node}\");")
+            lines.extend([
+                f"        for (row = 0; row < {dim}; row++) {{",
+                f"            for (col = 0; col < {dim}; col++) {{",
+                "                g_mat_over[row][col] = 0.0;",
+                "            }",
+                "        }",
+            ])
         for name, expr in case_shared_temps.get(case_index, []):
             lines.append(f"        {name} = {_ccode(expr)};")
         lines.extend(case_ram_lines.get(case_index, []))
-        lines.extend([
-            f"        setupGMatrix({dim});",
-            "        break;",
-        ])
+        if shared_retained_nodes is None:
+            lines.append(f"        setupGMatrix({dim});")
+        lines.append("        break;")
     lines.extend([
         "    default:",
+        "        err = 1;",
         "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
         f"                       \"Unknown scalar-expanded multi-case profile %d for component %s.\", {case_id_symbol}, Name);",
         "        break;",
         "    }",
+    ])
+    if shared_retained_nodes is not None:
+        lines.extend([
+            "    if (err == 0) {",
+            f"        setupGMatrix({len(shared_retained_nodes)});",
+            "    }",
+        ])
+    lines.extend([
         "    if (err > 0) {",
         "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
         "                       \"RTDS scalar-expanded allocation failed for component %s.\", Name);",
@@ -9431,6 +9564,8 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
     extra_warnings: list[str] = []
     matrix_dag_result: dict | None = None
     if use_matrix_dag_draft:
+        if template_payload is not None:
+            _sync_dummy_finalized_alias_values(aliases, template_payload, final_results)
         c_draft, gvalue_conditions, extra_warnings, matrix_dag_result = _build_dummy_finalized_matrix_dag_c_draft(
             payload,
             alias_model=alias_model,
