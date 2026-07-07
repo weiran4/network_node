@@ -252,7 +252,9 @@ class DynamicSubblockSchurTests(unittest.TestCase):
 
         self.assertIn("Diagonal Gkk scalar CODE path: Gred", draft)
         self.assertIn("MATRIX_ Gred_code", draft)
-        self.assertIn("for (int j = i; j < RETAINED_NODES; j++)", draft)
+        self.assertIn("int j;", draft)
+        self.assertIn("for (j = i; j < RETAINED_NODES; j++)", draft)
+        self.assertNotIn("for (int ", draft)
         self.assertNotIn("matrix_subtract_CODE(&Gred_code", draft)
 
     def test_ram_and_code_owners_do_not_overlap(self):

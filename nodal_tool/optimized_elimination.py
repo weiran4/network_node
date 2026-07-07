@@ -3199,10 +3199,51 @@ def _dedupe_same_code_source_temps(draft: str) -> str:
     return "\n".join(output)
 
 
+_C99_FOR_LOOP_RE = re.compile(r"for \(int (?P<name>[A-Za-z_]\w*) = (?P<init>[^;]+);")
+_CBUILDER_SECTION_RE = re.compile(
+    r"(?m)^(?P<label>STATIC|LOCAL_STATIC|RAM(?:_PASS\d*)?|GVALUES|CODE_FUNCTIONS|CODE|BEGIN_T0|T1_T2):\n"
+)
+_CBUILDER_C89_LOOP_SECTION_LABELS = {"STATIC", "LOCAL_STATIC", "CODE", "BEGIN_T0", "T1_T2"}
+
+
+def _c89_for_loop_compat(draft: str) -> str:
+    """Rewrite generated CBuilder loops away from C99 loop declarations."""
+    if not _CBUILDER_SECTION_RE.search(draft):
+        return draft
+
+    draft = _C99_FOR_LOOP_RE.sub(lambda match: f"for ({match.group('name')} = {match.group('init')};", draft)
+    matches = list(_CBUILDER_SECTION_RE.finditer(draft))
+    if not matches:
+        return draft
+
+    pieces: list[str] = []
+    cursor = 0
+    for index, match in enumerate(matches):
+        section_start = match.end()
+        section_end = matches[index + 1].start() if index + 1 < len(matches) else len(draft)
+        section = draft[section_start:section_end]
+        label = match.group("label")
+        if label not in _CBUILDER_C89_LOOP_SECTION_LABELS and not label.startswith("RAM"):
+            pieces.append(draft[cursor:section_end])
+            cursor = section_end
+            continue
+        names = list(dict.fromkeys(re.findall(r"\bfor \(([A-Za-z_]\w*) =", section)))
+        pieces.append(draft[cursor:section_start])
+        if names:
+            for name in names:
+                section = re.sub(rf"(?m)^    int\s+{re.escape(name)}\s*;\n", "", section)
+            pieces.extend(f"    int {name};\n" for name in names)
+        pieces.append(section)
+        cursor = section_end
+    pieces.append(draft[cursor:])
+    return "".join(pieces)
+
+
 def _join_c_draft_lines(lines: Sequence[str]) -> str:
     draft = "\n".join(lines)
     draft = _lift_repeated_ram_code_source_temps(draft)
     draft = _dedupe_same_code_source_temps(draft)
+    draft = _c89_for_loop_compat(draft)
     draft = _use_readable_dimension_names(draft)
     draft = _ensure_static_blank_line(draft)
     include_lines: list[str] = []

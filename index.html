@@ -1288,14 +1288,17 @@
     .output-tabs {
       display: flex;
       align-items: center;
+      flex-wrap: nowrap;
       gap: 7px;
       padding: 6px 10px 5px;
       border-bottom: 1px solid var(--output-line);
       background: linear-gradient(180deg, #111f2a 0%, #0c1720 100%);
       box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
+      overflow-x: auto;
     }
 
     .tab {
+      flex: 0 0 auto;
       border: 1px solid var(--output-line);
       background: #122230;
       color: #d8e2e8;
@@ -1304,6 +1307,7 @@
       cursor: pointer;
       font-size: 12px;
       font-weight: 750;
+      white-space: nowrap;
       transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
     }
 
@@ -2026,6 +2030,55 @@
       margin: 0;
     }
 
+    .c-draft-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
+
+    .formula-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 8px 9px 2px;
+    }
+
+    .codegen-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid rgba(101, 207, 255, 0.28);
+      border-radius: 7px;
+      background: rgba(5, 22, 34, 0.62);
+    }
+
+    .codegen-toggle-button {
+      min-height: 28px;
+      padding: 4px 9px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: #a9bed0;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 800;
+      transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+    }
+
+    .codegen-toggle-button:hover {
+      color: #fff;
+      background: rgba(35, 72, 96, 0.58);
+    }
+
+    .codegen-toggle-button.active {
+      border-color: rgba(101, 207, 255, 0.62);
+      background: #123650;
+      color: #ffffff;
+    }
+
     .copy-draft-button {
       flex: 0 0 auto;
       min-height: 28px;
@@ -2649,7 +2702,7 @@
       }
     }
 
-    @media (max-width: 920px) {
+    @media (max-width: 760px) {
       body {
         min-width: 0;
         overflow: auto;
@@ -3072,7 +3125,8 @@
       optimizedEliminationSimplify: "light",
       optimizedEliminationAssumeSpd: true,
       optimizedEliminationUseSuggestedOrder: true,
-      eliminationCodegenMode: "auto",
+      eliminationCodegenMode: "prefer_matrix",
+      forceScalarPreflightConfirmed: false,
       optimizedSymbolDependencyOverrides: "",
       multiCaseProfilesText: "",
       multiCaseProfilesKey: "",
@@ -3099,8 +3153,8 @@
     let mathPrecomputeTimer = null;
     const CACHE_LIMIT = 16;
     const REDUCED_CACHE_VERSION = "reduced-safe-simplified-v1";
-    const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v5-source-cse-static-assign";
-    const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v6-codegen-mode";
+    const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v6-codegen-mode-scalar";
+    const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v7-scalar-preflight";
     const reducedCache = new Map();
     const branchCurrentCache = new Map();
     const pythonDraftCache = new Map();
@@ -3130,6 +3184,10 @@
       pythonDraftCache.clear();
       optimizedEliminationCache.clear();
       multiCaseExportCache.clear();
+    }
+
+    function normalizedEliminationCodegenMode(value = state.eliminationCodegenMode) {
+      return value === "force_scalar" ? "force_scalar" : "prefer_matrix";
     }
 
     function reducedCacheKey(payload) {
@@ -7011,7 +7069,7 @@
           multiCaseProfilesText: state.multiCaseProfilesText || "",
           multiCaseProfilesKey: state.multiCaseProfilesKey || "",
           multiCaseIdSymbol: state.multiCaseIdSymbol || "case_id",
-          eliminationCodegenMode: state.eliminationCodegenMode || "auto"
+          eliminationCodegenMode: normalizedEliminationCodegenMode()
         },
         canvasOrder: canvases.map(item => item.id),
         canvases,
@@ -7033,7 +7091,7 @@
         multiCaseProfilesText: state.multiCaseProfilesText || "",
         multiCaseProfilesKey: state.multiCaseProfilesKey || "",
         multiCaseIdSymbol: state.multiCaseIdSymbol || "case_id",
-        eliminationCodegenMode: state.eliminationCodegenMode || "auto",
+        eliminationCodegenMode: normalizedEliminationCodegenMode(),
         selectedId: state.selectedId,
         selectedIds: structuredClone(state.selectedIds || []),
         selectedNetIds: structuredClone(state.selectedNetIds || []),
@@ -7065,7 +7123,9 @@
       state.multiCaseProfilesText = ui.multiCaseProfilesText ?? data?.multiCaseProfilesText ?? state.multiCaseProfilesText ?? "";
       state.multiCaseProfilesKey = ui.multiCaseProfilesKey ?? data?.multiCaseProfilesKey ?? state.multiCaseProfilesKey ?? "";
       state.multiCaseIdSymbol = ui.multiCaseIdSymbol ?? data?.multiCaseIdSymbol ?? state.multiCaseIdSymbol ?? "case_id";
-      state.eliminationCodegenMode = ui.eliminationCodegenMode ?? data?.eliminationCodegenMode ?? state.eliminationCodegenMode ?? "auto";
+      state.eliminationCodegenMode = normalizedEliminationCodegenMode(
+        ui.eliminationCodegenMode ?? data?.eliminationCodegenMode ?? state.eliminationCodegenMode
+      );
       applyPanelWidth();
     }
 
@@ -9559,6 +9619,7 @@
         mode: "structured_formula",
         display_mode: state.optimizedEliminationDisplay || "compact",
         simplify_level: state.optimizedEliminationSimplify || "light",
+        elimination_codegen_mode: normalizedEliminationCodegenMode(),
         assume_spd: state.optimizedEliminationAssumeSpd !== false,
         use_suggested_order: state.optimizedEliminationUseSuggestedOrder !== false
       };
@@ -9603,6 +9664,7 @@
         language: state.language,
         display_mode: payload.display_mode,
         simplify_level: payload.simplify_level,
+        elimination_codegen_mode: payload.elimination_codegen_mode,
         assume_spd: payload.assume_spd,
         use_suggested_order: payload.use_suggested_order,
         all_nodes: payload.all_nodes,
@@ -9927,7 +9989,8 @@
         runtime_case_groups,
         display_mode: state.optimizedEliminationDisplay || "compact",
         simplify_level: state.optimizedEliminationSimplify || "light",
-        elimination_codegen_mode: state.eliminationCodegenMode || "auto",
+        elimination_codegen_mode: normalizedEliminationCodegenMode(),
+        force_scalar_confirmed: Boolean(state.forceScalarPreflightConfirmed),
         assume_spd: state.optimizedEliminationAssumeSpd !== false,
         use_suggested_order: state.optimizedEliminationUseSuggestedOrder !== false,
         eligible_branches: branches.map(branch => ({
@@ -10002,54 +10065,25 @@
       await pending;
     }
 
-    function renderOptimizedControls() {
-      const display = state.optimizedEliminationDisplay || "compact";
-      const simplify = state.optimizedEliminationSimplify || "light";
-      const codegenMode = state.eliminationCodegenMode || "auto";
-      const spd = state.optimizedEliminationAssumeSpd !== false;
-      const overrides = state.optimizedSymbolDependencyOverrides || "";
+    function renderEliminationCodegenToggle() {
+      const codegenMode = normalizedEliminationCodegenMode();
+      const options = [
+        { value: "prefer_matrix", label: optText("矩阵", "Matrix") },
+        { value: "force_scalar", label: optText("标量", "Scalar") }
+      ];
       return `
-        <div class="formula-card">
-          <div class="formula-name">优化消元设置 / Optimized elimination controls</div>
-          <div class="property-grid">
-            <label class="field">
-              <span>计算模式 / Mode</span>
-              <input value="结构化公式 / Structured Formula" readonly>
-            </label>
-            <label class="field">
-              <span>显示方式 / Display</span>
-              <select data-optimized-control="display">
-                <option value="compact" ${display === "compact" ? "selected" : ""}>${optText("紧凑", "Compact")}</option>
-                <option value="step" ${display === "step" ? "selected" : ""}>分步 / Step-by-step</option>
-                <option value="expanded" ${display === "expanded" ? "selected" : ""}>展开 / Expanded</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>化简程度 / Simplification</span>
-              <select data-optimized-control="simplify">
-                <option value="none" ${simplify === "none" ? "selected" : ""}>不化简 / None</option>
-                <option value="light" ${simplify === "light" ? "selected" : ""}>轻量 / Light</option>
-                <option value="full" ${simplify === "full" ? "selected" : ""}>完整 / Full</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>${optText("消元代码生成", "Elimination codegen")}</span>
-              <select data-optimized-control="codegenMode">
-                <option value="auto" ${codegenMode === "auto" ? "selected" : ""}>${optText("自动推荐", "Auto")}</option>
-                <option value="prefer_matrix" ${codegenMode === "prefer_matrix" ? "selected" : ""}>${optText("优先矩阵", "Prefer matrix")}</option>
-                <option value="force_scalar" ${codegenMode === "force_scalar" ? "selected" : ""}>${optText("强制标量展开", "Force scalar")}</option>
-              </select>
-            </label>
-            <label class="field checkbox-field">
-              <span>${optText("对称正定/对称假设", "SPD / symmetric assumption")}</span>
-              <input data-optimized-control="spd" type="checkbox" ${spd ? "checked" : ""}>
-            </label>
-          </div>
-          <label class="field">
-            <span>${optText("符号类别覆盖 JSON", "Symbol dependency overrides JSON")}</span>
-            <textarea data-optimized-control="symbolDeps" rows="4" spellcheck="false" placeholder='{"Gtap":"CODE_VARIABLE","Ihis_a":"STEP_HISTORY"}'>${escapeHtml(overrides)}</textarea>
-          </label>
-          <div class="actual-block-caption">${optText("默认：常数 G 符号进入 RAM_CONSTANT，非常数 G 符号进入 CODE_VARIABLE，Ihis/历史项符号进入 STEP_HISTORY；强制标量展开是专家测试模式，会跳过运行时 Gkk/W 矩阵路线。", "Default: constant G symbols map to RAM_CONSTANT, non-constant G symbols to CODE_VARIABLE, and Ihis/history symbols to STEP_HISTORY. Force scalar is an expert test mode that skips runtime Gkk/W matrix codegen.")}</div>
+        <div class="codegen-toggle" role="group" aria-label="${escapeHtml(optText("C 导出路线", "C export path"))}">
+          ${options.map(option => `
+            <button
+              class="codegen-toggle-button ${codegenMode === option.value ? "active" : ""}"
+              type="button"
+              data-optimized-codegen-mode="${option.value}"
+              aria-pressed="${codegenMode === option.value ? "true" : "false"}"
+              title="${escapeHtml(option.value === "prefer_matrix"
+                ? optText("生成 Gkk/W 矩阵 Schur 路线", "Generate the Gkk/W matrix Schur path")
+                : optText("生成纯标量展开路线", "Generate the scalar-expanded path"))}"
+            >${escapeHtml(option.label)}</button>
+          `).join("")}
         </div>
       `;
     }
@@ -10679,7 +10713,10 @@
         <div class="formula-card" data-c-draft-card>
           <div class="formula-title-row">
             <div class="formula-name">${optText("结构化 C 草稿", "Structured C Draft")}</div>
-            <button class="copy-draft-button" type="button" data-copy-c-draft>${optText("复制 C", "Copy C")}</button>
+            <div class="c-draft-actions">
+              ${renderEliminationCodegenToggle()}
+              <button class="copy-draft-button" type="button" data-copy-c-draft>${optText("复制 C", "Copy C")}</button>
+            </div>
           </div>
           <pre class="code" data-c-draft-code tabindex="0" title="${optText("聚焦后按 Ctrl+C 复制整段 C 草稿", "Focus and press Ctrl+C to copy the full C draft")}">${escapeHtml(result.structured?.c_draft || "")}</pre>
         </div>
@@ -10946,6 +10983,36 @@
       `;
     }
 
+    function renderScalarPreflightWarning(preflight) {
+      if (!preflight || preflight.severity === "ok") return "";
+      const danger = preflight.severity === "danger";
+      const title = danger
+        ? optText("标量展开预估很大", "Scalar expansion is estimated to be large")
+        : optText("标量展开预估偏大", "Scalar expansion is estimated to be moderately large");
+      const message = state.language === "en"
+        ? (preflight.message_en || "The scalar-expanded C draft may become large.")
+        : (preflight.message_zh || "标量展开 C 草稿可能较大。");
+      const summary = optText(
+        `case 数 ${preflight.case_count ?? "-"}，表达式操作约 ${preflight.total_ops ?? "-"}，最长表达式约 ${preflight.max_expr_chars ?? "-"} 字符。`,
+        `${preflight.case_count ?? "-"} cases, about ${preflight.total_ops ?? "-"} expression operations, longest expression about ${preflight.max_expr_chars ?? "-"} characters.`
+      );
+      const action = preflight.blocked ? `
+        <button class="text-button primary" type="button" data-multicase-action="confirmScalarPreflight">
+          ${escapeHtml(optText("仍然生成标量", "Continue scalar generation"))}
+        </button>
+      ` : "";
+      return `
+        <div class="formula-card validation-warning">
+          <div class="formula-name">${escapeHtml(title)}</div>
+          <div class="formula-empty">
+            ${escapeHtml(message)}<br>
+            ${escapeHtml(summary)}
+          </div>
+          ${action ? `<div class="formula-actions">${action}</div>` : ""}
+        </div>
+      `;
+    }
+
     function renderMultiCaseCExportResult(result) {
       const multiCase = result.multi_case || {};
       const branchById = new Map(multiCaseEligibleBranches().map(branch => [branch.id, branch]));
@@ -11106,10 +11173,14 @@
         ${conditionalGValueHtml}
         ${aliasHtml}
         ${renderMultiCaseGredEntryReuse(multiCase)}
+        ${renderScalarPreflightWarning(multiCase.scalar_preflight)}
         <div class="formula-card" data-c-draft-card>
           <div class="formula-header-row">
             <div class="formula-name">${escapeHtml(optText("多Case 集合 C 草稿", "Multi-case Collection C Draft"))}</div>
-            <button class="copy-draft-button" type="button" data-copy-c-draft>${escapeHtml(optText("复制 C", "Copy C"))}</button>
+            <div class="c-draft-actions">
+              ${renderEliminationCodegenToggle()}
+              <button class="copy-draft-button" type="button" data-copy-c-draft>${escapeHtml(optText("复制 C", "Copy C"))}</button>
+            </div>
           </div>
           <pre class="code" data-c-draft-code tabindex="0">${escapeHtml(displayedMultiCaseCDraft(result.multi_case?.c_draft))}</pre>
         </div>
@@ -11121,6 +11192,7 @@
         version: MULTI_CASE_EXPORT_CACHE_VERSION,
         case_id_symbol: payload.case_id_symbol,
         elimination_codegen_mode: payload.elimination_codegen_mode,
+        force_scalar_confirmed: payload.force_scalar_confirmed,
         eligible_branches: payload.eligible_branches,
         runtime_case_groups: payload.runtime_case_groups?.map(group => ({
           branch_id: group.branch_id,
@@ -16985,10 +17057,11 @@ function startResizeDrag(branch, handle, event) {
     });
     outputText.addEventListener("pointerover", handleFormulaHover);
     outputText.addEventListener("pointerout", handleFormulaHoverOut);
-    outputText.addEventListener("change", event => {
+    function handleOutputControlChange(event) {
       const multiCaseProfiles = event.target.closest?.("[data-multicase-profiles]");
       if (multiCaseProfiles) {
         state.multiCaseProfilesText = multiCaseProfiles.value || "";
+        state.forceScalarPreflightConfirmed = false;
         multiCaseExportRenderToken += 1;
         renderOutput();
         return;
@@ -16996,6 +17069,7 @@ function startResizeDrag(branch, handle, event) {
       const multiCaseId = event.target.closest?.("[data-multicase-case-id]");
       if (multiCaseId) {
         state.multiCaseIdSymbol = multiCaseId.value || "case_id";
+        state.forceScalarPreflightConfirmed = false;
         multiCaseExportRenderToken += 1;
         renderOutput();
         return;
@@ -17005,13 +17079,19 @@ function startResizeDrag(branch, handle, event) {
       const kind = control.dataset.optimizedControl;
       if (kind === "display") state.optimizedEliminationDisplay = control.value || "compact";
       if (kind === "simplify") state.optimizedEliminationSimplify = control.value || "light";
-      if (kind === "codegenMode") state.eliminationCodegenMode = control.value || "auto";
+      if (kind === "codegenMode") {
+        const nextMode = normalizedEliminationCodegenMode(control.value);
+        if (state.eliminationCodegenMode !== nextMode) state.forceScalarPreflightConfirmed = false;
+        state.eliminationCodegenMode = nextMode;
+      }
       if (kind === "spd") state.optimizedEliminationAssumeSpd = Boolean(control.checked);
       if (kind === "symbolDeps") state.optimizedSymbolDependencyOverrides = control.value || "";
       optimizedEliminationRenderToken += 1;
       multiCaseExportRenderToken += 1;
       renderOutput();
-    });
+    }
+    outputText.addEventListener("change", handleOutputControlChange);
+    outputDialogBody.addEventListener("change", handleOutputControlChange);
     function handleCodeDraftKeydown(event) {
       const code = event.target.closest?.("[data-c-draft-code]");
       if (!code) return;
@@ -17074,10 +17154,23 @@ function startResizeDrag(branch, handle, event) {
     document.addEventListener("copy", handleCodeDraftCopy, true);
     outputText.addEventListener("click", event => {
       if (handleCopyDraftClick(event)) return;
+      const codegenMode = event.target.closest?.("[data-optimized-codegen-mode]");
+      if (codegenMode) {
+        const nextMode = normalizedEliminationCodegenMode(codegenMode.dataset.optimizedCodegenMode);
+        if (state.eliminationCodegenMode !== nextMode) state.forceScalarPreflightConfirmed = false;
+        state.eliminationCodegenMode = nextMode;
+        optimizedEliminationRenderToken += 1;
+        multiCaseExportRenderToken += 1;
+        renderOutput();
+        return;
+      }
       const multiCaseAction = event.target.closest?.("[data-multicase-action]");
       if (multiCaseAction) {
-        if (multiCaseAction.dataset.multicaseAction === "resetProfiles") {
+        if (multiCaseAction.dataset.multicaseAction === "confirmScalarPreflight") {
+          state.forceScalarPreflightConfirmed = true;
+        } else if (multiCaseAction.dataset.multicaseAction === "resetProfiles") {
           state.multiCaseProfilesText = JSON.stringify(defaultMultiCaseProfiles(multiCaseEligibleBranches()), null, 2);
+          state.forceScalarPreflightConfirmed = false;
         }
         multiCaseExportRenderToken += 1;
         renderOutput();
@@ -17092,7 +17185,25 @@ function startResizeDrag(branch, handle, event) {
       }
     });
     outputDialogBody.addEventListener("click", event => {
-      handleCopyDraftClick(event);
+      if (handleCopyDraftClick(event)) return;
+      const codegenMode = event.target.closest?.("[data-optimized-codegen-mode]");
+      if (codegenMode) {
+        const nextMode = normalizedEliminationCodegenMode(codegenMode.dataset.optimizedCodegenMode);
+        if (state.eliminationCodegenMode !== nextMode) state.forceScalarPreflightConfirmed = false;
+        state.eliminationCodegenMode = nextMode;
+        optimizedEliminationRenderToken += 1;
+        multiCaseExportRenderToken += 1;
+        renderOutput();
+        return;
+      }
+      const multiCaseAction = event.target.closest?.("[data-multicase-action]");
+      if (multiCaseAction) {
+        if (multiCaseAction.dataset.multicaseAction === "confirmScalarPreflight") {
+          state.forceScalarPreflightConfirmed = true;
+          multiCaseExportRenderToken += 1;
+          renderOutput();
+        }
+      }
     });
     outputDialogBody.addEventListener("pointerover", handleFormulaHover);
     outputDialogBody.addEventListener("pointerout", handleFormulaHoverOut);

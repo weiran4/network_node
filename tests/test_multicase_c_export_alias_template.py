@@ -3,6 +3,8 @@ import json
 import re
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import sympy as sp
 
@@ -1525,37 +1527,42 @@ T1_T2:
             }
             for index, case in enumerate(cases)
         ]
-        draft = build_multi_case_response(
-            _request(profiles, deps=_deps("R", code=("Gvar",)), case_id="case_id")
-        )["multi_case"]["c_draft"]
+        request = _request(profiles, deps=_deps("R", code=("Gvar",)), case_id="case_id")
+        response = build_multi_case_response({
+            **request,
+            "elimination_codegen_mode": "auto",
+        })
+        draft = response["multi_case"]["c_draft"]
 
-        self.assertIn("matrixDim(&Grr_code, RETAINED_NODES, RETAINED_NODES);", draft)
-        self.assertIn("matrixDim(&Gred_code, RETAINED_NODES, RETAINED_NODES);", draft)
-        self.assertIn("matrixDim(&Grk_code, RETAINED_NODES, internal_active);", draft)
-        self.assertIn("matrixDim(&Gkk_code, internal_active, internal_active);", draft)
-        self.assertNotIn("network_node_recover_vk_diag", draft)
-        self.assertNotIn("&Ihisk_code", draft)
-        self.assertNotIn("&W_code", draft)
-        code_refresh = draft.split("Case-specific CODE-side Schur update for cases with dynamic final GValues", 1)[1].split(
-            "Stamp dynamic Gred entries",
-            1,
-        )[0]
-        self.assertIn("switch (case_id)", code_refresh)
-        code_case0 = code_refresh.split("case 0:", 1)[1].rsplit("case 1:", 1)[0]
-        code_case1 = code_refresh.rsplit("case 1:", 1)[1].split("default:", 1)[0]
-        self.assertIn("set_CODE(&Grr_code", code_case0)
-        self.assertIn("Diagonal Gkk scalar CODE path", code_case0)
-        self.assertIn("This Pack case has no CODE-side Schur update.", code_case1)
-        self.assertNotIn("set_CODE(&Grr_code", code_case1)
-        self.assertNotIn("get_CODE(&Gkk_code", code_case1)
-        self.assertNotIn("set_CODE(&Gred_code", code_case1)
-        recovery_switch = draft.split("Case-specific voltage recovery", 1)[1]
-        case0_block = recovery_switch.split("case 0:", 1)[1].split("case 1:", 1)[0]
-        self.assertIn("vk_sum += get_CODE(&Gkr_code, k, j) * get_CODE(&Vr_code, j, 0);", case0_block)
-        case1_block = recovery_switch.split("case 1:", 1)[1].split("default:", 1)[0]
-        self.assertIn("This Pack case has no recovered internal nodes.", case1_block)
-        self.assertNotIn("get_CODE(&Gkk_code", case1_block)
-        self.assertNotIn("get_CODE(&Gkr_code", case1_block)
+        self.assertEqual(response["multi_case"]["codegen_mode"], "auto scalar Schur expansion")
+        self.assertEqual(response["multi_case"]["fast_path"], "case_scalar_schur_expansion")
+        self.assertNotIn("MATRIX_ Grr_code", draft)
+        self.assertNotIn("MATRIX_ Gkk_code", draft)
+        self.assertNotIn("MATRIX_ W_code", draft)
+        self.assertNotIn("matrixDim(&Gkk_code", draft)
+        self.assertNotIn("matrix_mult_CODE", draft)
+        self.assertNotIn("get_CODE(&Gkk_code", draft)
+        self.assertNotIn("for (int ", draft)
+        self.assertNotIn("createGValue", draft)
+        self.assertIn("switch (case_id)", draft)
+        self.assertIn("case 0:", draft)
+        self.assertIn("case 1:", draft)
+        case1_code = draft.split("CODE:", 1)[1].split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertNotIn("Gkk", case1_code)
+        recovery = draft.split("T1_T2:", 1)[1]
+        case0_recovery = recovery.split("case 0:", 1)[1].split("case 1:", 1)[0]
+        case1_recovery = recovery.split("case 1:", 1)[1].split("default:", 1)[0]
+        self.assertIn("N2 =", case0_recovery)
+        static_section = draft.split("STATIC:", 1)[1].split("LOCAL_STATIC:", 1)[0]
+        ram_case0 = draft.split("RAM_PASS1:", 1)[1].split("case 0:", 1)[1].split("case 1:", 1)[0]
+        self.assertRegex(static_section, r"double scalar_case0_shared_inv_den_\d+ = 0\.0;")
+        self.assertRegex(ram_case0, r"scalar_case0_shared_inv_den_\d+ = 1\.0/")
+        self.assertIn("scalar_case0_shared_inv_den_", case0_recovery)
+        self.assertNotIn("scalar_case0_t1t2_inv_den_", case0_recovery)
+        self.assertIn("This Pack case has no recovered internal nodes.", case1_recovery)
+        self.assertNotIn("scalar_case1_t1t2_inv_den_", case1_recovery)
+        self.assertNotIn("get_CODE", recovery)
+        self.assertGreater(response["multi_case"]["scalar_cse"]["denominator_temps"], 0)
 
     def test_trf_ctest_dummy_small_varg_force_scalar_avoids_internal_matrix_dag(self):
         fixture = Path("exports/Trf_Ctest_dummy_small_varG.json")
@@ -1661,12 +1668,10 @@ T1_T2:
         self.assertNotIn("matrixDim(&Gkk_code", draft)
         self.assertNotIn("matrix_mult_CODE", draft)
         self.assertNotIn("get_CODE(&Gkk_code", draft)
-        self.assertIn("createGValue", draft)
-        self.assertIn("case_id == 0", draft)
-        self.assertIn("Gvar", draft)
+        self.assertNotIn("createGValue", draft)
+        self.assertIn("switch (case_id)", draft)
         self.assertIn("case 1:", draft)
         case1_code = draft.split("CODE:", 1)[1].split("case 1:", 1)[1].split("default:", 1)[0]
-        self.assertNotIn("Gvar", case1_code)
         self.assertNotIn("Gkk", case1_code)
         recovery = draft.split("T1_T2:", 1)[1]
         case0_recovery = recovery.split("case 0:", 1)[1].split("case 1:", 1)[0]
@@ -1674,6 +1679,98 @@ T1_T2:
         self.assertIn("N2 =", case0_recovery)
         self.assertIn("This Pack case has no recovered internal nodes.", case1_recovery)
         self.assertNotIn("get_CODE", recovery)
+
+    def test_force_scalar_preflight_blocks_large_multicase_before_c_codegen(self):
+        large_expr = sp.Add(*[
+            sp.Symbol(f"G{i}") * sp.Symbol(f"H{i}")
+            for i in range(360)
+        ], evaluate=False)
+        final_results = []
+        for case_index in range(6):
+            final = SimpleNamespace(
+                nodes=["A", "B"],
+                G=sp.Matrix([[large_expr, -large_expr], [-large_expr, large_expr]]),
+                Ihis=sp.Matrix([[large_expr], [-large_expr]]),
+            )
+            final_results.append({
+                "index": case_index,
+                "name": f"case {case_index}",
+                "final": final,
+                "K_v": sp.Matrix([[large_expr, large_expr]]),
+                "K_h": sp.Matrix([[large_expr]]),
+            })
+        profile_set = SimpleNamespace(super_node_order=["A", "B"])
+        payload = {
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "case_profiles": [
+                {"name": f"case {index}", "case_map": {}, "payload": {}}
+                for index in range(len(final_results))
+            ],
+            "elimination_codegen_mode": "force_scalar",
+        }
+        with patch.object(
+            optimized_api,
+            "_force_scalar_profile_results",
+            return_value=(profile_set, final_results, [], []),
+        ), patch.object(
+            optimized_api,
+            "_build_force_scalar_multi_case_c_draft",
+            side_effect=AssertionError("large scalar C generation should be gated by preflight"),
+        ):
+            response = build_multi_case_response(payload)
+
+        multi = response["multi_case"]
+        preflight = multi["scalar_preflight"]
+        self.assertEqual(multi["fast_path"], "case_scalar_preflight_blocked")
+        self.assertEqual(preflight["severity"], "danger")
+        self.assertTrue(preflight["blocked"])
+        self.assertGreater(preflight["total_ops"], 0)
+        self.assertIn("推荐使用矩阵", preflight["message_zh"])
+        self.assertIn("仍然生成标量", preflight["action_zh"])
+        self.assertIn("recommended", preflight["message_en"])
+        self.assertIn("Continue", preflight["action_en"])
+        self.assertIn("Scalar-expanded C draft was not generated", multi["c_draft"])
+
+    def test_force_scalar_preflight_confirmation_allows_large_codegen(self):
+        large_expr = sp.Add(*[
+            sp.Symbol(f"G{i}") * sp.Symbol(f"H{i}")
+            for i in range(360)
+        ], evaluate=False)
+        final_results = [{
+            "index": 0,
+            "name": "case 0",
+            "final": SimpleNamespace(
+                nodes=["A", "B"],
+                G=sp.Matrix([[large_expr, -large_expr], [-large_expr, large_expr]]),
+                Ihis=sp.Matrix([[0], [0]]),
+            ),
+            "K_v": sp.Matrix([[large_expr, large_expr]]),
+            "K_h": sp.Matrix([[0]]),
+        }]
+        profile_set = SimpleNamespace(super_node_order=["A", "B"])
+        payload = {
+            "mode": "multi_case_c_export",
+            "case_id_symbol": "case_id",
+            "case_profiles": [{"name": "case 0", "case_map": {}, "payload": {}}],
+            "elimination_codegen_mode": "force_scalar",
+            "force_scalar_confirmed": True,
+        }
+        with patch.object(
+            optimized_api,
+            "_force_scalar_profile_results",
+            return_value=(profile_set, final_results, [], []),
+        ), patch.object(
+            optimized_api,
+            "_build_force_scalar_multi_case_c_draft",
+            return_value=("/* confirmed scalar C */", [], optimized_api._empty_scalar_cse_stats()),
+        ) as build_spy:
+            response = build_multi_case_response(payload)
+
+        self.assertEqual(response["multi_case"]["fast_path"], "case_scalar_schur_expansion")
+        self.assertEqual(response["multi_case"]["c_draft"], "/* confirmed scalar C */")
+        self.assertFalse(response["multi_case"]["scalar_preflight"]["blocked"])
+        self.assertTrue(build_spy.called)
 
     def test_final_retained_adapter_allows_different_raw_internal_counts(self):
         def final_pack_payload(raw_internal: list[str], final_internal: list[str], g: str) -> dict:

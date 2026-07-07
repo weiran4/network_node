@@ -7,7 +7,8 @@ This note records the July 2026 Pack multi-case fixes around:
 - different internal eliminated-node counts across Pack cases;
 - codegen-level pruning of missing internal dummy placeholders;
 - shared `T1_T2` internal voltage recovery helpers;
-- Pack case edit validation messages for external port identity.
+- Pack case edit validation messages for external port identity;
+- the matrix-vs-scalar optimized C export mode split.
 
 ## Architecture
 
@@ -31,6 +32,12 @@ Missing internal nodes are backend placeholders only. They are not physical node
 - One-internal diagonal profiles may use scalar voltage recovery.
 - Non-diagonal profiles keep the matrix recovery path and reuse `tmp_Grk_W_code` symmetry.
 - `INTERNAL_NODES` can still represent the maximum union count for static diagnostics, but runtime loops and matrix dimensions must use `internal_active` when profiles differ.
+- Generated RTDS/CBuilder C must not use C99 loop-variable declarations such as `for (int row = 0; ...)`. Declare loop variables first (`int row; int col; int k;`) and emit `for (row = 0; ...)`.
+- Variable lifetime follows CBuilder sections:
+  - `STATIC:` is persistent and shared across RAM/CODE/T1_T2. Use it for runtime variables and RAM-precomputed scalars that are reused later in CODE/T1_T2.
+  - `LOCAL_STATIC:` is RAM/setup-side storage. Use it for RAM-only symbols and RAM-only temporary scalars.
+  - CODE/T1_T2 temporaries that are assigned at runtime but declared outside local helper blocks belong in `STATIC:`.
+- If a scalar expression such as `1.0/(G8 + G9)` is computed in RAM and then reused in T1_T2, emit one persistent `STATIC` variable, assign it in RAM, and reference it in T1_T2. Do not emit a second T1_T2-only denominator temp for the same RAM-only expression.
 
 ## Helper Functions
 
@@ -63,11 +70,17 @@ The RAM final-G replacement also must stop before the matrix lifecycle section. 
 
 ## Elimination Codegen Mode
 
-Multi-case export now accepts `elimination_codegen_mode`:
+Optimized C export has two user-facing codegen modes:
 
-- `auto`: keep the default matrix-oriented structured path.
-- `prefer_matrix`: prefer the shared matrix DAG when a path has a matrix/formula heuristic.
+- `prefer_matrix`: default. Generate the shared `Gkk/W/Grk/Gkr` matrix Schur path where applicable.
 - `force_scalar`: expert/test mode. Each init-time case is reduced to scalar final `G/Ihis/Kv/Kh` formulas and the generated C skips runtime `Gkk/W/Grk/Gkr` `MATRIX_` objects.
+
+The UI should expose this as a concise two-choice toggle near the C draft actions:
+
+- `矩阵 / Matrix`
+- `标量 / Scalar`
+
+Do not reintroduce the old large settings card or "auto recommendation" wording. Old saved `auto` values may still be accepted for compatibility, but the frontend normalizes them back to the matrix path.
 
 The force-scalar path is still Schur elimination mathematically. It only changes code generation: per-case scalar final stamps, case-conditional `GValue` entries for CODE-owned final G terms, and direct scalar internal-node recovery. It preserves the important guards:
 
@@ -76,7 +89,40 @@ The force-scalar path is still Schur elimination mathematically. It only changes
 - recovered internal nodes use user-facing node names from `node_display_names`;
 - dummy internal placeholders are never emitted as `Gkk = 1` / `W = 0` rows.
 
+Scalar-expanded codegen also has its own conservative reuse layer:
+
+- no `MATRIX_`, `matrixDim`, `matrix_register`, or `conditionMatrixForCODE` output;
+- repeated same-stage denominators such as `1.0/(G1 + G2)` are reused;
+- RAM-only temporaries stay in `LOCAL_STATIC:` unless a later CODE/T1_T2 section needs the same value;
+- RAM-computed values reused by T1_T2 must be persistent `STATIC:` variables assigned during RAM.
+
 Rollback point before this feature: commit `4bd3464 Guard pack dynamic internal profile codegen` on branch `codex/ui-engineering-polish`.
+
+## Force-Scalar Performance Guardrail
+
+Force-scalar is intentionally available for small circuits and diagnostics, but it can explode on large multi-case formulas. `Trf_RCY_UCM.json` is the current warning example: forcing scalar expansion creates very large per-case expressions, and profiling showed most time in repeated symbol/stage scans over huge formulas before C text emission.
+
+Observed shape from that case:
+
+- 8 init-time scalar profiles;
+- total formula cost around 47k operations;
+- several cases produce 40k-70k character scalar expression groups;
+- `_symbols_in_matrices` and repeated `_expr_stage` scans dominate runtime.
+
+Recommended next guardrail before making force-scalar a normal user workflow:
+
+- keep matrix as the default;
+- preflight scalar formula cost before generation;
+- warn or require a second confirmation when a multi-case scalar export exceeds the threshold;
+- still allow force-scalar for expert debugging after the user explicitly accepts the cost.
+
+Implemented guardrail:
+
+- `force_scalar` multi-case export computes a lightweight `scalar_preflight` summary before C text generation.
+- The preflight counts expression operations and bounded text size from final `G/Ihis/Kv/Kh` formulas. It must not call the expensive C emitter, `_symbols_in_matrices`, or repeated stage/symbol scans.
+- If severity is `danger` and the request is not confirmed, the backend returns `fast_path = case_scalar_preflight_blocked` with a short placeholder C comment instead of generating scalar C.
+- The frontend shows a bilingual warning card and a second action, `仍然生成标量 / Continue scalar generation`, which resubmits with `force_scalar_confirmed = true`.
+- Cache keys include `force_scalar_confirmed` so blocked preflight results and confirmed scalar drafts cannot be mixed.
 
 ## Pack G Constant Edit Sync
 
@@ -104,6 +150,11 @@ Use the term "port identity" and explain that it is a fixed backend ID used to v
 - Do not let conditional RAM final-G replacement consume the matrix lifecycle block.
 - Do not treat `force_scalar` as a new mathematical reduction. It is a C codegen mode and must produce the same final Schur equations.
 - Do not let force-scalar CODE-owned G terms leak into RAM-only cases.
+- Do not assume force-scalar is always simpler. For large multi-case systems, scalar expression growth can be worse than the matrix path.
+- Do not make scalar preflight as expensive as scalar generation. The preflight is a guardrail and should stay cheaper than full C emission.
+- Do not fix C99 `for (int ...)` only in one export branch. The no-C99-loop rule applies to scalar-expanded, matrix Schur, dummy-finalized, retained-layout, and alias-template generated C.
+- Do not put RAM-only temporary scalars in `STATIC:` unless CODE/T1_T2 also needs them; use `LOCAL_STATIC:` for RAM-only temporaries.
+- Do not put a RAM-computed scalar that T1_T2 needs in `LOCAL_STATIC:`; `LOCAL_STATIC` should not be assumed available across runtime phases.
 - Do not trust Pack branch G constant edits unless the active network-case snapshot has been synchronized.
 - Do not expose backend IDs as if they were user node names.
 - Do not use display names alone for Pack external-port validation. Display names can be edited to hide a slot/order mistake.
@@ -116,7 +167,7 @@ Run these after changing this area:
 ```powershell
 python -m pytest tests/test_frontend_optimized_reuse.py -q
 python -m pytest tests/test_multicase_c_export_alias_template.py tests/test_multicase_common_dummy_internal_codegen.py tests/test_multicase_dummy_node_block.py tests/test_runtime_mutable_case_group.py -q
-python -m pytest tests/test_structured_formula_elimination.py tests/test_optimized_elimination.py -q
-python -m py_compile optimized_elimination_api.py
+python -m pytest tests/test_dynamic_subblock_schur.py tests/test_structured_formula_elimination.py tests/test_optimized_elimination.py -q
+python -m py_compile optimized_elimination_api.py nodal_tool\optimized_elimination.py
 git diff --check
 ```

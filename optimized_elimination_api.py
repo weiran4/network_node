@@ -18,6 +18,7 @@ from nodal_tool.optimized_elimination import (
     build_structured_formula,
     c_draft_for_structured_formula,
     structural_gred_entry_reuse_plan,
+    structured_dependency_model,
 )
 from nodal_tool.multicase_finalization_profiles import (
     build_finalization_profiles,
@@ -291,6 +292,168 @@ def _emit_source_level_cse_assignment_lines(
     return lines, bool(temps)
 
 
+def _empty_scalar_cse_stats() -> dict[str, object]:
+    return {
+        "enabled": True,
+        "denominator_temps": 0,
+        "cse_temps": 0,
+        "temp_count": 0,
+        "per_case_temps": 0,
+        "common_temps": 0,
+        "temp_names": [],
+        "groups": [],
+    }
+
+
+def _merge_scalar_cse_stats(target: dict[str, object], update: Mapping[str, object]) -> None:
+    for key in ("denominator_temps", "cse_temps", "temp_count", "per_case_temps", "common_temps"):
+        target[key] = int(target.get(key, 0) or 0) + int(update.get(key, 0) or 0)
+    groups = target.setdefault("groups", [])
+    if isinstance(groups, list):
+        groups.extend(list(update.get("groups") or []))
+    temp_names = target.setdefault("temp_names", [])
+    if isinstance(temp_names, list):
+        temp_names.extend(str(name) for name in (update.get("temp_names") or []))
+
+
+def _scalar_denominator_candidates(exprs: Sequence[sp.Expr]) -> list[tuple[sp.Expr, int]]:
+    counts: dict[str, int] = {}
+    first_seen: dict[str, sp.Expr] = {}
+    order: list[str] = []
+    for expr in exprs:
+        for node in sp.preorder_traversal(sp.sympify(expr)):
+            if not isinstance(node, sp.Pow):
+                continue
+            if sp.sympify(node.exp) != -1:
+                continue
+            base = sp.sympify(node.base)
+            if base.is_number:
+                continue
+            key = _source_expr_key(base)
+            if key not in counts:
+                counts[key] = 0
+                first_seen[key] = base
+                order.append(key)
+            counts[key] += 1
+    return [(first_seen[key], counts[key]) for key in order]
+
+
+def _emit_scalar_reuse_assignment_lines(
+    assignments: Sequence[tuple[str, object]],
+    *,
+    temp_prefix: str,
+    indent: int,
+    substitutions: Mapping[sp.Expr, sp.Symbol] | None = None,
+    declare_temps: bool = True,
+) -> tuple[list[str], dict[str, object]]:
+    """Emit scalar-expanded assignments with conservative same-scope reuse.
+
+    The caller owns lifecycle correctness by passing only one RAM/CODE/T1_T2
+    scope at a time.  This helper only performs structural substitutions inside
+    that local group.
+    """
+    parsed = [
+        (lhs, expr if isinstance(expr, sp.Expr) else _parse_expr(str(expr)))
+        for lhs, expr in assignments
+    ]
+    stats = _empty_scalar_cse_stats()
+    if not parsed:
+        return [], stats
+
+    exprs = [sp.sympify(expr) for _lhs, expr in parsed]
+    denominator_substitutions: dict[sp.Expr, sp.Symbol] = dict(substitutions or {})
+    denominator_temps: list[tuple[str, sp.Expr]] = []
+    for base, count in _scalar_denominator_candidates(exprs):
+        if count < 2:
+            continue
+        if sp.Pow(base, -1) in denominator_substitutions:
+            continue
+        name = f"{temp_prefix}_inv_den_{len(denominator_temps)}"
+        symbol = sp.Symbol(name)
+        denominator_temps.append((name, 1 / base))
+        denominator_substitutions[sp.Pow(base, -1)] = symbol
+
+    rewritten = [
+        (lhs, _apply_source_temp_substitutions(expr, denominator_substitutions))
+        for lhs, expr in parsed
+    ]
+    cse_temps, reduced = _source_level_cse_assignments(
+        rewritten,
+        temp_prefix=f"{temp_prefix}_tmp",
+    )
+
+    prefix = " " * indent
+    declaration = "double " if declare_temps else ""
+    lines = [f"{prefix}{declaration}{name} = {_ccode(expr)};" for name, expr in denominator_temps]
+    lines.extend(f"{prefix}{declaration}{name} = {_ccode(expr)};" for name, expr in cse_temps)
+    lines.extend(f"{prefix}{lhs} = {_ccode(expr)};" for lhs, expr in reduced)
+
+    stats["denominator_temps"] = len(denominator_temps)
+    stats["cse_temps"] = len(cse_temps)
+    stats["temp_count"] = len(denominator_temps) + len(cse_temps)
+    if "_case" in temp_prefix:
+        stats["per_case_temps"] = stats["temp_count"]
+    else:
+        stats["common_temps"] = stats["temp_count"]
+    stats["temp_names"] = [name for name, _expr in denominator_temps] + [name for name, _expr in cse_temps]
+    if denominator_temps or cse_temps:
+        stats["groups"] = [
+            {
+                "prefix": temp_prefix,
+                "assignments": len(parsed),
+                "denominator_temps": len(denominator_temps),
+                "cse_temps": len(cse_temps),
+            }
+        ]
+    return lines, stats
+
+
+def _scalar_temp_declarations(stats: Mapping[str, object]) -> list[str]:
+    names = list(dict.fromkeys(str(name) for name in (stats.get("temp_names") or [])))
+    return [f"    double {name} = 0.0;" for name in names]
+
+
+def _shared_scalar_denominator_temps(
+    ram_exprs: Sequence[sp.Expr],
+    recovery_exprs: Sequence[sp.Expr],
+    *,
+    symbol_table: Mapping[str, str],
+    temp_prefix: str,
+) -> tuple[list[tuple[str, sp.Expr]], dict[sp.Expr, sp.Symbol], dict[str, object]]:
+    ram_by_key = {
+        _source_expr_key(base): base
+        for base, _count in _scalar_denominator_candidates([sp.sympify(expr) for expr in ram_exprs])
+    }
+    recovery_by_key = {
+        _source_expr_key(base): base
+        for base, _count in _scalar_denominator_candidates([sp.sympify(expr) for expr in recovery_exprs])
+    }
+    temps: list[tuple[str, sp.Expr]] = []
+    substitutions: dict[sp.Expr, sp.Symbol] = {}
+    stats = _empty_scalar_cse_stats()
+    for key in sorted(set(ram_by_key) & set(recovery_by_key)):
+        base = ram_by_key[key]
+        if _expr_stage(base, dict(symbol_table)) != "RAM":
+            continue
+        name = f"{temp_prefix}_shared_inv_den_{len(temps)}"
+        temps.append((name, 1 / base))
+        substitutions[sp.Pow(base, -1)] = sp.Symbol(name)
+    if temps:
+        stats["denominator_temps"] = len(temps)
+        stats["temp_count"] = len(temps)
+        stats["common_temps"] = len(temps)
+        stats["temp_names"] = [name for name, _expr in temps]
+        stats["groups"] = [
+            {
+                "prefix": f"{temp_prefix}_shared",
+                "assignments": 0,
+                "denominator_temps": len(temps),
+                "cse_temps": 0,
+            }
+        ]
+    return temps, substitutions, stats
+
+
 def _resolved_cse_temps(temps: Sequence[tuple[str, sp.Expr]]) -> list[tuple[str, sp.Expr, sp.Expr]]:
     """Return local CSE temps together with their fully expanded-by-temp expression.
 
@@ -441,7 +604,45 @@ def _source_cse_scope_name(selector_name: str) -> str:
     return scope
 
 
+_C99_FOR_LOOP_RE = re.compile(r"for \(int (?P<name>[A-Za-z_]\w*) = (?P<init>[^;]+);")
+_CBUILDER_SECTION_RE = re.compile(
+    r"(?m)^(?P<label>STATIC|LOCAL_STATIC|RAM(?:_PASS\d*)?|GVALUES|CODE_FUNCTIONS|CODE|BEGIN_T0|T1_T2):\n"
+)
+_CBUILDER_C89_LOOP_SECTION_LABELS = {"STATIC", "LOCAL_STATIC", "CODE", "BEGIN_T0", "T1_T2"}
+
+
+def _c89_for_loop_compat(draft: str) -> str:
+    """Rewrite generated CBuilder loops away from C99 loop declarations."""
+    if not _CBUILDER_SECTION_RE.search(draft):
+        return draft
+
+    draft = _C99_FOR_LOOP_RE.sub(lambda match: f"for ({match.group('name')} = {match.group('init')};", draft)
+    matches = list(_CBUILDER_SECTION_RE.finditer(draft))
+    pieces: list[str] = []
+    cursor = 0
+    for index, match in enumerate(matches):
+        section_start = match.end()
+        section_end = matches[index + 1].start() if index + 1 < len(matches) else len(draft)
+        section = draft[section_start:section_end]
+        label = match.group("label")
+        if label not in _CBUILDER_C89_LOOP_SECTION_LABELS and not label.startswith("RAM"):
+            pieces.append(draft[cursor:section_end])
+            cursor = section_end
+            continue
+        names = list(dict.fromkeys(re.findall(r"\bfor \(([A-Za-z_]\w*) =", section)))
+        pieces.append(draft[cursor:section_start])
+        if names:
+            for name in names:
+                section = re.sub(rf"(?m)^    int\s+{re.escape(name)}\s*;\n", "", section)
+            pieces.extend(f"    int {name};\n" for name in names)
+        pieces.append(section)
+        cursor = section_end
+    pieces.append(draft[cursor:])
+    return "".join(pieces)
+
+
 def _ensure_static_blank_line(draft: str) -> str:
+    draft = _c89_for_loop_compat(draft)
     return re.sub(r"(?m)^STATIC:\n(?!\n)", "STATIC:\n\n", draft)
 
 
@@ -719,9 +920,222 @@ def _drop_isolated_dummy_nodes_before_schur(
     )
 
 
+def _single_case_scalar_codegen_requested(payload: dict, mode: str) -> bool:
+    if mode in {"force_scalar", "scalar", "expanded_scalar"}:
+        return True
+    if mode not in {"auto", ""}:
+        return False
+    return "elimination_codegen_mode" in payload or "codegen_mode" in payload
+
+
+def _single_case_scalar_formula_cost(*matrices: sp.Matrix) -> int:
+    total = 0
+    for matrix in matrices:
+        for expr in sp.Matrix(matrix):
+            total += int(sp.count_ops(sp.sympify(expr)))
+    return total
+
+
+def _single_case_scalar_codegen_allowed(payload: dict, mode: str, rtds_stage_plan: dict) -> bool:
+    if mode in {"force_scalar", "scalar", "expanded_scalar"}:
+        return True
+    if mode not in {"auto", ""}:
+        return False
+    if not _single_case_scalar_codegen_requested(payload, mode):
+        return False
+    nr = len(rtds_stage_plan.get("external_nodes") or [])
+    nk = len(rtds_stage_plan.get("internal_nodes") or [])
+    if nk == 0:
+        return False
+    if nk > 1 or nr > 4:
+        return False
+    cost = _single_case_scalar_formula_cost(
+        sp.Matrix(rtds_stage_plan.get("Gred", sp.zeros(nr, nr))),
+        sp.Matrix(rtds_stage_plan.get("Ihisred", sp.zeros(nr, 1))),
+        sp.Matrix(rtds_stage_plan.get("Kv", sp.zeros(nk, nr))),
+        sp.Matrix(rtds_stage_plan.get("Kh", sp.zeros(nk, 1))),
+    )
+    return cost <= 120
+
+
+def _build_single_case_scalar_expanded_c_draft(
+    payload: dict,
+    rtds_stage_plan: dict,
+    *,
+    node_display_names: dict[str, str] | None = None,
+) -> tuple[str, dict[str, object]]:
+    node_display_names = {str(key): str(value) for key, value in (node_display_names or {}).items()}
+    symbol_table = payload.get("symbol_dependency_table_tagged") or payload.get("symbol_dependency_table") or {}
+    external_nodes = [str(node) for node in (rtds_stage_plan.get("external_nodes") or [])]
+    internal_nodes = [str(node) for node in (rtds_stage_plan.get("internal_nodes") or [])]
+    nr = len(external_nodes)
+    nk = len(internal_nodes)
+    Gred = sp.Matrix(rtds_stage_plan.get("Gred", sp.zeros(nr, nr)))
+    Ihisred = sp.Matrix(rtds_stage_plan.get("Ihisred", sp.zeros(nr, 1)))
+    if rtds_stage_plan.get("Gred_direct") is not None:
+        Gred = Gred + sp.Matrix(rtds_stage_plan.get("Gred_direct", sp.zeros(nr, nr)))
+    if rtds_stage_plan.get("Ihisred_direct") is not None:
+        Ihisred = Ihisred + sp.Matrix(rtds_stage_plan.get("Ihisred_direct", sp.zeros(nr, 1)))
+    Kv = sp.Matrix(rtds_stage_plan.get("Kv", sp.zeros(nk, nr)))
+    Kh = sp.Matrix(rtds_stage_plan.get("Kh", sp.zeros(nk, 1)))
+    symbols = _symbols_in_matrices(Gred, Ihisred, Kv, Kh)
+    declarations = [f"    double {name} = 0.0;" for name in symbols]
+    scalar_cse_stats = _empty_scalar_cse_stats()
+
+    ram_entries: list[tuple[int, int, sp.Expr]] = []
+    dynamic_entries: list[tuple[int, int, sp.Expr, str, str, str]] = []
+    for row in range(Gred.rows):
+        for col in range(Gred.cols):
+            expr = sp.sympify(Gred[row, col])
+            if expr == 0:
+                continue
+            if _expr_stage(expr, symbol_table) == "RAM":
+                ram_entries.append((row, col, expr))
+    for row in range(Gred.rows):
+        for col in range(row, Gred.cols):
+            expr = sp.sympify(Gred[row, col])
+            if expr == 0 or _expr_stage(expr, symbol_table) == "RAM":
+                continue
+            left_label = node_display_names.get(external_nodes[row], external_nodes[row])
+            right_label = node_display_names.get(external_nodes[col], external_nodes[col])
+            left = _c_identifier_name(left_label, f"N{row + 1}")
+            right = _c_identifier_name(right_label, f"N{col + 1}")
+            dynamic_entries.append((row, col, expr, f"varG_{left}_{right}", external_nodes[row], external_nodes[col]))
+
+    recovery_assignments = _recovery_assignment_pairs(
+        {
+            "recovery_nodes": internal_nodes,
+            "super_nodes": external_nodes,
+            "K_v": Kv,
+            "K_h": Kh,
+            "super_node_c_names": {node: node_display_names.get(node, node) for node in external_nodes},
+            "recovery_node_c_names": {node: node_display_names.get(node, node) for node in internal_nodes},
+        }
+    )
+    shared_temps, shared_substitutions, shared_stats = _shared_scalar_denominator_temps(
+        [expr for _row, _col, expr in ram_entries],
+        [expr for _lhs, expr in recovery_assignments],
+        symbol_table=symbol_table,
+        temp_prefix="scalar",
+    )
+    _merge_scalar_cse_stats(scalar_cse_stats, shared_stats)
+    ram_lines: list[str] = []
+    ram_stats = _empty_scalar_cse_stats()
+    if ram_entries:
+        ram_lines, ram_stats = _emit_scalar_reuse_assignment_lines(
+            [(f"g_mat_over[{row}][{col}]", expr) for row, col, expr in ram_entries],
+            temp_prefix="scalar_ram",
+            indent=4,
+            substitutions=shared_substitutions,
+            declare_temps=False,
+        )
+        _merge_scalar_cse_stats(scalar_cse_stats, ram_stats)
+    code_assignments: list[tuple[str, sp.Expr]] = [
+        (var, sp.sympify(expr))
+        for _row, _col, expr, var, _left, _right in dynamic_entries
+    ]
+    for row, node in enumerate(external_nodes):
+        display = node_display_names.get(node, node)
+        code_assignments.append((f"Inj{_c_identifier_name(display, f'N{row + 1}')}", sp.sympify(Ihisred[row, 0])))
+    code_lines, code_stats = _emit_scalar_reuse_assignment_lines(
+        code_assignments,
+        temp_prefix="scalar_code",
+        indent=4,
+        declare_temps=False,
+    )
+    _merge_scalar_cse_stats(scalar_cse_stats, code_stats)
+    recovery_lines: list[str] = []
+    recovery_stats = _empty_scalar_cse_stats()
+    if recovery_assignments:
+        recovery_lines, recovery_stats = _emit_scalar_reuse_assignment_lines(
+            recovery_assignments,
+            temp_prefix="scalar_t1t2",
+            indent=4,
+            substitutions=shared_substitutions,
+            declare_temps=False,
+        )
+        _merge_scalar_cse_stats(scalar_cse_stats, recovery_stats)
+
+    static_declarations = [
+        *[f"    double {name} = 0.0;" for name, _expr in shared_temps],
+        *_scalar_temp_declarations(code_stats),
+        *_scalar_temp_declarations(recovery_stats),
+    ]
+    local_static_declarations = [
+        *declarations,
+        *_scalar_temp_declarations(ram_stats),
+    ]
+
+    lines = [
+        "#include <builtin_MATH.h>",
+        "/* RTDS-style C draft using scalar-expanded Schur elimination.",
+        "   No runtime matrix objects are required on this codegen path. */",
+        f"enum {{ RETAINED_NODES = {nr}, INTERNAL_NODES = {nk} }};",
+        "",
+        "STATIC:",
+        *dict.fromkeys(static_declarations),
+        "",
+        "LOCAL_STATIC:",
+        *(list(dict.fromkeys(local_static_declarations)) or ["    /* No user symbols are required by the scalar-expanded draft. */"]),
+        "",
+        "RAM_PASS1:",
+    ]
+    if ram_entries:
+        lines.extend([
+            "    /* Scalar-expanded RAM-side G stamp. */",
+            "    int row;",
+            "    int col;",
+            *[
+                f"    g_mat_nods[{index}] = getNodeNum(comp, \"{node_display_names.get(node, node)}\");"
+                for index, node in enumerate(external_nodes)
+            ],
+            f"    for (row = 0; row < {nr}; row++) {{",
+            f"        for (col = 0; col < {nr}; col++) {{",
+            "            g_mat_over[row][col] = 0.0;",
+            "        }",
+            "    }",
+        ])
+        for name, expr in shared_temps:
+            lines.append(f"    {name} = {_ccode(expr)};")
+        lines.extend(ram_lines)
+        lines.append(f"    setupGMatrix({nr});")
+    else:
+        lines.append("    /* No RAM-side G entries: dynamic GVALUES own the reduced stamp. */")
+    lines.append("")
+    if dynamic_entries:
+        lines.extend([
+            "GVALUES:",
+            "    /* Dynamic reduced-G stamp handles from scalar-expanded Schur formulas. */",
+        ])
+        for _row, _col, _expr, var, left, right in dynamic_entries:
+            left_name = node_display_names.get(str(left), str(left))
+            right_name = node_display_names.get(str(right), str(right))
+            lines.append(f"    double {var} = createGValue(\"{var}\", \"{left_name}\", \"{right_name}\", 0, \"TRUE\");")
+        lines.append("")
+    lines.extend([
+        "CODE:",
+        "BEGIN_T0:",
+    ])
+    lines.append("    /* CODE-side scalar assignments from scalar-expanded Schur formulas. */")
+    lines.extend(code_lines)
+    lines.extend([
+        "",
+        "T1_T2:",
+    ])
+    if recovery_lines:
+        lines.extend([
+            "    /* Scalar-expanded internal-node voltage recovery after retained voltages are available. */",
+            *recovery_lines,
+        ])
+    else:
+        lines.append("    /* No internal nodes were eliminated, so there is no Vk recovery step. */")
+    return _ensure_static_blank_line("\n".join(lines)), scalar_cse_stats
+
+
 def build_optimized_response(payload: dict) -> dict:
     simplify_level = payload.get("simplify_level") or "light"
     display_mode = payload.get("display_mode") or "compact"
+    codegen_mode = str(payload.get("elimination_codegen_mode") or payload.get("codegen_mode") or "auto")
     use_suggested_order = bool(payload.get("use_suggested_order", False))
     dummy_finalization = payload.get("dummy_finalization") or {}
     if dummy_finalization.get("dummy_leaves"):
@@ -866,12 +1280,35 @@ def build_optimized_response(payload: dict) -> dict:
             rtds_stage_plan["Ihisred_direct_tagged"] = direct_Ihisr_tagged
     warnings.extend(structured.get("warnings", []))
     blocks = structured["blocks"]
+    if borrowed_dependency and _single_case_scalar_codegen_requested(payload, codegen_mode):
+        recovery_model = structured_dependency_model(structured, simplify_level)
+        rtds_stage_plan["Kv"] = recovery_model["Kv"]
+        rtds_stage_plan["Kh"] = recovery_model["Kh"]
 
-    c_draft = c_draft_for_structured_formula(
-        structured,
-        node_display_names=payload.get("node_display_names") or {},
-        rtds_stage_plan=rtds_stage_plan,
+    scalar_codegen_active = (
+        _single_case_scalar_codegen_requested(payload, codegen_mode)
+        and _single_case_scalar_codegen_allowed(payload, codegen_mode, rtds_stage_plan)
     )
+    scalar_cse_stats = _empty_scalar_cse_stats()
+    scalar_cse_stats["enabled"] = False
+    if scalar_codegen_active:
+        c_draft, scalar_cse_stats = _build_single_case_scalar_expanded_c_draft(
+            payload,
+            rtds_stage_plan,
+            node_display_names=payload.get("node_display_names") or {},
+        )
+        structured_codegen_mode = (
+            "force scalar Schur expansion"
+            if codegen_mode in {"force_scalar", "scalar", "expanded_scalar"}
+            else "auto scalar Schur expansion"
+        )
+    else:
+        c_draft = c_draft_for_structured_formula(
+            structured,
+            node_display_names=payload.get("node_display_names") or {},
+            rtds_stage_plan=rtds_stage_plan,
+        )
+        structured_codegen_mode = "matrix Schur path"
     if single_dummy_nodes:
         c_draft = _apply_single_case_dummy_recovery_skip(
             c_draft,
@@ -908,6 +1345,8 @@ def build_optimized_response(payload: dict) -> dict:
         "effective_internal_nodes": structured["effective_internal_nodes"],
         "warnings": warnings,
         "structured": {
+            "codegen_mode": structured_codegen_mode,
+            "scalar_cse": scalar_cse_stats,
             "block_type": structured["block_type"],
             "analysis": _clean_value(structured["analysis"]),
             "effective_analysis": _clean_value(structured["effective_analysis"]),
@@ -4753,8 +5192,7 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
     gkk_template: sp.Matrix,
     active_nr_expr: str = "NR",
 ) -> str:
-    if "Case-resolved diagonal Gkk scalar Schur/Ihis path" in draft:
-        return draft
+    schur_ihis_already_rewritten = "Case-resolved diagonal Gkk scalar Schur/Ihis path" in draft
     gkk_template = sp.Matrix(gkk_template)
     if not profiles or gkk_template.rows != gkk_template.cols or gkk_template.rows == 0:
         return draft
@@ -4812,46 +5250,47 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
                 break
         return draft
 
-    gred_new = "\n".join(
-        ["    /* Case-resolved diagonal Gkk scalar Schur/Ihis path. */"]
-        + _wrap_multicase_diagonal_scalar_block(
-            case_id_symbol=case_id_symbol,
-            diagonal_cases=diagonal_cases,
-            fallback_cases=fallback_cases,
-            diagonal_lines=_diagonal_gkk_scalar_gred_lines(active_nr_expr),
-            fallback_lines=gred_fallback,
+    if not schur_ihis_already_rewritten:
+        gred_new = "\n".join(
+            ["    /* Case-resolved diagonal Gkk scalar Schur/Ihis path. */"]
+            + _wrap_multicase_diagonal_scalar_block(
+                case_id_symbol=case_id_symbol,
+                diagonal_cases=diagonal_cases,
+                fallback_cases=fallback_cases,
+                diagonal_lines=_diagonal_gkk_scalar_gred_lines(active_nr_expr),
+                fallback_lines=gred_fallback,
+            )
         )
-    )
-    for candidate in gred_candidates:
-        if candidate in draft:
-            draft = draft.replace(candidate, gred_new, 1)
-            break
-    else:
-        gred_pattern = re.compile(
-            r"    matrix_mult_CODE\(&tmp_Grk_W_code, &Grk_code, &W_code\);\n"
-            r"    /\* Full Gred CODE path:[\s\S]*?"
-            r"(?=\n    /\* Stamp dynamic Gred entries)",
-        )
-        draft, replaced = gred_pattern.subn(gred_new, draft, count=1)
-        if replaced == 0:
-            return draft
+        for candidate in gred_candidates:
+            if candidate in draft:
+                draft = draft.replace(candidate, gred_new, 1)
+                break
+        else:
+            gred_pattern = re.compile(
+                r"    matrix_mult_CODE\(&tmp_Grk_W_code, &Grk_code, &W_code\);\n"
+                r"    /\* Full Gred CODE path:[\s\S]*?"
+                r"(?=\n    /\* Stamp dynamic Gred entries)",
+            )
+            draft, replaced = gred_pattern.subn(gred_new, draft, count=1)
+            if replaced == 0:
+                return draft
 
-    ihis_old = "\n".join([
-        "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
-        "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
-    ])
-    ihis_new = "\n".join(
-        ["    /* Case-resolved diagonal Gkk scalar Ihisred path. */"]
-        + _wrap_multicase_diagonal_scalar_block(
-            case_id_symbol=case_id_symbol,
-            diagonal_cases=diagonal_cases,
-            fallback_cases=fallback_cases,
-            diagonal_lines=_diagonal_gkk_scalar_ihis_lines(active_nr_expr),
-            fallback_lines=ihis_old.splitlines(),
+        ihis_old = "\n".join([
+            "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+            "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+        ])
+        ihis_new = "\n".join(
+            ["    /* Case-resolved diagonal Gkk scalar Ihisred path. */"]
+            + _wrap_multicase_diagonal_scalar_block(
+                case_id_symbol=case_id_symbol,
+                diagonal_cases=diagonal_cases,
+                fallback_cases=fallback_cases,
+                diagonal_lines=_diagonal_gkk_scalar_ihis_lines(active_nr_expr),
+                fallback_lines=ihis_old.splitlines(),
+            )
         )
-    )
-    if ihis_old in draft:
-        draft = draft.replace(ihis_old, ihis_new, 1)
+        if ihis_old in draft:
+            draft = draft.replace(ihis_old, ihis_new, 1)
 
     vk_candidates = []
     for internal_expr in internal_exprs:
@@ -4892,8 +5331,24 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
             draft = _ensure_vk_recovery_code_functions(draft)
             break
     else:
-        draft = draft.replace("for (int col = 0; col < NR; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
-        draft = draft.replace("for (int col = 0; col < RETAINED_NODES; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
+        vk_pattern = re.compile(
+            r"    /\* Symmetry reuse: W \* Gkr = transpose\(Grk \* W\)\. \*/\n"
+            r"    for \((?:int )?row = 0; row < (?:NK|INTERNAL_NODES|internal_active); row\+\+\) \{\n"
+            r"        for \((?:int )?col = 0; col < (?:NR|RETAINED_NODES|node_active); col\+\+\) \{\n"
+            r"            set_CODE\(&tmp_W_Gkr_code, row, col, get_CODE\(&tmp_Grk_W_code, col, row\)\);\n"
+            r"        \}\n"
+            r"    \}\n"
+            r"    matrix_matXvec_CODE\(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code\);\n"
+            r"    matrix_matXvec_CODE\(&tmp_W_Ihisk_code, &W_code, &Ihisk_code\);\n"
+            r"    matrix_add_CODE\(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code\);\n"
+            r"    matrix_scalarMult_CODE\(&Vk_code, &tmp_Vk_sum_code, -1\.0\);"
+        )
+        draft, replaced = vk_pattern.subn(vk_new, draft, count=1)
+        if replaced:
+            draft = _ensure_vk_recovery_code_functions(draft)
+        else:
+            draft = draft.replace("for (int col = 0; col < NR; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
+            draft = draft.replace("for (int col = 0; col < RETAINED_NODES; col++)", f"for (int col = 0; col < {active_nr_expr}; col++)")
     return draft
 
 
@@ -5407,7 +5862,7 @@ def _build_conditional_final_gvalue_draft(
     template_ihis: sp.Matrix,
     external_nodes: list[str],
     symbol_table: dict,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], dict[str, object]]:
     nr = len(external_nodes)
     declared_symbols: set[str] = set()
     for info in aliases.values():
@@ -7194,6 +7649,39 @@ def _apply_final_retained_recovery_profiles_to_draft(
                         ]),
                     )
                     full_matrix_replaced = True
+        symmetry_reuse_pattern = (
+            r"    /\* Symmetry reuse: W \* Gkr = transpose\(Grk \* W\)\. \*/\n"
+            r"    for \((?:int )?row = 0; row < (?:INTERNAL_NODES|internal_active); row\+\+\) \{\n"
+            r"        for \((?:int )?col = 0; col < (?:RETAINED_NODES|NR|node_active); col\+\+\) \{\n"
+            r"            set_CODE\(&tmp_W_Gkr_code, row, col, get_CODE\(&tmp_Grk_W_code, col, row\)\);\n"
+            r"        \}\n"
+            r"    \}"
+        )
+        full_matrix_pattern = re.compile(
+            symmetry_reuse_pattern
+            + r"\n    matrix_matXvec_CODE\(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code\);"
+            + r"\n    matrix_matXvec_CODE\(&tmp_W_Ihisk_code, &W_code, &Ihisk_code\);"
+            + r"\n    matrix_add_CODE\(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code\);"
+            + r"\n    matrix_scalarMult_CODE\(&Vk_code, &tmp_Vk_sum_code, -1\.0\);"
+        )
+        block, replaced = full_matrix_pattern.subn(helper_call, block, count=1)
+        if replaced:
+            full_matrix_replaced = True
+        simple_from_grkw_pattern = re.compile(
+            symmetry_reuse_pattern
+            + r"\n    matrix_matXvec_CODE\(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code\);"
+            + r"\n    matrix_scalarMult_CODE\(&Vk_code, &tmp_W_Gkr_Vr_code, -1\.0\);"
+        )
+        block, replaced = simple_from_grkw_pattern.subn(
+            "\n".join([
+                "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+                vk_grkw_only_helper_call(active_nr_expr),
+            ]),
+            block,
+            count=1,
+        )
+        if replaced:
+            full_matrix_replaced = True
         if simple_matrix_recovery in block:
             block = block.replace(simple_matrix_recovery, vk_wgkr_only_helper_call(active_nr_expr))
             full_matrix_replaced = True
@@ -7526,6 +8014,11 @@ def _common_reduction_cache_key(case_payload: dict) -> tuple:
 
 
 def _recovery_assignment_lines(item: dict, *, indent: str = "        ") -> list[str]:
+    assignments = _recovery_assignment_pairs(item)
+    return [f"{indent}{lhs} = {_ccode(rhs)};" for lhs, rhs in assignments]
+
+
+def _recovery_assignment_pairs(item: dict) -> list[tuple[str, sp.Expr]]:
     recovery_nodes = list(item.get("recovery_nodes") or [])
     if not recovery_nodes:
         return []
@@ -7542,22 +8035,21 @@ def _recovery_assignment_lines(item: dict, *, indent: str = "        ") -> list[
     K_h = item.get("K_h")
     K_v = sp.Matrix(K_v) if K_v is not None else sp.zeros(len(recovery_nodes), len(external_nodes))
     K_h = sp.Matrix(K_h) if K_h is not None else sp.zeros(len(recovery_nodes), 1)
-    lines: list[str] = []
+    assignments: list[tuple[str, sp.Expr]] = []
     for row, node in enumerate(recovery_nodes):
-        terms: list[str] = []
+        rhs = sp.Integer(0)
         for col, external in enumerate(external_nodes):
             coeff = sp.sympify(K_v[row, col])
             if sp.simplify(coeff) == 0:
                 continue
             external_name = super_node_c_names.get(str(external), str(external))
-            terms.append(f"({_ccode(coeff)})*{_c_identifier_name(external_name, f'V{col + 1}')}")
+            rhs += coeff * sp.Symbol(_c_identifier_name(external_name, f"V{col + 1}"))
         history = sp.sympify(K_h[row, 0])
         if sp.simplify(history) != 0:
-            terms.append(_ccode(history))
-        rhs = " + ".join(terms) if terms else "0.0"
+            rhs += history
         recovery_name = recovery_node_c_names.get(str(node), str(node))
-        lines.append(f"{indent}{_c_identifier_name(recovery_name, f'K{row + 1}')} = {rhs};")
-    return lines
+        assignments.append((_c_identifier_name(recovery_name, f"K{row + 1}"), sp.sympify(rhs)))
+    return assignments
 
 
 def _build_dummy_finalized_multi_case_c_draft(
@@ -7832,7 +8324,7 @@ def _build_force_scalar_multi_case_c_draft(
     case_id_symbol: str,
     profile_set,
     final_results: list[dict],
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], dict[str, object]]:
     max_dim = max((item["final"].G.rows for item in final_results), default=0)
     symbols = _symbols_in_matrices(
         *(item["final"].G for item in final_results),
@@ -7844,8 +8336,9 @@ def _build_force_scalar_multi_case_c_draft(
     ccode_cache: dict[str, str] = {}
     stage_cache: dict[tuple[int, str], str] = {}
     dynamic_gvalues: dict[tuple[str, str], dict] = {}
-    dynamic_case_assignments: dict[int, list[str]] = {}
+    dynamic_case_assignments: dict[int, list[tuple[str, sp.Expr]]] = {}
     gvalue_conditions: list[dict] = []
+    scalar_cse_stats = _empty_scalar_cse_stats()
 
     def emit_c(expr: object) -> str:
         key = str(expr)
@@ -7885,19 +8378,102 @@ def _build_force_scalar_multi_case_c_draft(
                     "cases": [],
                 })
                 entry["cases"].append(case_index)
-                dynamic_case_assignments.setdefault(case_index, []).append(f"{var} = {emit_c(expr)};")
+                dynamic_case_assignments.setdefault(case_index, []).append((var, expr))
+
+    static_declarations: list[str] = []
+    local_static_declarations: list[str] = list(declarations)
+    case_shared_temps: dict[int, list[tuple[str, sp.Expr]]] = {}
+    case_ram_lines: dict[int, list[str]] = {}
+    case_code_lines: dict[int, list[str]] = {}
+    case_inj_lines: dict[int, list[str]] = {}
+    case_recovery_lines: dict[int, list[str]] = {}
+
+    for item in final_results:
+        case_index = int(item.get("index", 0))
+        final = item["final"]
+        symbol_table = item.get("symbol_table") or {}
+        ram_assignments: list[tuple[str, sp.Expr]] = []
+        for row in range(final.G.rows):
+            for col in range(final.G.cols):
+                expr = sp.sympify(final.G[row, col])
+                if expr == 0 or stage_of(expr, symbol_table) != "RAM":
+                    continue
+                ram_assignments.append((f"g_mat_over[{row}][{col}]", expr))
+        recovery_assignments = _recovery_assignment_pairs(item)
+        shared_temps, shared_substitutions, shared_stats = _shared_scalar_denominator_temps(
+            [expr for _lhs, expr in ram_assignments],
+            [expr for _lhs, expr in recovery_assignments],
+            symbol_table=symbol_table,
+            temp_prefix=f"scalar_case{case_index}",
+        )
+        case_shared_temps[case_index] = shared_temps
+        _merge_scalar_cse_stats(scalar_cse_stats, shared_stats)
+        static_declarations.extend(f"    double {name} = 0.0;" for name, _expr in shared_temps)
+
+        ram_lines, ram_stats = _emit_scalar_reuse_assignment_lines(
+            ram_assignments,
+            temp_prefix=f"scalar_case{case_index}_ram",
+            indent=8,
+            substitutions=shared_substitutions,
+            declare_temps=False,
+        )
+        case_ram_lines[case_index] = ram_lines
+        _merge_scalar_cse_stats(scalar_cse_stats, ram_stats)
+        local_static_declarations.extend(_scalar_temp_declarations(ram_stats))
+
+        if case_index in dynamic_case_assignments:
+            code_lines, code_stats = _emit_scalar_reuse_assignment_lines(
+                dynamic_case_assignments[case_index],
+                temp_prefix=f"scalar_case{case_index}_code",
+                indent=8,
+                declare_temps=False,
+            )
+            case_code_lines[case_index] = code_lines
+            _merge_scalar_cse_stats(scalar_cse_stats, code_stats)
+            static_declarations.extend(_scalar_temp_declarations(code_stats))
+
+        inj_assignments = [
+            (f"Inj{node_c_name(item, node, row)}", sp.sympify(final.Ihis[row, 0]))
+            for row, node in enumerate(final.nodes)
+        ]
+        inj_lines, inj_stats = _emit_scalar_reuse_assignment_lines(
+            inj_assignments,
+            temp_prefix=f"scalar_case{case_index}_inj",
+            indent=8,
+            declare_temps=False,
+        )
+        case_inj_lines[case_index] = inj_lines
+        _merge_scalar_cse_stats(scalar_cse_stats, inj_stats)
+        static_declarations.extend(_scalar_temp_declarations(inj_stats))
+
+        if recovery_assignments:
+            recovery_lines, recovery_stats = _emit_scalar_reuse_assignment_lines(
+                recovery_assignments,
+                temp_prefix=f"scalar_case{case_index}_t1t2",
+                indent=8,
+                substitutions=shared_substitutions,
+                declare_temps=False,
+            )
+            case_recovery_lines[case_index] = recovery_lines
+            _merge_scalar_cse_stats(scalar_cse_stats, recovery_stats)
+            static_declarations.extend(_scalar_temp_declarations(recovery_stats))
 
     lines = [
-        "/* Multi-case C draft with forced scalar Schur expansion.",
+        "/* Multi-case C draft with scalar-expanded Schur formulas.",
         "   Each init-time case is reduced to scalar final G/Ihis formulas;",
         "   runtime Gkk/W MATRIX_ objects are intentionally not generated. */",
         f"enum {{ NR_SUPER = {len(profile_set.super_node_order)}, NR_FINAL_MAX = {max_dim}, NCASE = {len(final_results)} }};",
         "",
+        "STATIC:",
+        *dict.fromkeys(static_declarations),
+        "",
         "LOCAL_STATIC:",
-        *(declarations or ["    /* No user symbols are required by the scalar-expanded formulas. */"]),
+        *(list(dict.fromkeys(local_static_declarations)) or ["    /* No user symbols are required by the scalar-expanded formulas. */"]),
         "",
         "RAM_PASS1:",
         "    int err = 0;",
+        "    int row;",
+        "    int col;",
         "    /* Case-specific scalar-expanded RAM G stamp. */",
         f"    switch ({case_id_symbol}) {{",
     ]
@@ -7910,18 +8486,15 @@ def _build_force_scalar_multi_case_c_draft(
         for node_index, node in enumerate(nodes):
             lines.append(f"        g_mat_nods[{node_index}] = getNodeNum(comp, \"{node}\");")
         lines.extend([
-            f"        for (int row = 0; row < {dim}; row++) {{",
-            f"            for (int col = 0; col < {dim}; col++) {{",
+            f"        for (row = 0; row < {dim}; row++) {{",
+            f"            for (col = 0; col < {dim}; col++) {{",
             "                g_mat_over[row][col] = 0.0;",
             "            }",
             "        }",
         ])
-        for row in range(final.G.rows):
-            for col in range(final.G.cols):
-                expr = sp.sympify(final.G[row, col])
-                if expr == 0 or stage_of(expr, item.get("symbol_table") or {}) != "RAM":
-                    continue
-                lines.append(f"        g_mat_over[{row}][{col}] = {emit_c(expr)};")
+        for name, expr in case_shared_temps.get(case_index, []):
+            lines.append(f"        {name} = {_ccode(expr)};")
+        lines.extend(case_ram_lines.get(case_index, []))
         lines.extend([
             f"        setupGMatrix({dim});",
             "        break;",
@@ -7929,12 +8502,12 @@ def _build_force_scalar_multi_case_c_draft(
     lines.extend([
         "    default:",
         "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
-        f"                       \"Unknown force-scalar multi-case profile %d for component %s.\", {case_id_symbol}, Name);",
+        f"                       \"Unknown scalar-expanded multi-case profile %d for component %s.\", {case_id_symbol}, Name);",
         "        break;",
         "    }",
         "    if (err > 0) {",
         "        reportError_RW(\"network_node\", STOP_IMMEDIATELY_CONDITION,",
-        "                       \"RTDS force-scalar allocation failed for component %s.\", Name);",
+        "                       \"RTDS scalar-expanded allocation failed for component %s.\", Name);",
         "    }",
         "",
     ])
@@ -7967,7 +8540,7 @@ def _build_force_scalar_multi_case_c_draft(
         ])
         for case_index in sorted(dynamic_case_assignments):
             lines.append(f"    case {case_index}:")
-            lines.extend(f"        {assignment}" for assignment in dynamic_case_assignments[case_index])
+            lines.extend(case_code_lines.get(case_index, []))
             lines.append("        break;")
         lines.extend([
             "    default:",
@@ -7983,8 +8556,7 @@ def _build_force_scalar_multi_case_c_draft(
         case_index = int(item.get("index", 0))
         final = item["final"]
         lines.append(f"    case {case_index}:")
-        for row, node in enumerate(final.nodes):
-            lines.append(f"        Inj{node_c_name(item, node, row)} = {emit_c(final.Ihis[row, 0])};")
+        lines.extend(case_inj_lines.get(case_index, []))
         lines.append("        break;")
     lines.extend([
         "    default:",
@@ -8001,7 +8573,7 @@ def _build_force_scalar_multi_case_c_draft(
         for item in final_results:
             case_index = int(item.get("index", 0))
             lines.append(f"    case {case_index}:")
-            recovery_lines = _recovery_assignment_lines(item)
+            recovery_lines = case_recovery_lines.get(case_index, [])
             if recovery_lines:
                 lines.extend(recovery_lines)
             else:
@@ -8014,14 +8586,50 @@ def _build_force_scalar_multi_case_c_draft(
         ])
     else:
         lines.append("    /* No internal nodes were eliminated, so there is no Vk recovery step. */")
-    return _use_readable_dimension_names(_ensure_static_blank_line("\n".join(lines))), gvalue_conditions
+    return _use_readable_dimension_names(_ensure_static_blank_line("\n".join(lines))), gvalue_conditions, scalar_cse_stats
 
 
 def _build_force_scalar_multi_case_response(payload: dict) -> dict:
     profiles = payload.get("case_profiles") or []
     case_id_symbol = str(payload.get("case_id_symbol") or "case_id")
     profile_set, final_results, warnings, diagnoses = _force_scalar_profile_results(payload)
-    c_draft, gvalue_conditions = _build_force_scalar_multi_case_c_draft(
+    confirmed = bool(payload.get("force_scalar_confirmed") or payload.get("scalar_preflight_confirmed"))
+    scalar_preflight = _force_scalar_preflight_summary(final_results, confirmed=confirmed)
+    if scalar_preflight.get("blocked"):
+        return _build_force_scalar_preflight_blocked_response(
+            payload,
+            case_id_symbol,
+            profile_set,
+            final_results,
+            warnings,
+            diagnoses,
+            scalar_preflight,
+        )
+    return _build_scalar_expanded_multi_case_response(
+        payload,
+        case_id_symbol,
+        profile_set,
+        final_results,
+        warnings,
+        diagnoses,
+        scalar_preflight=scalar_preflight,
+        codegen_mode="force scalar Schur expansion",
+    )
+
+
+def _build_scalar_expanded_multi_case_response(
+    payload: dict,
+    case_id_symbol: str,
+    profile_set,
+    final_results: list[dict],
+    warnings: list[str],
+    diagnoses: list[dict],
+    *,
+    scalar_preflight: dict[str, object] | None = None,
+    codegen_mode: str,
+) -> dict:
+    profiles = payload.get("case_profiles") or []
+    c_draft, gvalue_conditions, scalar_cse_stats = _build_force_scalar_multi_case_c_draft(
         case_id_symbol,
         profile_set,
         final_results,
@@ -8040,12 +8648,17 @@ def _build_force_scalar_multi_case_response(payload: dict) -> dict:
         ],
         "warnings": warnings,
         "multi_case": {
-            "codegen_mode": "force scalar Schur expansion",
+            "codegen_mode": codegen_mode,
             "fast_path": "case_scalar_schur_expansion",
             "profile_count": len(profiles),
             "aliases": {},
             "gvalue_conditions": gvalue_conditions,
             "uses_case_conditional_gvalue": bool(gvalue_conditions),
+            "scalar_cse": scalar_cse_stats,
+            "scalar_preflight": scalar_preflight or _force_scalar_preflight_summary(
+                final_results,
+                confirmed=True,
+            ),
             "external_nodes": profile_set.super_node_order,
             "effective_internal_nodes": [],
             "block_type": "scalar_expanded",
@@ -8061,6 +8674,46 @@ def _build_force_scalar_multi_case_response(payload: dict) -> dict:
     }
 
 
+def _try_build_auto_scalar_multi_case_response(payload: dict) -> dict | None:
+    has_explicit_codegen_mode = "elimination_codegen_mode" in payload or "codegen_mode" in payload
+    if not has_explicit_codegen_mode:
+        return None
+    if str(payload.get("elimination_codegen_mode") or payload.get("codegen_mode") or "auto") != "auto":
+        return None
+    if payload.get("runtime_case_groups"):
+        return None
+    profiles = payload.get("case_profiles") or []
+    if not profiles or _profiles_have_dummy_finalization(profiles):
+        return None
+    try:
+        profile_set, final_results, _warnings, diagnoses = _force_scalar_profile_results(payload)
+    except Exception:
+        return None
+    max_internal = max((int(item.get("internal_active") or 0) for item in diagnoses), default=0)
+    max_retained = max((int(item["final"].G.rows) for item in final_results), default=0)
+    formula_cost = _dummy_finalized_formula_cost(final_results)
+    if max_internal > 1 or max_retained > 4 or formula_cost > 120:
+        return None
+    warnings = [
+        "Info: auto codegen selected scalar Schur expansion for a low-complexity init-time multi-case network; "
+        "runtime Gkk/W MATRIX_ objects are skipped."
+    ]
+    for diagnosis in diagnoses:
+        if int(diagnosis.get("internal_active") or 0) == 0:
+            diagnosis["reason"] = "No active internal node; scalar path bypasses Schur matrices."
+        else:
+            diagnosis["reason"] = "Auto selected scalar Schur expansion because this case has at most one active internal node and low expression cost."
+    return _build_scalar_expanded_multi_case_response(
+        payload,
+        str(payload.get("case_id_symbol") or "case_id"),
+        profile_set,
+        final_results,
+        warnings,
+        diagnoses,
+        codegen_mode="auto scalar Schur expansion",
+    )
+
+
 def _dummy_finalized_formula_cost(final_results: list[dict]) -> int:
     cost = 0
     for item in final_results:
@@ -8068,6 +8721,196 @@ def _dummy_finalized_formula_cost(final_results: list[dict]) -> int:
         for expr in list(final.G) + list(final.Ihis):
             cost += int(sp.count_ops(sp.sympify(expr)))
     return cost
+
+
+_FORCE_SCALAR_PREFLIGHT_WARN_OPS = 3000
+_FORCE_SCALAR_PREFLIGHT_DANGER_OPS = 12000
+_FORCE_SCALAR_PREFLIGHT_WARN_CHARS = 30000
+_FORCE_SCALAR_PREFLIGHT_DANGER_CHARS = 120000
+_FORCE_SCALAR_PREFLIGHT_DANGER_EXPR_CHARS = 40000
+
+
+def _force_scalar_preflight_exprs(final_results: Sequence[Mapping]) -> list[sp.Expr]:
+    exprs: list[sp.Expr] = []
+    for item in final_results:
+        final = item.get("final")
+        if final is not None:
+            exprs.extend(sp.sympify(expr) for expr in list(getattr(final, "G", [])))
+            exprs.extend(sp.sympify(expr) for expr in list(getattr(final, "Ihis", [])))
+        K_v = item.get("K_v")
+        if K_v is not None:
+            exprs.extend(sp.sympify(expr) for expr in list(sp.Matrix(K_v)))
+        K_h = item.get("K_h")
+        if K_h is not None:
+            exprs.extend(sp.sympify(expr) for expr in list(sp.Matrix(K_h)))
+    return exprs
+
+
+def _force_scalar_preflight_summary(
+    final_results: list[dict],
+    *,
+    confirmed: bool = False,
+) -> dict[str, object]:
+    total_ops = 0
+    total_chars = 0
+    max_expr_ops = 0
+    max_expr_chars = 0
+    expr_count = 0
+    case_count = len(final_results)
+    max_retained = 0
+    max_internal = 0
+    recovery_expr_count = 0
+    per_case: list[dict[str, object]] = []
+    truncated = False
+
+    for item in final_results:
+        final = item.get("final")
+        case_exprs: list[sp.Expr] = []
+        retained_count = int(getattr(getattr(final, "G", None), "rows", 0) or 0) if final is not None else 0
+        internal_count = int(getattr(sp.Matrix(item.get("K_v") if item.get("K_v") is not None else []), "rows", 0) or 0)
+        if final is not None:
+            case_exprs.extend(sp.sympify(expr) for expr in list(getattr(final, "G", [])))
+            case_exprs.extend(sp.sympify(expr) for expr in list(getattr(final, "Ihis", [])))
+        K_v = item.get("K_v")
+        if K_v is not None:
+            case_exprs.extend(sp.sympify(expr) for expr in list(sp.Matrix(K_v)))
+        K_h = item.get("K_h")
+        if K_h is not None:
+            case_exprs.extend(sp.sympify(expr) for expr in list(sp.Matrix(K_h)))
+        case_ops = 0
+        case_chars = 0
+        for expr in case_exprs:
+            expr_count += 1
+            ops = int(sp.count_ops(expr))
+            chars = len(str(expr))
+            total_ops += ops
+            total_chars += chars
+            case_ops += ops
+            case_chars += chars
+            max_expr_ops = max(max_expr_ops, ops)
+            max_expr_chars = max(max_expr_chars, chars)
+            if total_ops >= _FORCE_SCALAR_PREFLIGHT_DANGER_OPS or total_chars >= _FORCE_SCALAR_PREFLIGHT_DANGER_CHARS:
+                truncated = True
+                break
+        max_retained = max(max_retained, retained_count)
+        max_internal = max(max_internal, internal_count)
+        recovery_expr_count += internal_count
+        per_case.append({
+            "case_id": int(item.get("index", len(per_case)) or 0),
+            "retained_count": retained_count,
+            "internal_count": internal_count,
+            "expr_count": len(case_exprs),
+            "ops": case_ops,
+            "chars": case_chars,
+        })
+        if truncated:
+            break
+
+    severity = "ok"
+    if total_ops >= _FORCE_SCALAR_PREFLIGHT_DANGER_OPS or total_chars >= _FORCE_SCALAR_PREFLIGHT_DANGER_CHARS or max_expr_chars >= _FORCE_SCALAR_PREFLIGHT_DANGER_EXPR_CHARS:
+        severity = "danger"
+    elif total_ops >= _FORCE_SCALAR_PREFLIGHT_WARN_OPS or total_chars >= _FORCE_SCALAR_PREFLIGHT_WARN_CHARS:
+        severity = "warn"
+
+    blocked = severity == "danger" and not confirmed
+    message_zh = (
+        f"标量展开预估很大：{case_count} 个 case，约 {total_ops} 个表达式操作，最长表达式约 {max_expr_chars} 字符。"
+        "推荐使用矩阵路线；如需调试，可确认后继续生成标量。"
+        if severity == "danger"
+        else (
+            f"标量展开预估中等：{case_count} 个 case，约 {total_ops} 个表达式操作。生成前请确认代码长度可接受。"
+            if severity == "warn"
+            else f"标量展开预估较小：{case_count} 个 case，约 {total_ops} 个表达式操作。"
+        )
+    )
+    message_en = (
+        f"Scalar expansion is estimated to be large: {case_count} cases, about {total_ops} expression operations, "
+        f"and the longest expression is about {max_expr_chars} characters. The matrix path is recommended; "
+        "continue only for debugging or inspection."
+        if severity == "danger"
+        else (
+            f"Scalar expansion is estimated to be moderate: {case_count} cases and about {total_ops} expression operations. "
+            "Check that the generated code size is acceptable before continuing."
+            if severity == "warn"
+            else f"Scalar expansion is estimated to be small: {case_count} cases and about {total_ops} expression operations."
+        )
+    )
+    return {
+        "enabled": True,
+        "severity": severity,
+        "blocked": blocked,
+        "confirmed": bool(confirmed),
+        "case_count": case_count,
+        "expr_count": expr_count,
+        "recovery_expr_count": recovery_expr_count,
+        "max_retained": max_retained,
+        "max_internal": max_internal,
+        "total_ops": total_ops,
+        "max_expr_ops": max_expr_ops,
+        "total_chars": total_chars,
+        "max_expr_chars": max_expr_chars,
+        "truncated": truncated,
+        "warn_ops": _FORCE_SCALAR_PREFLIGHT_WARN_OPS,
+        "danger_ops": _FORCE_SCALAR_PREFLIGHT_DANGER_OPS,
+        "warn_chars": _FORCE_SCALAR_PREFLIGHT_WARN_CHARS,
+        "danger_chars": _FORCE_SCALAR_PREFLIGHT_DANGER_CHARS,
+        "message_zh": message_zh,
+        "message_en": message_en,
+        "action_zh": "仍然生成标量",
+        "action_en": "Continue scalar generation",
+        "per_case": per_case,
+    }
+
+
+def _build_force_scalar_preflight_blocked_response(
+    payload: dict,
+    case_id_symbol: str,
+    profile_set,
+    final_results: list[dict],
+    warnings: list[str],
+    diagnoses: list[dict],
+    preflight: dict[str, object],
+) -> dict:
+    profiles = payload.get("case_profiles") or []
+    c_draft = (
+        "/* Scalar-expanded C draft was not generated because the preflight estimate is large.\n"
+        "   Use the matrix path, or confirm force_scalar generation to continue. */"
+    )
+    return {
+        "ok": True,
+        "mode": "multi_case_c_export",
+        "case_id_symbol": case_id_symbol,
+        "case_profiles": [
+            {
+                "index": index,
+                "name": str(profile.get("name") or f"Case {index}"),
+                "case_map": dict(profile.get("case_map") or {}),
+            }
+            for index, profile in enumerate(profiles)
+        ],
+        "warnings": warnings,
+        "multi_case": {
+            "codegen_mode": "force scalar Schur expansion",
+            "fast_path": "case_scalar_preflight_blocked",
+            "profile_count": len(profiles),
+            "aliases": {},
+            "gvalue_conditions": [],
+            "uses_case_conditional_gvalue": False,
+            "scalar_cse": _empty_scalar_cse_stats(),
+            "scalar_preflight": preflight,
+            "external_nodes": list(getattr(profile_set, "super_node_order", []) or []),
+            "effective_internal_nodes": [],
+            "block_type": "scalar_expanded",
+            "recovery_profiles": diagnoses,
+            "template_summary": {
+                "super_nodes": list(getattr(profile_set, "super_node_order", []) or []),
+                "NR_SUPER": len(getattr(profile_set, "super_node_order", []) or []),
+                "NR_FINAL_MAX": max((item["final"].G.rows for item in final_results), default=0),
+                "profile_dimensions": [item["final"].G.rows for item in final_results],
+            },
+            "c_draft": c_draft,
+        },
+    }
 
 
 def _dummy_finalized_matrix_dag_is_preferred(final_results: list[dict], *, max_ops: int = 5000) -> bool:
@@ -8809,6 +9652,9 @@ def build_multi_case_response(payload: dict) -> dict:
     if codegen_mode == "force_scalar":
         response = time_call("generate_c_text", _build_force_scalar_multi_case_response, payload)
         return _attach_multicase_diagnostics(response, started, dummy_role_classification, timing_ms)
+    auto_scalar_response = time_call("auto_scalar_probe", _try_build_auto_scalar_multi_case_response, payload)
+    if auto_scalar_response is not None:
+        return _attach_multicase_diagnostics(auto_scalar_response, started, dummy_role_classification, timing_ms)
     has_dummy_finalization = time_call("build_finalization_profiles", _profiles_have_dummy_finalization, profiles)
     if has_dummy_finalization:
         response = time_call("dummy_finalization_pipeline", _build_dummy_finalized_multi_case_response, payload)

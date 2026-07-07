@@ -57,7 +57,7 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         source = Path("index.html").read_text(encoding="utf-8")
 
         start = source.index("async function precomputeReducedAndOptimized")
-        end = source.index("function renderOptimizedControls")
+        end = source.index("function renderEliminationCodegenToggle")
         precompute_source = source[start:end]
         self.assertIn("const reducedDependency = cachedReducedDependencyAnalysis(basePayload);", precompute_source)
         self.assertIn("if (!reducedDependency) return;", precompute_source)
@@ -290,7 +290,7 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         source = Path("index.html").read_text(encoding="utf-8")
 
         self.assertIn(
-            'const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v6-codegen-mode";',
+            'const MULTI_CASE_EXPORT_CACHE_VERSION = "multi-case-runtime-mutable-v7-scalar-preflight";',
             source,
         )
         self.assertNotIn("multi-case-runtime-mutable-v5-direct-residual-split", source)
@@ -299,9 +299,10 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         source = Path("index.html").read_text(encoding="utf-8")
 
         self.assertIn(
-            'const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v5-source-cse-static-assign";',
+            'const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v6-codegen-mode-scalar";',
             source,
         )
+        self.assertNotIn("optimized-c-export-v5-source-cse-static-assign", source)
         self.assertNotIn("optimized-c-export-v2-no-stale-template", source)
 
     def test_export_state_persists_optimized_and_multicase_caches(self):
@@ -619,14 +620,41 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
     def test_multi_case_export_includes_elimination_codegen_mode_control(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
-        self.assertIn('eliminationCodegenMode: "auto"', source)
-        self.assertIn('state.eliminationCodegenMode || "auto"', source)
-        self.assertIn('elimination_codegen_mode: state.eliminationCodegenMode || "auto"', source)
-        self.assertIn('data-optimized-control="codegenMode"', source)
-        self.assertIn('<option value="auto"', source)
-        self.assertIn('<option value="prefer_matrix"', source)
-        self.assertIn('<option value="force_scalar"', source)
-        self.assertIn('if (kind === "codegenMode") state.eliminationCodegenMode = control.value || "auto";', source)
+        self.assertIn('eliminationCodegenMode: "prefer_matrix"', source)
+        self.assertIn('const OPTIMIZED_ELIMINATION_CACHE_VERSION = "optimized-c-export-v6-codegen-mode-scalar";', source)
+        self.assertIn("function normalizedEliminationCodegenMode", source)
+        self.assertIn('data-optimized-codegen-mode="${option.value}"', source)
+        self.assertIn('value: "prefer_matrix"', source)
+        self.assertIn('value: "force_scalar"', source)
+        optimized_payload = source[source.index("function optimizedEliminationPayload"):source.index("function finalRetainedFieldsForSinglePackPayload")]
+        self.assertIn("elimination_codegen_mode: normalizedEliminationCodegenMode()", optimized_payload)
+        optimized_cache = source[source.index("function optimizedEliminationCacheKey"):source.index("async function requestOptimizedElimination")]
+        self.assertIn("elimination_codegen_mode: payload.elimination_codegen_mode", optimized_cache)
+        multi_case_payload = source[source.index("function multiCaseExportPayload"):source.index("async function requestMultiCaseCExport")]
+        self.assertIn("force_scalar_confirmed: Boolean(state.forceScalarPreflightConfirmed)", multi_case_payload)
+        multi_case_cache = source[source.index("function multiCaseExportCacheKey"):source.index("async function renderMultiCaseCExportAsync")]
+        self.assertIn("force_scalar_confirmed: payload.force_scalar_confirmed", multi_case_cache)
+        self.assertNotIn('option value="auto"', source)
+        self.assertNotIn("renderOptimizedControls", source)
+        self.assertIn('const nextMode = normalizedEliminationCodegenMode(control.value);', source)
+        self.assertIn("if (state.eliminationCodegenMode !== nextMode) state.forceScalarPreflightConfirmed = false;", source)
+        self.assertIn("state.eliminationCodegenMode = nextMode;", source)
+        optimized_result = source[source.index("function renderOptimizedFormulaResult"):source.index("function renderOptimizedEliminationResult")]
+        self.assertIn("${renderEliminationCodegenToggle()}", optimized_result)
+        multi_case_render = source[source.index('if (state.activeOutput === "multiCaseCExport")'):source.index("function renderReducedBranchCurrentDisabledNote")]
+        self.assertNotIn("renderOptimizedControls", multi_case_render)
+        multi_case_result = source[source.index("function renderMultiCaseCExportResult"):source.index("function multiCaseExportCacheKey")]
+        self.assertIn("${renderEliminationCodegenToggle()}", multi_case_result)
+        self.assertIn("renderScalarPreflightWarning(multiCase.scalar_preflight)", multi_case_result)
+        self.assertIn("data-multicase-action=\"confirmScalarPreflight\"", source)
+        self.assertIn("标量展开预估很大", source)
+        self.assertIn("Scalar expansion is estimated to be large", source)
+        self.assertIn("仍然生成标量", source)
+        self.assertIn("Continue scalar generation", source)
+        self.assertIn("function handleOutputControlChange(event)", source)
+        self.assertIn('outputText.addEventListener("change", handleOutputControlChange);', source)
+        self.assertIn('outputDialogBody.addEventListener("change", handleOutputControlChange);', source)
+        self.assertIn('state.forceScalarPreflightConfirmed = true;', source)
 
     def test_packaged_n_dummy_ports_are_marked_and_payload_uses_current_groups(self):
         source = Path("index.html").read_text(encoding="utf-8")
@@ -837,6 +865,18 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("function applyPanelWidth", source)
         self.assertIn("function startPanelResize", source)
         self.assertIn("panelResizeBar.addEventListener(\"pointerdown\", startPanelResize)", source)
+
+    def test_right_panel_stays_side_by_side_in_codex_browser_widths(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("@media (max-width: 920px)", source)
+        self.assertIn("@media (max-width: 760px)", source)
+        output_tabs_css = source[source.index(".output-tabs {"):source.index(".tab {")]
+        self.assertIn("overflow-x: auto;", output_tabs_css)
+        self.assertIn("flex-wrap: nowrap;", output_tabs_css)
+        tab_css = source[source.index(".tab {"):source.index(".tab.active")]
+        self.assertIn("flex: 0 0 auto;", tab_css)
+        self.assertIn("white-space: nowrap;", tab_css)
 
     def test_node_exposure_controls_use_unambiguous_labels(self):
         source = Path("index.html").read_text(encoding="utf-8")

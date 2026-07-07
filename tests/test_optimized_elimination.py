@@ -283,6 +283,135 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("MATRIX_", draft)
         self.assertIn("#include <matrixLIB.h>", draft)
 
+    def test_optimized_api_force_scalar_single_case_avoids_runtime_matrices(self):
+        import optimized_elimination_api as api
+
+        payload = {
+            "mode": "structured_formula",
+            "all_nodes": ["N1", "N4", "N2"],
+            "external_nodes": ["N1", "N4"],
+            "internal_nodes": ["N2"],
+            "ground_nodes": [],
+            "G_full": [
+                ["G1", "0", "-G1"],
+                ["0", "G2", "-G2"],
+                ["-G1", "-G2", "G1 + G2"],
+            ],
+            "Ihis_full": ["0", "0", "0"],
+            "node_display_names": {"N1": "N1", "N4": "N4", "N2": "N2"},
+            "symbol_dependency_table": {"G1": "RAM_CONSTANT", "G2": "RAM_CONSTANT"},
+            "elimination_codegen_mode": "force_scalar",
+            "simplify_level": "full",
+        }
+
+        response = api.build_optimized_response(payload)
+
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(response["structured"]["codegen_mode"], "force scalar Schur expansion")
+        draft = response["structured"]["c_draft"]
+        self.assertNotIn("MATRIX_", draft)
+        self.assertNotIn("matrixDim", draft)
+        self.assertNotIn("matrix_matXvec_CODE", draft)
+        self.assertNotIn("get_CODE", draft)
+        self.assertNotIn("for (int ", draft)
+        static_section = draft.split("STATIC:", 1)[1].split("LOCAL_STATIC:", 1)[0]
+        ram_section = draft.split("RAM_PASS1:", 1)[1].split("CODE:", 1)[0]
+        recovery_section = draft.split("T1_T2:", 1)[1]
+        self.assertRegex(static_section, r"double scalar_shared_inv_den_\d+ = 0\.0;")
+        self.assertRegex(ram_section, r"scalar_shared_inv_den_\d+ = 1\.0/\(G1 \+ G2\);")
+        self.assertNotRegex(ram_section, r"double scalar_ram_inv_den_\d+ =")
+        self.assertRegex(draft, r"g_mat_over\[0\]\[0\] = .*scalar_shared_inv_den_\d+")
+        self.assertRegex(recovery_section, r"N2 = .*scalar_shared_inv_den_\d+.*;")
+        self.assertNotIn("scalar_t1t2_inv_den_", recovery_section)
+        self.assertEqual(response["structured"]["scalar_cse"]["denominator_temps"], 1)
+
+    def test_optimized_api_force_scalar_with_borrowed_reduction_still_recovers_internal_voltage(self):
+        import optimized_elimination_api as api
+
+        payload = {
+            "mode": "structured_formula",
+            "all_nodes": ["N1", "N4", "N2"],
+            "external_nodes": ["N1", "N4"],
+            "internal_nodes": ["N2"],
+            "ground_nodes": [],
+            "G_full": [
+                ["G1", "0", "-G1"],
+                ["0", "G2", "-G2"],
+                ["-G1", "-G2", "G1 + G2"],
+            ],
+            "Ihis_full": ["0", "0", "0"],
+            "G_full_tagged": [
+                ["G1_tag", "0", "-G1_tag"],
+                ["0", "G2_tag", "-G2_tag"],
+                ["-G1_tag", "-G2_tag", "G1_tag + G2_tag"],
+            ],
+            "Ihis_full_tagged": ["0", "0", "0"],
+            "node_display_names": {"N1": "N1", "N4": "N4", "N2": "N2"},
+            "symbol_dependency_table": {"G1": "RAM_CONSTANT", "G2": "RAM_CONSTANT"},
+            "symbol_dependency_table_tagged": {"G1_tag": "RAM_CONSTANT", "G2_tag": "RAM_CONSTANT"},
+            "reduced_dependency_analysis": {
+                "external_nodes": ["N1", "N4"],
+                "G_red": [["G1*G2/(G1 + G2)", "-G1*G2/(G1 + G2)"], ["-G1*G2/(G1 + G2)", "G1*G2/(G1 + G2)"]],
+                "Ihis_red": ["0", "0"],
+                "G_red_tagged": [
+                    ["G1_tag*G2_tag/(G1_tag + G2_tag)", "-G1_tag*G2_tag/(G1_tag + G2_tag)"],
+                    ["-G1_tag*G2_tag/(G1_tag + G2_tag)", "G1_tag*G2_tag/(G1_tag + G2_tag)"],
+                ],
+                "Ihis_red_tagged": ["0", "0"],
+            },
+            "elimination_codegen_mode": "force_scalar",
+            "simplify_level": "full",
+        }
+
+        response = api.build_optimized_response(payload)
+
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(response["structured"]["codegen_mode"], "force scalar Schur expansion")
+        draft = response["structured"]["c_draft"]
+        self.assertNotIn("MATRIX_", draft)
+        self.assertNotIn("matrixDim", draft)
+        self.assertRegex(draft, r"N2 = .*scalar_shared_inv_den_\d+.*;")
+        self.assertNotIn("N2 = 0.0;", draft)
+
+    def test_force_scalar_code_owned_denominator_stays_in_code_sections(self):
+        import optimized_elimination_api as api
+
+        payload = {
+            "mode": "structured_formula",
+            "all_nodes": ["N1", "N4", "N2"],
+            "external_nodes": ["N1", "N4"],
+            "internal_nodes": ["N2"],
+            "ground_nodes": [],
+            "G_full": [
+                ["G1", "0", "-G1"],
+                ["0", "G2", "-G2"],
+                ["-G1", "-G2", "G1 + G2"],
+            ],
+            "Ihis_full": ["0", "0", "0"],
+            "node_display_names": {"N1": "N1", "N4": "N4", "N2": "N2"},
+            "symbol_dependency_table": {"G1": "CODE_VARIABLE", "G2": "CODE_VARIABLE"},
+            "elimination_codegen_mode": "force_scalar",
+            "simplify_level": "full",
+        }
+
+        response = api.build_optimized_response(payload)
+
+        self.assertTrue(response["ok"], response)
+        draft = response["structured"]["c_draft"]
+        self.assertNotIn("MATRIX_", draft)
+        ram_section = draft.split("RAM_PASS1:", 1)[1].split("GVALUES:", 1)[0]
+        code_section = draft.split("BEGIN_T0:", 1)[1].split("T1_T2:", 1)[0]
+        recovery_section = draft.split("T1_T2:", 1)[1]
+        static_section = draft.split("STATIC:", 1)[1].split("LOCAL_STATIC:", 1)[0]
+        self.assertNotIn("scalar_code_inv_den_", ram_section)
+        self.assertRegex(static_section, r"double scalar_code_inv_den_\d+ = 0\.0;")
+        self.assertRegex(static_section, r"double scalar_t1t2_inv_den_\d+ = 0\.0;")
+        self.assertRegex(code_section, r"scalar_code_inv_den_\d+ = 1\.0/\(G1 \+ G2\);")
+        self.assertRegex(recovery_section, r"scalar_t1t2_inv_den_\d+ = 1\.0/\(G1 \+ G2\);")
+        self.assertNotRegex(code_section, r"double scalar_code_inv_den_\d+ =")
+        self.assertNotRegex(recovery_section, r"double scalar_t1t2_inv_den_\d+ =")
+        self.assertEqual(response["structured"]["scalar_cse"]["denominator_temps"], 2)
+
     def test_code_stage_g_matrices_are_not_prefilled_with_ram_set_calls(self):
         G1, G2 = sp.symbols("G1 G2")
         nodes = ["A", "X", "B"]

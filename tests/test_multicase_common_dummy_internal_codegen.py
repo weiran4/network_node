@@ -162,6 +162,23 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertIn("Gred[C_1,RC_B] = -Gred[B_1,RC_B]", by_case.get(6, set()))
         self.assertIn("Gred[C_1,RC_C] = -Gred[A_1,RC_C]", by_case.get(6, set()))
 
+    def test_trf_rcy_ucm_force_scalar_preflight_blocks_large_scalar_codegen(self):
+        data = json.loads(Path("exports/Trf_RCY_UCM.json").read_text(encoding="utf-8"))
+        cache_key = data["multiCaseExportCache"][0]["key"]
+        payload = json.loads(cache_key)
+        payload["mode"] = "multi_case_c_export"
+        payload["elimination_codegen_mode"] = "force_scalar"
+
+        response = build_multi_case_response(payload)
+
+        multi = response["multi_case"]
+        preflight = multi["scalar_preflight"]
+        self.assertEqual(multi["fast_path"], "case_scalar_preflight_blocked")
+        self.assertEqual(preflight["severity"], "danger")
+        self.assertTrue(preflight["blocked"])
+        self.assertGreater(preflight["total_ops"], 10000)
+        self.assertIn("Scalar-expanded C draft was not generated", multi["c_draft"])
+
     def test_trf_rcy_ucm_profiled_diagonal_cases_use_scalar_path_without_bare_nr(self):
         data = json.loads(Path("exports/Trf_RCY_UCM.json").read_text(encoding="utf-8"))
         cache_key = data["multiCaseExportCache"][0]["key"]
@@ -201,7 +218,8 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", fallback_block)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", fallback_block)
         self.assertIn("Symmetric product: only upper triangle of tmp_Grk_W_Gkr_code is needed downstream.", fallback_block)
-        self.assertIn("for (int col = row; col < node_active; col++)", fallback_block)
+        self.assertIn("for (col = row; col < node_active; col++)", fallback_block)
+        self.assertNotIn("for (int ", draft)
         self.assertIn("CODE_FUNCTIONS:", draft)
         code_functions = draft.split("CODE_FUNCTIONS:", 1)[1].split("CODE:", 1)[0]
         self.assertIn("void network_node_recover_vk_diag", code_functions)

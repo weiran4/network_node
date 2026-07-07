@@ -424,8 +424,11 @@ class MultiCaseDummyNodeBlockTests(unittest.TestCase):
         draft = multi["c_draft"]
         self.assertIn("PACK_CASE_0 = 0, PACK_CASE_1 = 1, RETAINED_NODES_CASE_0 = 5, RETAINED_NODES_CASE_1 = 4, INTERNAL_NODES = 0", draft)
         self.assertIn("setupGMatrix(node_active);", draft)
-        self.assertIn("for (int row = 0; row < node_active; row++)", draft)
-        self.assertIn("for (int col = 0; col < node_active; col++)", draft)
+        self.assertIn("int row;", draft)
+        self.assertIn("int col;", draft)
+        self.assertIn("for (row = 0; row < 5; row++)", draft)
+        self.assertIn("for (col = 0; col < 5; col++)", draft)
+        self.assertNotIn("for (int ", draft)
         self.assertIn("if (retained_profile == PACK_CASE_0) {\n        g_mat_nods[4] = getNodeNum(comp, \"N3\");", draft)
         self.assertIn("if (retained_profile == PACK_CASE_0) {\n        g_mat_over[1][4] =", draft)
         self.assertNotIn("setupGMatrix(5);", draft)
