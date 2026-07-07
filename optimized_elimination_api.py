@@ -5772,6 +5772,12 @@ def _sync_dummy_finalized_alias_values(
             return True, sp.sympify(final.G[final_row, final_col])
         return True, sp.sympify(final.Ihis[final_row, 0])
 
+    def same_alias_position_value(left: sp.Expr, right: sp.Expr) -> bool:
+        # This path runs before code generation on possibly huge multi-case
+        # expressions.  Do not call expand/simplify here; if structural equality
+        # is not obvious, keep the original alias values instead.
+        return bool(left == right)
+
     for alias, positions in alias_positions.items():
         next_values: dict[str, str] = {}
         next_owners: dict[int, str] = {}
@@ -5792,7 +5798,7 @@ def _sync_dummy_finalized_alias_values(
                 value = sp.Integer(0)
             else:
                 value = active_values[0]
-                if any(not _expr_equal_light(value, other) for other in active_values[1:]):
+                if any(not same_alias_position_value(value, other) for other in active_values[1:]):
                     unresolved = True
                     break
             next_values[str(case_index)] = _expr_to_payload_text(value)
@@ -9378,7 +9384,7 @@ def _build_dummy_finalized_matrix_dag_c_draft(
     if compact_external_order:
         raw_template_payload = _with_reordered_external_nodes(raw_template_payload, compact_external_order)
     template_internal_count = len(raw_template_payload.get("internal_nodes") or [])
-    use_synthetic_dependency = template_internal_count >= 4
+    use_synthetic_dependency = bool(aliases) or template_internal_count >= 4
     template_payload = (
         _attach_multicase_fast_dependency(
             raw_template_payload,
@@ -9564,7 +9570,7 @@ def _build_dummy_finalized_multi_case_response(payload: dict) -> dict:
     extra_warnings: list[str] = []
     matrix_dag_result: dict | None = None
     if use_matrix_dag_draft:
-        if template_payload is not None:
+        if template_payload is not None and not (template_payload.get("internal_nodes") or []):
             _sync_dummy_finalized_alias_values(aliases, template_payload, final_results)
         c_draft, gvalue_conditions, extra_warnings, matrix_dag_result = _build_dummy_finalized_matrix_dag_c_draft(
             payload,

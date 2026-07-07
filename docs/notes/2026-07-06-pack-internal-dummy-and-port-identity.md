@@ -166,6 +166,9 @@ Use the term "port identity" and explain that it is a fixed backend ID used to v
 - Do not repeat `g_mat_nods`, zero-fill loops, or `setupGMatrix` per force-scalar case when all cases stamp the same retained ports in the same order.
 - Do not reuse raw source alias case values after dummy finalization. The C draft should only see dummy conductances if a surviving physical final node really depends on them.
 - Do not scan only `G_full` / `Ihis_full` when cleaning dummy-finalized aliases; matrix-mode no-internal exports can source RAM aliases from `direct_retained_stamps`.
+- Do not run dummy-finalized alias value synchronization on matrix-DAG cases that still have eliminated internal nodes. The sync was introduced for no-internal direct-retained dummy layouts; applying it to transformer/UCM cases can push large expressions into expensive comparison paths.
+- Do not call algebraic equality helpers such as `_expr_equal_light()` from alias cleanup or other pre-codegen mux bookkeeping. Those helpers may expand large SymPy expressions; use structural equality only and skip the optimization when equality is not obvious.
+- For dummy-finalized multi-case matrix DAG drafts with aliases, prefer synthetic reduced-dependency placeholders instead of recomputing full symbolic `Gred` just for dependency details. Small internal-node counts can still have huge expressions.
 - Do not pass runtime-selected retained dimensions into `setupGMatrix`; use generated constants per retained layout.
 - Do not restore `state.language` from saved circuit/project JSON. Startup demo files and shared project exports may carry old `"language": "zh"` metadata; loading them should not override the app/session default language.
 - Do not trust Pack branch G constant edits unless the active network-case snapshot has been synchronized.
