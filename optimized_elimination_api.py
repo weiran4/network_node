@@ -1291,6 +1291,8 @@ def build_optimized_response(payload: dict) -> dict:
         dependency_model_override=dependency_model_override,
         analysis_model_override=analysis_model_override,
     )
+    if payload.get("prefer_ram_gred_matrix_precompute"):
+        rtds_stage_plan["prefer_ram_gred_matrix_precompute"] = True
     if direct_stamps:
         rtds_stage_plan["Gred_direct"] = direct_Grr
         rtds_stage_plan["Ihisred_direct"] = direct_Ihisr
@@ -6838,6 +6840,9 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
         "use_suggested_order": payload.get("use_suggested_order", template_payload.get("use_suggested_order", False)),
         "preserve_structured_details_with_borrowed_dependency": preserve_structured_details,
     }
+    requested_codegen_mode = str(payload.get("elimination_codegen_mode") or payload.get("codegen_mode") or "auto")
+    if requested_codegen_mode in {"prefer_matrix", "matrix"}:
+        request_payload["prefer_ram_gred_matrix_precompute"] = True
     result = build_optimized_response(request_payload)
     template_G, template_Ihis, _, _, template_nodes, template_external, _, _ = _partition_payload(template_payload)
     template_reduced = eliminate_internal_nodes(template_G, template_Ihis, template_nodes, template_external)

@@ -1154,13 +1154,13 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
             }
             for index, case in enumerate(network_cases)
         ]
-        response = build_multi_case_response(
-            _request(
-                profiles,
-                deps=_deps("G11", "G12", "G22", "Gc", step=("Ihis_p", "Ihis_s", "IhisC1", "IhisC2")),
-                case_id="case_id",
-            )
+        request = _request(
+            profiles,
+            deps=_deps("G11", "G12", "G22", "Gc", step=("Ihis_p", "Ihis_s", "IhisC1", "IhisC2")),
+            case_id="case_id",
         )
+        request["elimination_codegen_mode"] = "prefer_matrix"
+        response = build_multi_case_response(request)
 
         multi = response["multi_case"]
         draft = multi["c_draft"]
@@ -1193,6 +1193,10 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )
         self.assertIn("W_code", draft)
         self.assertIn("Gkr_code", draft)
+        self.assertNotIn("sourceG_tmp", draft)
+        self.assertIn("RAM-side matrix Schur precompute for fixed Gred stamp.", draft)
+        self.assertIn("matrix_invert(&W_ram, &Gkk_ram);", draft)
+        self.assertIn("matrix_subtract(&Gred_ram, &Grr_ram, &tmp_Grk_W_Gkr_ram);", draft)
         self.assertIn('getNodeNum(comp, "N1")', draft)
         self.assertIn('getNodeNum(comp, "N4")', draft)
         self.assertNotIn('getNodeNum(comp, "inner_left")', draft)

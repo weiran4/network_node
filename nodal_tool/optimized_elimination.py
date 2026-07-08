@@ -2067,6 +2067,17 @@ def _c_emit_rtds_stage_sections(
     dynamic_gred = bool(code_gred_entries)
     full_gred_code_path = bool(dynamic_gred and code_gred_entries and len(code_gred_entries) == Gred.rows * Gred.cols)
     partial_gred_code_path = bool(dynamic_gred and not full_gred_code_path)
+    ram_gred_matrix_precompute = bool(
+        plan.get("prefer_ram_gred_matrix_precompute")
+        and internal_nodes
+        and ram_Gred.rows
+        and ram_Gred.cols
+        and any(
+            sp.simplify(ram_Gred[row, col]) != 0
+            for row in range(ram_Gred.rows)
+            for col in range(ram_Gred.cols)
+        )
+    )
     dynamic_subblock = {
         **detect_rectangular_dynamic_blocks(code_gred_entries),
         "owner_matrix": Gred_stage,
@@ -2376,22 +2387,6 @@ def _c_emit_rtds_stage_sections(
         ])
         return lines
     ram_overlay_nodes, ram_overlay_index = _ram_overlay_node_subset(ram_Gred, external_nodes)
-    ram_g_assignments = [
-        (
-            f"g_mat_over[{ram_overlay_index[row]}][{ram_overlay_index[col]}]",
-            ram_Gred[row, col],
-            None,
-            _scalar_g_name("ramG", external_nodes[row], external_nodes[col], node_display_names),
-            f"Gred[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]",
-        )
-        for row in range(ram_Gred.rows)
-        for col in range(ram_Gred.cols)
-        if sp.simplify(ram_Gred[row, col]) != 0
-    ]
-    ram_g_temp_names, ram_g_compute_lines, ram_g_assignment_lines = _c_scalar_assignment_cse(
-        ram_g_assignments,
-        "ramG",
-    )
     Grr_alias_entries = _block_alias_entries(Grr, "Grr", external_nodes, internal_nodes, node_display_names)
     Grk_alias_entries = _block_alias_entries(Grk, "Grk", external_nodes, internal_nodes, node_display_names)
     Gkr_alias_entries = _block_alias_entries(Gkr, "Gkr", external_nodes, internal_nodes, node_display_names)
@@ -2404,11 +2399,64 @@ def _c_emit_rtds_stage_sections(
         and not w_runtime_inverse
         and not structured_w_builder
     )
+    if ram_gred_matrix_precompute:
+        ram_g_temp_names: list[str] = []
+        ram_g_compute_lines = [
+            "    /* RAM-side matrix Schur precompute for fixed Gred stamp. */",
+            "    err += matrixDim(&Grr_ram, NR, NR);",
+            "    err += matrixDim(&Grk_ram, NR, NK);",
+            "    err += matrixDim(&Gkr_ram, NK, NR);",
+            "    err += matrixDim(&Gkk_ram, NK, NK);",
+            "    err += matrixDim(&W_ram, NK, NK);",
+            "    err += matrixDim(&Gred_ram, NR, NR);",
+            "    err += matrixDim(&tmp_Grk_W_ram, NR, NK);",
+            "    err += matrixDim(&tmp_Grk_W_Gkr_ram, NR, NR);",
+            "    if (err > 0) {",
+            '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
+            '                       "RTDS RAM matrix allocation failed for component %s.", Name);',
+            "    }",
+            *_block_alias_compute_lines([*Grr_alias_entries, *Grk_alias_entries, *Gkr_alias_entries, *Gkk_alias_entries]),
+            *_matrix_set_alias_lines(Grr_alias_entries, "Grr_ram", "set"),
+            *_matrix_set_alias_lines(Grk_alias_entries, "Grk_ram", "set"),
+            *_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_ram", "set"),
+            *_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_ram", "set"),
+            "    err += matrix_invert(&W_ram, &Gkk_ram);",
+            "    err += matrix_mult(&tmp_Grk_W_ram, &Grk_ram, &W_ram);",
+            "    err += matrix_mult(&tmp_Grk_W_Gkr_ram, &tmp_Grk_W_ram, &Gkr_ram);",
+            "    err += matrix_subtract(&Gred_ram, &Grr_ram, &tmp_Grk_W_Gkr_ram);",
+            "    if (err > 0) {",
+            '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
+            '                       "RTDS RAM matrix Schur precompute failed for component %s.", Name);',
+            "    }",
+        ]
+        ram_g_assignment_lines = [
+            f"    g_mat_over[{ram_overlay_index[row]}][{ram_overlay_index[col]}] = get(&Gred_ram, {row}, {col});"
+            for row in range(ram_Gred.rows)
+            for col in range(ram_Gred.cols)
+            if sp.simplify(ram_Gred[row, col]) != 0
+        ]
+    else:
+        ram_g_assignments = [
+            (
+                f"g_mat_over[{ram_overlay_index[row]}][{ram_overlay_index[col]}]",
+                ram_Gred[row, col],
+                None,
+                _scalar_g_name("ramG", external_nodes[row], external_nodes[col], node_display_names),
+                f"Gred[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]",
+            )
+            for row in range(ram_Gred.rows)
+            for col in range(ram_Gred.cols)
+            if sp.simplify(ram_Gred[row, col]) != 0
+        ]
+        ram_g_temp_names, ram_g_compute_lines, ram_g_assignment_lines = _c_scalar_assignment_cse(
+            ram_g_assignments,
+            "ramG",
+        )
     block_alias_entries = [
-        *(Grr_alias_entries if need_Grr_code or rectangular_gred_dyn_path else []),
-        *(Grk_alias_entries if need_Grk_code or rectangular_gred_dyn_path or partial_ihisred_code_path else []),
-        *(Gkr_alias_entries if need_Gkr_code or rectangular_gred_dyn_path else []),
-        *(Gkk_alias_entries if need_Gkk_code else []),
+        *(Grr_alias_entries if need_Grr_code or rectangular_gred_dyn_path or ram_gred_matrix_precompute else []),
+        *(Grk_alias_entries if need_Grk_code or rectangular_gred_dyn_path or partial_ihisred_code_path or ram_gred_matrix_precompute else []),
+        *(Gkr_alias_entries if need_Gkr_code or rectangular_gred_dyn_path or ram_gred_matrix_precompute else []),
+        *(Gkk_alias_entries if need_Gkk_code or ram_gred_matrix_precompute else []),
         *(W_alias_entries if (need_W_code or need_W_scalar_aliases) and not w_runtime_inverse and not structured_w_builder else []),
     ]
     ram_precompute_alias_entries = [
@@ -2569,6 +2617,20 @@ def _c_emit_rtds_stage_sections(
         "   T1_T2 reads solved node voltages and recovers eliminated-node voltages when needed. */",
         "STATIC:",
         "    /* Runtime matrix objects */",
+        *(
+            [
+                "    MATRIX_ Grr_ram = {0};",
+                "    MATRIX_ Grk_ram = {0};",
+                "    MATRIX_ Gkr_ram = {0};",
+                "    MATRIX_ Gkk_ram = {0};",
+                "    MATRIX_ W_ram = {0};",
+                "    MATRIX_ Gred_ram = {0};",
+                "    MATRIX_ tmp_Grk_W_ram = {0};",
+                "    MATRIX_ tmp_Grk_W_Gkr_ram = {0};",
+            ]
+            if ram_gred_matrix_precompute
+            else []
+        ),
         *(["    MATRIX_ Grr_code = {0};"] if need_Grr_code else []),
         *(["    MATRIX_ Grk_code = {0};"] if need_Grk_code else []),
         *(["    MATRIX_ Gkr_code = {0};"] if need_Gkr_code else []),
