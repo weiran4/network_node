@@ -8,7 +8,7 @@
    Runtime sections use MATRIX_ matrixDim/register/condition plus set_CODE,
    matrix_mult_CODE, matrix_matXvec_CODE, matrix_add_CODE/subtract_CODE,
    matrix_scalarMult_CODE, MATH_matx_invert,
-   mat_2x2_sym_inv_code, mat_3x3_sym_inv_code. See LOCAL_math_builtin_functions.md. */
+   mat_2x2_sym_inv_code, mat_3x3_sym_inv_code. */
 
 
 /* RTDS lifecycle placement for a network with no eliminated internal nodes.

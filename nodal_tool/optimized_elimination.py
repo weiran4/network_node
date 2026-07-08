@@ -3326,7 +3326,7 @@ def c_draft_for_structured_formula(
         "   Runtime sections use MATRIX_ matrixDim/register/condition plus set_CODE,",
         "   matrix_mult_CODE, matrix_matXvec_CODE, matrix_add_CODE/subtract_CODE,",
         "   matrix_scalarMult_CODE, MATH_matx_invert,",
-        "   mat_2x2_sym_inv_code, mat_3x3_sym_inv_code. See LOCAL_math_builtin_functions.md. */",
+        "   mat_2x2_sym_inv_code, mat_3x3_sym_inv_code. */",
         f"enum {{ NR = {nr}, NK = {nk} }};",
         "",
         *_c_emit_rtds_stage_sections(rtds_stage_plan, node_display_names),
