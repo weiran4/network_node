@@ -6,15 +6,15 @@
   <title>Two-Port Branch Builder</title>
   <style>
     :root {
-      --bg: #f4f6f8;
+      --bg: #edf1f4;
       --panel: #ffffff;
       --panel-soft: #f8fafc;
-      --ink: #15202b;
-      --muted: #637083;
-      --line: #d8dee7;
-      --line-strong: #c4ccd8;
-      --grid: #d7e9dd;
-      --blue: #2563eb;
+      --ink: #17222d;
+      --muted: #667384;
+      --line: #d6dde5;
+      --line-strong: #bdc8d3;
+      --grid: #d5e5dd;
+      --blue: #136fd1;
       --green: #15803d;
       --red: #b42318;
       --gold: #a16207;
@@ -22,7 +22,7 @@
       --output-panel: #13212c;
       --output-line: #2d4050;
       --output-muted: #a9bac8;
-      --shadow: 0 12px 30px rgba(17, 24, 39, 0.09);
+      --shadow: 0 16px 36px rgba(17, 24, 39, 0.12);
     }
 
     * {
@@ -53,21 +53,20 @@
     .topbar {
       display: flex;
       align-items: flex-start;
-      gap: 12px;
+      gap: 10px;
       min-height: 52px;
-      padding: 8px 14px 9px;
+      padding: 8px 14px;
       border-bottom: 1px solid var(--line);
-      background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
-      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.85) inset, 0 8px 22px rgba(15, 23, 42, 0.05);
+      background: rgba(255, 255, 255, 0.97);
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.055);
       position: relative;
       z-index: 2;
     }
 
     .brand {
-      font-weight: 850;
+      font-weight: 780;
       margin-right: 4px;
-      padding-top: 9px;
-      padding-right: 14px;
+      padding: 8px 16px 8px 0;
       border-right: 1px solid var(--line);
       white-space: nowrap;
       letter-spacing: 0;
@@ -75,7 +74,7 @@
 
     .toolbar {
       display: flex;
-      gap: 7px;
+      gap: 6px;
       align-items: center;
       flex-wrap: wrap;
       min-width: 0;
@@ -84,40 +83,40 @@
     .toolbar-group {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      padding: 4px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: rgba(255, 255, 255, 0.88);
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      gap: 3px;
+      padding: 3px;
+      border: 1px solid #dbe2e9;
+      border-radius: 6px;
+      background: #f5f7f9;
+      box-shadow: none;
     }
 
     .toolbar-label {
-      font-size: 10px;
-      font-weight: 800;
+      font-size: 9px;
+      font-weight: 750;
       color: var(--muted);
       text-transform: uppercase;
-      padding: 0 4px;
+      padding: 0 5px 0 4px;
       white-space: nowrap;
     }
 
     .tool {
-      width: 36px;
-      height: 34px;
+      width: 34px;
+      height: 32px;
       display: grid;
       place-items: center;
-      border: 1px solid #d4dbe5;
+      border: 1px solid transparent;
       background: #ffffff;
       color: var(--ink);
-      border-radius: 6px;
+      border-radius: 5px;
       cursor: pointer;
       transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease, background 0.14s ease;
     }
 
     .tool:hover:not(:disabled) {
-      border-color: #9fb0c3;
-      background: #f8fafc;
-      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+      border-color: #c5d0db;
+      background: #ffffff;
+      box-shadow: 0 2px 5px rgba(15, 23, 42, 0.07);
     }
 
     .tool.text-tool {
@@ -131,8 +130,8 @@
     .tool.active {
       border-color: var(--blue);
       color: var(--blue);
-      background: #eff6ff;
-      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+      background: #eaf3fe;
+      box-shadow: inset 0 0 0 1px rgba(19, 111, 209, 0.12);
     }
 
     .tool:disabled {
@@ -162,7 +161,7 @@
       gap: 6px;
       padding: 8px 10px;
       border-bottom: 1px solid var(--line);
-      background: #f8fafc;
+      background: #f4f7f9;
       overflow-x: auto;
     }
 
@@ -170,7 +169,7 @@
       border: 1px solid var(--line);
       background: #ffffff;
       color: var(--ink);
-      border-radius: 6px;
+      border-radius: 5px;
       padding: 6px 11px;
       cursor: pointer;
       font-size: 12px;
@@ -185,7 +184,7 @@
       border-color: var(--blue);
       background: var(--blue);
       color: #fff;
-      box-shadow: 0 6px 14px rgba(37, 99, 235, 0.16);
+      box-shadow: 0 3px 9px rgba(19, 111, 209, 0.2);
     }
 
     .canvas-tab:hover:not(.active) {
@@ -248,7 +247,7 @@
         linear-gradient(var(--grid) 1px, transparent 1px),
         linear-gradient(90deg, var(--grid) 1px, transparent 1px);
       background-size: 24px 24px;
-      background-color: #eef8f1;
+      background-color: #f1f8f4;
     }
 
     .package-case-overlay {
@@ -650,9 +649,9 @@
       min-height: 34px;
       padding: 7px 8px;
       border: 1px solid var(--line);
-      border-radius: 7px;
+      border-radius: 5px;
       background: #ffffff;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.045);
       user-select: none;
     }
 
@@ -940,7 +939,7 @@
       border-left: 1px solid var(--line);
       background: var(--panel);
       overflow: auto;
-      box-shadow: -10px 0 24px rgba(15, 23, 42, 0.035);
+      box-shadow: -8px 0 20px rgba(15, 23, 42, 0.04);
     }
 
     .panel-resize-bar {
@@ -957,17 +956,17 @@
     }
 
     .panel-section {
-      padding: 14px 16px 16px;
+      padding: 16px 18px 18px;
       border-bottom: 1px solid var(--line);
     }
 
     .panel-title {
       font-size: 13px;
-      font-weight: 800;
+      font-weight: 760;
       margin: 0 0 12px;
       text-transform: uppercase;
       color: #263442;
-      letter-spacing: 0.02em;
+      letter-spacing: 0;
       display: flex;
       align-items: center;
       gap: 8px;
@@ -975,9 +974,9 @@
 
     .panel-title::before {
       content: "";
-      width: 3px;
+      width: 2px;
       height: 14px;
-      border-radius: 999px;
+      border-radius: 1px;
       background: var(--blue);
       display: inline-block;
     }
@@ -1082,7 +1081,7 @@
 
     .editor-group {
       border: 1px solid var(--line);
-      border-radius: 7px;
+      border-radius: 5px;
       background: #ffffff;
       overflow: hidden;
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
@@ -1101,9 +1100,9 @@
       font-weight: 800;
       color: #243446;
       list-style: none;
-      background: linear-gradient(180deg, #ffffff 0%, #eef3f8 100%);
-      border-bottom: 1px solid #c8d4e0;
-      box-shadow: inset 3px 0 0 #2f6fed;
+      background: #f5f7f9;
+      border-bottom: 1px solid #d5dde5;
+      box-shadow: inset 2px 0 0 var(--blue);
     }
 
     .editor-group summary::-webkit-details-marker {
@@ -1281,7 +1280,7 @@
       color: #eaf0f4;
       min-height: 0;
       display: grid;
-      grid-template-rows: 42px 1fr;
+      grid-template-rows: 40px 1fr;
       box-shadow: 0 -12px 30px rgba(15, 23, 42, 0.10);
     }
 
@@ -1289,12 +1288,40 @@
       display: flex;
       align-items: center;
       flex-wrap: nowrap;
-      gap: 7px;
-      padding: 6px 10px 5px;
+      gap: 5px;
+      padding: 5px 8px;
       border-bottom: 1px solid var(--output-line);
-      background: linear-gradient(180deg, #111f2a 0%, #0c1720 100%);
+      background: #0e1a24;
       box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
       overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(130, 159, 181, 0.62) rgba(6, 15, 22, 0.42);
+      overscroll-behavior-x: contain;
+      scroll-behavior: smooth;
+    }
+
+    .output-tabs::-webkit-scrollbar {
+      height: 6px;
+    }
+
+    .output-tabs::-webkit-scrollbar-track {
+      background: rgba(6, 15, 22, 0.42);
+    }
+
+    .output-tabs::-webkit-scrollbar-thumb {
+      min-width: 48px;
+      border-radius: 999px;
+      background: rgba(130, 159, 181, 0.62);
+    }
+
+    .output-tabs::-webkit-scrollbar-thumb:hover {
+      background: rgba(166, 193, 212, 0.82);
+    }
+
+    .output-tabs::-webkit-scrollbar-button {
+      display: none;
+      width: 0;
     }
 
     .tab {
@@ -1302,11 +1329,11 @@
       border: 1px solid var(--output-line);
       background: #122230;
       color: #d8e2e8;
-      border-radius: 6px;
-      padding: 6px 11px;
+      border-radius: 5px;
+      padding: 6px 10px;
       cursor: pointer;
       font-size: 12px;
-      font-weight: 750;
+      font-weight: 700;
       white-space: nowrap;
       transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
     }
@@ -1315,7 +1342,7 @@
       border-color: #5fb3ff;
       color: #fff;
       background: #12324b;
-      box-shadow: inset 0 -2px 0 #65cfff, 0 0 0 1px rgba(101, 207, 255, 0.14);
+      box-shadow: inset 0 -2px 0 #65cfff;
     }
 
     .tab:hover:not(.active) {
@@ -1334,7 +1361,7 @@
       border: 1px solid var(--output-line);
       background: #122230;
       color: #d8e2e8;
-      border-radius: 6px;
+      border-radius: 5px;
       cursor: pointer;
       transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
     }
@@ -1371,6 +1398,48 @@
       background:
         radial-gradient(circle at top left, rgba(101, 207, 255, 0.055), transparent 360px),
         var(--output-bg);
+    }
+
+    .output-body,
+    .modal-output-body {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(130, 159, 181, 0.68) rgba(6, 15, 22, 0.46);
+    }
+
+    .output-body::-webkit-scrollbar,
+    .modal-output-body::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    .output-body::-webkit-scrollbar-track,
+    .modal-output-body::-webkit-scrollbar-track {
+      background: rgba(6, 15, 22, 0.46);
+    }
+
+    .output-body::-webkit-scrollbar-thumb,
+    .modal-output-body::-webkit-scrollbar-thumb {
+      min-height: 44px;
+      border: 2px solid rgba(6, 15, 22, 0.46);
+      border-radius: 999px;
+      background: rgba(130, 159, 181, 0.68);
+    }
+
+    .output-body::-webkit-scrollbar-thumb:hover,
+    .modal-output-body::-webkit-scrollbar-thumb:hover {
+      background: rgba(174, 201, 220, 0.88);
+    }
+
+    .output-body::-webkit-scrollbar-button,
+    .modal-output-body::-webkit-scrollbar-button {
+      display: none;
+      width: 0;
+      height: 0;
+    }
+
+    .output-body::-webkit-scrollbar-corner,
+    .modal-output-body::-webkit-scrollbar-corner {
+      background: rgba(6, 15, 22, 0.46);
     }
 
     .output.has-minimap .output-body {

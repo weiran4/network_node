@@ -3,6 +3,31 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const html = fs.readFileSync(new URL("../index.html", import.meta.url), "utf8");
+assert.match(
+  html,
+  /\.output-tabs\s*\{[\s\S]*?overflow-x:\s*auto;[\s\S]*?scrollbar-width:\s*thin;/,
+  "Output tabs should keep horizontal scrolling with a thin scrollbar"
+);
+assert.match(
+  html,
+  /\.output-tabs::\-webkit-scrollbar\s*\{[\s\S]*?height:\s*6px;/,
+  "Output tabs should use a compact WebKit scrollbar"
+);
+assert.match(
+  html,
+  /\.output-tabs::\-webkit-scrollbar-thumb\s*\{[\s\S]*?background:/,
+  "Output tabs should style the draggable scrollbar thumb"
+);
+assert.match(
+  html,
+  /\.output-body,[\s\S]*?\.modal-output-body\s*\{[\s\S]*?scrollbar-width:\s*thin;/,
+  "Output bodies should use compact vertical scrollbars"
+);
+assert.match(
+  html,
+  /\.output-body::\-webkit-scrollbar,[\s\S]*?\.modal-output-body::\-webkit-scrollbar\s*\{[\s\S]*?width:\s*8px;/,
+  "Output bodies should use a narrow WebKit scrollbar"
+);
 const start = html.indexOf("const MATH_FORMAT_MAX_DEPTH");
 const end = html.indexOf("function renderNodeEquations", start);
 assert.ok(start >= 0 && end > start, "Could not locate math formatter block in index.html");
