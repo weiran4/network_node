@@ -27,6 +27,12 @@ def assert_matrix_equal(testcase, actual, expected):
 
 
 class OptimizedEliminationTests(unittest.TestCase):
+    def assert_cbuilder_section_spacing(self, draft: str) -> None:
+        for label in ("STATIC", "LOCAL_STATIC", "RAM_PASS1", "CODE", "BEGIN_T0", "T1_T2"):
+            if f"{label}:" in draft:
+                self.assertIn(f"{label}:\n\n", draft)
+                self.assertNotRegex(draft, rf"(?m)^{label}:\n    \S")
+
     def _basic_multicase_payload(self, *, g1: str, g2: str, h: str = "0") -> dict:
         return {
             "all_nodes": ["A", "B", "X"],
@@ -93,6 +99,7 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertTrue(response["ok"], response)
         draft = response["multi_case"]["c_draft"]
         self.assertEqual(response["multi_case"]["fast_path"], "case_alias_template")
+        self.assert_cbuilder_section_spacing(draft)
         self.assertIn("Multi-case alias-template C draft", draft)
         self.assertIn("multcase_G_tx_A_A", draft)
         self.assertIn("switch (topology_case)", draft)
@@ -267,8 +274,8 @@ class OptimizedEliminationTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
-        self.assertIn("STATIC:\n\n", draft)
-        self.assertIn("RAM_PASS1:\n    int err = 0;", draft)
+        self.assert_cbuilder_section_spacing(draft)
+        self.assertIn("RAM_PASS1:\n\n    int err = 0;", draft)
         self.assertNotIn("STATIC:\n    int err", draft)
 
     def test_structured_c_draft_includes_matrixlib_when_using_matrix_objects(self):
@@ -520,7 +527,7 @@ class OptimizedEliminationTests(unittest.TestCase):
 
         self.assertIn("STATIC:\n\n", draft)
         self.assertIn("RAM_PASS1:", draft)
-        self.assertNotIn("RAM_PASS1:\n    int err = 0;", draft)
+        self.assertNotIn("RAM_PASS1:\n\n    int err = 0;", draft)
         self.assertNotIn("RTDS matrix allocation failed", draft)
         self.assertNotIn("STATIC:\n    int err", draft)
 

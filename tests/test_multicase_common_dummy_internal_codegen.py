@@ -229,6 +229,12 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
             "/* One variable per eliminated node",
             1,
         )[0]
+        t1_t2_prelude = draft.split("T1_T2:", 1)[1].split(
+            "/* Case-resolved diagonal Gkk scalar Vk recovery path",
+            1,
+        )[0]
+        self.assertNotIn("int row;", t1_t2_prelude)
+        self.assertNotIn("int col;", t1_t2_prelude)
         self.assertIn("network_node_recover_vk_diag(node_active, INTERNAL_NODES", vk_switch)
         self.assertIn("network_node_recover_vk_matrix(node_active, INTERNAL_NODES", vk_switch)
         self.assertNotIn("for (int k = 0; k < INTERNAL_NODES; k++)", vk_switch)

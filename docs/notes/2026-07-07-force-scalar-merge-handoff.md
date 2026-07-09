@@ -48,6 +48,13 @@ git log --oneline --decorate -6
   - Repeated denominators are reused when safe.
 - CBuilder compatibility rule is enforced more broadly: generated C should avoid C99 `for (int ...)` loop declarations.
 
+### CBuilder section label spacing
+
+- All generated CBuilder section labels must be followed by a blank line.
+- This applies to optimized-elimination C and multi-case C, including `STATIC:`, `LOCAL_STATIC:`, `RAM_PASS1:`, `GVALUES:`, `CODE_FUNCTIONS:`, `CODE:`, `BEGIN_T0:`, and `T1_T2:`.
+- Do not emit declarations or statements immediately after a section label. In particular, avoid `RAM_PASS1:` followed directly by `int row;` and `BEGIN_T0:` followed directly by `int row;`.
+- Keep the spacing rule as a final C-draft normalization step so future insertions after labels inherit the same RTDS/CBuilder-safe format.
+
 ### Force-scalar preflight guard
 
 - Multi-case `force_scalar` now computes a lightweight `scalar_preflight` before C draft generation.

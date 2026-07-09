@@ -104,6 +104,12 @@ def _request(profiles: list[dict], *, deps: dict | None = None, case_id: str = "
 
 
 class MultiCaseAliasTemplateTests(unittest.TestCase):
+    def assert_cbuilder_section_spacing(self, draft: str) -> None:
+        for label in ("STATIC", "LOCAL_STATIC", "RAM_PASS1", "GVALUES", "CODE_FUNCTIONS", "CODE", "BEGIN_T0", "T1_T2"):
+            if f"{label}:" in draft:
+                self.assertIn(f"{label}:\n\n", draft)
+                self.assertNotRegex(draft, rf"(?m)^{label}:\n    \S")
+
     def test_cc_named_user_symbol_is_not_parsed_as_sympy_complex_field(self):
         matrix = optimized_api._matrix_from_clean([["AA + CC", "BB + CC"]])
         self.assertEqual(matrix[0, 0], sp.Symbol("AA") + sp.Symbol("CC"))
@@ -961,6 +967,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         draft = multi["c_draft"]
         self.assertEqual(multi["fast_path"], "case_alias_template")
         self.assertEqual(multi["codegen_mode"], "case-agnostic alias template")
+        self.assert_cbuilder_section_spacing(draft)
         self.assertEqual(multi["profile_count"], 4)
         self.assertNotIn("RAM-switch multi-case C draft", draft)
         self.assertNotIn("NCASE = 1", draft)
@@ -1091,6 +1098,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
                     terminal_node[str(member)] = node
             G_full = sp.zeros(len(all_nodes), len(all_nodes))
             Ihis_full = sp.zeros(len(all_nodes), 1)
+            direct_retained_stamps = []
 
             def add_entry(row_node: str | None, col_node: str | None, expr: object) -> None:
                 if row_node not in node_index or col_node not in node_index:
@@ -1108,6 +1116,32 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
                     sides = ["P", "N", "S", "T"]
                     local_g = optimized_api._matrix_from_clean(branch.get("gMatrix") or [])
                     local_ihis = optimized_api._matrix_from_clean(branch.get("ihisVector") or [])
+                    side_nodes = [terminal_node.get(f"{branch_id}.{side}") for side in sides]
+                    if all(node in final_external for node in side_nodes):
+                        direct_retained_stamps.append(
+                            {
+                                "id": branch_id,
+                                "support_nodes": sorted(set(str(node) for node in side_nodes if node)),
+                                "G": [
+                                    {
+                                        "row": str(side_nodes[row]),
+                                        "col": str(side_nodes[col]),
+                                        "expr": str(local_g[row, col]),
+                                    }
+                                    for row in range(local_g.rows)
+                                    for col in range(local_g.cols)
+                                    if sp.simplify(local_g[row, col]) != 0
+                                ],
+                                "Ihis": [
+                                    {
+                                        "row": str(side_nodes[row]),
+                                        "expr": str(local_ihis[row, 0]),
+                                    }
+                                    for row in range(local_ihis.rows)
+                                    if sp.simplify(local_ihis[row, 0]) != 0
+                                ],
+                            }
+                        )
                     for row, row_side in enumerate(sides):
                         row_node = terminal_node.get(f"{branch_id}.{row_side}")
                         add_ihis(row_node, local_ihis[row, 0])
@@ -1136,7 +1170,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
                 "G_full_tagged": optimized_api._clean_matrix(G_full),
                 "Ihis_full": optimized_api._clean_vector(Ihis_full),
                 "Ihis_full_tagged": optimized_api._clean_vector(Ihis_full),
-                "direct_retained_stamps": [],
+                "direct_retained_stamps": direct_retained_stamps,
                 "finalExternalGroups": case.get("finalExternalGroups"),
                 "finalInternalGroups": case.get("finalInternalGroups"),
                 "finalGMatrix": case.get("finalGMatrix"),
@@ -1165,6 +1199,7 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         multi = response["multi_case"]
         draft = multi["c_draft"]
         self.assertEqual(multi["fast_path"], "case_alias_template")
+        self.assert_cbuilder_section_spacing(draft)
         self.assertIn("INTERNAL_NODES = 2", draft)
         self.assertIn("internal_active", draft)
         zero_profile = re.search(r"INTERNAL_NODES_CASE_(\d+) = 0", draft)
@@ -1182,8 +1217,18 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("        err += matrixDim(&Gkr_code, internal_active, RETAINED_NODES);", draft)
         self.assertIn("        err += matrixDim(&Vk_code, internal_active, 1);", draft)
         self.assertIn(
+            "if (internal_active == 2) {\n"
+            "        err += matrixDim(&tmp_W_Gkr_code, internal_active, RETAINED_NODES);",
+            draft,
+        )
+        self.assertIn(
             "if (internal_active > 0) {\n"
             "        matrix_register(&Grk_code);",
+            draft,
+        )
+        self.assertIn(
+            "if (internal_active == 2) {\n"
+            "        matrix_register(&tmp_W_Gkr_code);",
             draft,
         )
         self.assertIn(
@@ -1191,12 +1236,46 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
             "            conditionMatrixForCODE(&Grk_code);",
             draft,
         )
+        self.assertIn(
+            "if (internal_active == 2) {\n"
+            "            conditionMatrixForCODE(&tmp_W_Gkr_code);",
+            draft,
+        )
         self.assertIn("W_code", draft)
         self.assertIn("Gkr_code", draft)
         self.assertNotIn("sourceG_tmp", draft)
-        self.assertIn("RAM-side matrix Schur precompute for fixed Gred stamp.", draft)
-        self.assertIn("matrix_invert(&W_ram, &Gkk_ram);", draft)
-        self.assertIn("matrix_subtract(&Gred_ram, &Grr_ram, &tmp_Grk_W_Gkr_ram);", draft)
+        self.assertIn("RAM-side active-profile Schur precompute for fixed Gred stamp.", draft)
+        self.assertIn("switch (case_id) {", draft)
+        ram_precompute = draft.split(
+            "RAM-side active-profile Schur precompute for fixed Gred stamp.", 1
+        )[1].split("setupGMatrix", 1)[0]
+        ram_case3 = ram_precompute.split("case 3:", 1)[1].split("case 1:", 1)[0]
+        ram_case1_2 = ram_precompute.split("case 1:", 1)[1].split("case 0:", 1)[0]
+        ram_case0 = ram_precompute.split("case 0:", 1)[1].split("default:", 1)[0]
+        self.assertIn("This Pack case has no active internal nodes.", ram_case0)
+        self.assertNotIn("matrixDim(&Gkk_ram", ram_case0)
+        self.assertNotIn("matrix_invert(&W_ram", ram_case0)
+        self.assertNotIn("matrixDim(&Gkk_ram", ram_case1_2)
+        self.assertNotIn("matrix_invert(&W_ram", ram_case1_2)
+        self.assertIn("double inv0 = 1.0 / (Gkk_inner_left_inner_left);", ram_case1_2)
+        self.assertIn("*inv0*", ram_case1_2)
+        self.assertIn("matrixDim(&Gkk_ram, internal_active, internal_active);", ram_case3)
+        self.assertLess(
+            ram_case3.index("if (err > 0)"),
+            ram_case3.index("set(&Grr_ram"),
+        )
+        self.assertIn("matrix_invert(&W_ram, &Gkk_ram);", ram_case3)
+        self.assertIn("matrix_subtract(&Gred_ram, &Grr_ram, &tmp_Grk_W_Gkr_ram);", ram_case3)
+        self.assertIn("Gbase_N1_N1 = multcase_G_C1_N1_N1;", draft)
+        self.assertIn("Gbase_shared_2 = multcase_G_C1_N1_N3;", draft)
+        self.assertIn("g_mat_over[0][0] = Gbase_N1_N1;", ram_case0)
+        self.assertIn("set(&Grr_ram, 0, 0, Gbase_N1_N1);", ram_case3)
+        self.assertNotIn("set(&Gred_ram, 0, 0, get(&Gred_ram, 0, 0) + G11);", draft)
+        self.assertNotIn("Grr_N1_N1 = -G11 + multcase_G_C1_N1_N1;", draft)
+        self.assertEqual(
+            draft.count("Gkk_shared_1 = G12 + multcase_G_C1_N1_N3 - multcase_G_C1_N1_N4 - multcase_G_C1_N2_N3;"),
+            1,
+        )
         self.assertIn('getNodeNum(comp, "N1")', draft)
         self.assertIn('getNodeNum(comp, "N4")', draft)
         self.assertNotIn('getNodeNum(comp, "inner_left")', draft)
@@ -1216,8 +1295,21 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("case 3:", draft)
         self.assertNotIn("No internal nodes were eliminated, so there is no Vk recovery step.", draft)
         t1_t2 = draft.split("T1_T2:", 1)[1]
+        self.assertNotRegex(t1_t2, r"\n    int row;\n    int col;\n(?:/\* WARNING:|$)")
         hoisted_recovery = t1_t2.split("Case-specific voltage recovery", 1)[0]
         case_recovery = t1_t2.split("Case-specific voltage recovery", 1)[1]
+        ihis_setup = draft.split("CODE-SIDE IHIS VALUE SETUP", 1)[1].split(
+            "Node injection currents follow", 1
+        )[0]
+        ihis_case3 = ihis_setup.split("case 3:", 1)[1].split("case 1:", 1)[0]
+        ihis_case1_2 = ihis_setup.split("case 1:", 1)[1].split("case 0:", 1)[0]
+        self.assertIn("double inv0 = get_CODE(&W_code, 0, 0);", ihis_case1_2)
+        self.assertIn("set_CODE(&tmp_Grk_W_code, row, 0, grk * inv0);", ihis_case1_2)
+        self.assertIn("get_CODE(&Ihisr_code, row, 0) - grk * t0", ihis_case1_2)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code", ihis_case1_2)
+        self.assertNotIn("matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code", ihis_case1_2)
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", ihis_case3)
+        self.assertIn("matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code", ihis_case3)
         self.assertIn("set_CODE(&Vr_code, 0, 0, N1);", hoisted_recovery)
         self.assertIn("set_CODE(&Vr_code, 3, 0, N4);", hoisted_recovery)
         self.assertNotIn("set_CODE(&Vr_code", case_recovery)
@@ -1256,11 +1348,6 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", w_case1_case2)
         self.assertNotIn("set_CODE(&W_code, 1, 1", w_case1_case2)
         self.assertIn("mat_2x2_sym_inv_code", w_case3)
-        self.assertIn(
-            "if (internal_active > 0) {\n"
-            "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
-            draft,
-        )
         self.assertIn("No active internal nodes: Ihisred = Ihisr.", draft)
 
     def test_case_specific_recovery_reuses_template_vk_block_when_available(self):

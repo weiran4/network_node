@@ -1419,6 +1419,8 @@ def _block_element_name(
 
     if block == "Grr":
         return _scalar_g_name("Grr", external_nodes[row], external_nodes[col], node_display_names)
+    if block == "Gbase":
+        return _scalar_g_name("Gbase", external_nodes[row], external_nodes[col], node_display_names)
     if block == "Grk":
         row_name = _c_node_variable_name(external_nodes[row], node_display_names)
         return f"Grk_{row_name}_{internal_name(col)}"
@@ -1449,6 +1451,8 @@ def _block_element_label(
 
     if block == "Grr":
         return f"Grr[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]"
+    if block == "Gbase":
+        return f"Gbase[{_c_display_node(external_nodes[row], node_display_names)},{_c_display_node(external_nodes[col], node_display_names)}]"
     if block == "Grk":
         return f"Grk[{_c_display_node(external_nodes[row], node_display_names)},{internal_label(col)}]"
     if block == "Gkr":
@@ -2051,11 +2055,13 @@ def _c_emit_rtds_stage_sections(
     ram_Gred_direct, code_Gred_direct = _split_matrix_ram_and_code_terms(Gred_direct, symbol_table)
     ram_Gred = _stage_entries(Gred, Gred_stage, "RAM_INIT")
     add_ram_direct_to_ram_owned_gred = bool(plan.get("add_ram_direct_to_ram_owned_gred"))
+    ram_Gred_direct_for_ram_stamp = sp.zeros(ram_Gred_direct.rows, ram_Gred_direct.cols)
     for row in range(ram_Gred_direct.rows):
         for col in range(ram_Gred_direct.cols):
             stage = str(Gred_stage[row][col]) if row < len(Gred_stage) and col < len(Gred_stage[row]) else "UNKNOWN"
             if stage != "RAM_INIT" or add_ram_direct_to_ram_owned_gred:
                 ram_Gred[row, col] += ram_Gred_direct[row, col]
+                ram_Gred_direct_for_ram_stamp[row, col] = ram_Gred_direct[row, col]
     code_gred_entries = _find_code_owned_entries(Gred_stage)
     direct_code_entries = [
         (row, col)
@@ -2388,6 +2394,11 @@ def _c_emit_rtds_stage_sections(
         return lines
     ram_overlay_nodes, ram_overlay_index = _ram_overlay_node_subset(ram_Gred, external_nodes)
     Grr_alias_entries = _block_alias_entries(Grr, "Grr", external_nodes, internal_nodes, node_display_names)
+    Gbase_alias_entries = (
+        _block_alias_entries(Grr + ram_Gred_direct_for_ram_stamp, "Gbase", external_nodes, internal_nodes, node_display_names)
+        if ram_gred_matrix_precompute and _matrix_has_nonzero(ram_Gred_direct_for_ram_stamp)
+        else Grr_alias_entries
+    )
     Grk_alias_entries = _block_alias_entries(Grk, "Grk", external_nodes, internal_nodes, node_display_names)
     Gkr_alias_entries = _block_alias_entries(Gkr, "Gkr", external_nodes, internal_nodes, node_display_names)
     Gkk_alias_entries = _block_alias_entries(Gkk, "Gkk", external_nodes, internal_nodes, node_display_names)
@@ -2415,8 +2426,8 @@ def _c_emit_rtds_stage_sections(
             '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
             '                       "RTDS RAM matrix allocation failed for component %s.", Name);',
             "    }",
-            *_block_alias_compute_lines([*Grr_alias_entries, *Grk_alias_entries, *Gkr_alias_entries, *Gkk_alias_entries]),
-            *_matrix_set_alias_lines(Grr_alias_entries, "Grr_ram", "set"),
+            *_block_alias_compute_lines([*Gbase_alias_entries, *Grk_alias_entries, *Gkr_alias_entries, *Gkk_alias_entries]),
+            *_matrix_set_alias_lines(Gbase_alias_entries, "Grr_ram", "set"),
             *_matrix_set_alias_lines(Grk_alias_entries, "Grk_ram", "set"),
             *_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_ram", "set"),
             *_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_ram", "set"),
@@ -2453,7 +2464,8 @@ def _c_emit_rtds_stage_sections(
             "ramG",
         )
     block_alias_entries = [
-        *(Grr_alias_entries if need_Grr_code or rectangular_gred_dyn_path or ram_gred_matrix_precompute else []),
+        *(Grr_alias_entries if need_Grr_code or rectangular_gred_dyn_path else []),
+        *(Gbase_alias_entries if ram_gred_matrix_precompute else []),
         *(Grk_alias_entries if need_Grk_code or rectangular_gred_dyn_path or partial_ihisred_code_path or ram_gred_matrix_precompute else []),
         *(Gkr_alias_entries if need_Gkr_code or rectangular_gred_dyn_path or ram_gred_matrix_precompute else []),
         *(Gkk_alias_entries if need_Gkk_code or ram_gred_matrix_precompute else []),
@@ -2468,11 +2480,31 @@ def _c_emit_rtds_stage_sections(
         (str(entry["name"]), int(entry["row"]), int(entry["col"]))
         for entry in ram_precompute_alias_entries
     }
+    if ram_gred_matrix_precompute:
+        ram_precomputed_g_alias_entries = [
+            entry
+            for entry in [*Gbase_alias_entries, *Grk_alias_entries, *Gkr_alias_entries, *Gkk_alias_entries]
+            if classify_expr_stage(sp.sympify(entry["expr"]), symbol_table) == "RAM_INIT"
+        ]
+        ram_precompute_alias_keys.update(
+            (str(entry["name"]), int(entry["row"]), int(entry["col"]))
+            for entry in ram_precomputed_g_alias_entries
+        )
     code_block_alias_entries = [
         entry
         for entry in block_alias_entries
         if (str(entry["name"]), int(entry["row"]), int(entry["col"])) not in ram_precompute_alias_keys
     ]
+    need_code_g_setup_section = bool(
+        code_block_alias_entries
+        or need_Grr_code
+        or need_Grk_code
+        or need_Gkr_code
+        or need_Gkk_code
+        or (need_W_code and not w_runtime_inverse and not structured_w_builder and not (ram_precompute_grk_w or ram_precompute_w_gkr))
+        or rectangular_gred_dyn_path
+        or structured_w_builder
+    )
     w_builder_matrix_dims = _diagonal_plus_coupled_w_matrix_dims(details) if structured_w_builder else []
     w_builder_matrix_names = [name for name, _, _ in w_builder_matrix_dims]
     var_g_pair_set = {(row, col) for row, col, _, _ in var_g_pairs}
@@ -2830,7 +2862,7 @@ def _c_emit_rtds_stage_sections(
                 *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
                 "",
             ]
-            if code_block_alias_entries
+            if need_code_g_setup_section
             else []
         ),
         *(
@@ -3344,7 +3376,11 @@ def _use_readable_dimension_names(draft: str) -> str:
 
 
 def _ensure_static_blank_line(draft: str) -> str:
-    return re.sub(r"(?m)^STATIC:\n(?!\n)", "STATIC:\n\n", draft)
+    return re.sub(
+        r"(?m)^(STATIC|LOCAL_STATIC|RAM(?:_PASS\d*)?|GVALUES|CODE_FUNCTIONS|CODE|BEGIN_T0|T1_T2):\n(?!\n)",
+        lambda match: f"{match.group(1)}:\n\n",
+        draft,
+    )
 
 
 def c_draft_for_structured_formula(
