@@ -3193,6 +3193,7 @@
       canvasTabDrag: null,
       language: "en",
       activeOutput: "formulas",
+      formulaCaseProfileIndex: 0,
       optimizedEliminationDisplay: "compact",
       optimizedEliminationSimplify: "light",
       optimizedEliminationAssumeSpd: true,
@@ -9858,6 +9859,62 @@
         comment: String(profile?.comment || ""),
         case_map: profile?.case_map && typeof profile.case_map === "object" ? profile.case_map : {}
       }));
+    }
+
+    function multiCaseFormulaProfiles() {
+      const branches = multiCaseEligibleBranches();
+      if (!branches.length) return [];
+      ensureMultiCaseProfilesText(branches);
+      return parseMultiCaseProfiles().map((profile, index) => ({
+        case_id: index,
+        name: profile.name || defaultCaseName(index),
+        comment: profile.comment || "",
+        case_map: profile.case_map || {}
+      }));
+    }
+
+    function runWithCaseProfile(profile, callback) {
+      const originals = state.branches.map(branch => [branch, Number(branch.activeSwitchCase) || 0, Number(branch.packageOriginal?.activeNetworkCase) || 0]);
+      try {
+        Object.entries(profile?.case_map || {}).forEach(([branchId, caseIndex]) => {
+          const branch = findBranch(branchId);
+          if (!branch) return;
+          normalizeSwitchCases(branch);
+          if (!branch.switchCases?.length) return;
+          branch.activeSwitchCase = Math.max(0, Math.min(branch.switchCases.length - 1, Number(caseIndex) || 0));
+          if (branch.packageOriginal) applyPackageNetworkCase(branch, branch.activeSwitchCase);
+        });
+        return callback();
+      } finally {
+        originals.forEach(([branch, activeSwitchCase, activeNetworkCase]) => {
+          branch.activeSwitchCase = activeSwitchCase;
+          if (branch.packageOriginal) applyPackageNetworkCase(branch, activeNetworkCase);
+        });
+      }
+    }
+
+    function profileCaseSummary(profile, branches = multiCaseEligibleBranches()) {
+      const branchById = new Map(branches.map(branch => [branch.id, branch]));
+      const entries = Object.entries(profile?.case_map || {}).map(([branchId, caseIndex]) => {
+        const branch = branchById.get(branchId) || findBranch(branchId);
+        const index = Math.max(0, Number(caseIndex) || 0);
+        const branchLabel = branch?.name || branch?.id || branchId;
+        return `${branchLabel} = ${displayCaseName(branch?.switchCases?.[index], index)}`;
+      });
+      return entries.join("; ") || optText("使用当前工况", "Use current active cases");
+    }
+
+    function profileSectionHeader(profile, index) {
+      const caseId = Number(profile?.case_id ?? index);
+      const name = String(profile?.name || defaultCaseName(caseId));
+      const comment = String(profile?.comment || "").trim();
+      const title = comment ? `case ${caseId}: ${name} - ${comment}` : `case ${caseId}: ${name}`;
+      return `
+        <div class="formula-card formula-profile-heading">
+          <div class="formula-name">${escapeHtml(title)}</div>
+          <div class="formula-empty">${escapeHtml(profileCaseSummary(profile))}</div>
+        </div>
+      `;
     }
 
     function payloadForCaseProfile(profile, runtimeCaseMap = {}) {

@@ -276,6 +276,33 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("ensureMultiCaseProfilesText(branches);", payload_source)
         self.assertIn("const profiles = parseMultiCaseProfiles();", payload_source)
 
+    def test_formula_views_have_multicase_profile_helpers(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+        self.assertIn("function multiCaseFormulaProfiles(", source)
+        self.assertIn("function runWithCaseProfile(profile, callback)", source)
+        self.assertIn("function profileCaseSummary(profile, branches = multiCaseEligibleBranches())", source)
+        self.assertIn("function profileSectionHeader(profile, index)", source)
+
+        helper_start = source.index("function runWithCaseProfile(profile, callback)")
+        helper_end = source.index("function profileCaseSummary", helper_start)
+        helper_source = source[helper_start:helper_end]
+        self.assertIn("try {", helper_source)
+        self.assertIn("finally {", helper_source)
+        self.assertIn("branch.activeSwitchCase = activeSwitchCase;", helper_source)
+        self.assertIn("if (branch.packageOriginal) applyPackageNetworkCase(branch, activeNetworkCase);", helper_source)
+        self.assertNotIn("commitHistory(", helper_source)
+        self.assertNotIn("saveToStorage(", helper_source)
+
+    def test_formula_profile_helpers_use_multicase_profiles_text(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+        start = source.index("function multiCaseFormulaProfiles(")
+        end = source.index("function runWithCaseProfile", start)
+        helper_source = source[start:end]
+        self.assertIn("const branches = multiCaseEligibleBranches();", helper_source)
+        self.assertIn("ensureMultiCaseProfilesText(branches);", helper_source)
+        self.assertIn("parseMultiCaseProfiles()", helper_source)
+        self.assertIn("case_id: index", helper_source)
+
     def test_multicase_cache_key_ignores_language_for_backend_result_reuse(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
