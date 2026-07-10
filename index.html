@@ -1554,6 +1554,43 @@
       min-width: 0;
     }
 
+    .formula-toolbar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid rgba(71, 96, 116, 0.86);
+      border-radius: 8px;
+      background: rgba(19, 33, 44, 0.84);
+    }
+
+    .formula-select-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: min(100%, 520px);
+      color: var(--output-muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .formula-select-label select {
+      min-width: 0;
+      flex: 1;
+      height: 30px;
+      border: 1px solid rgba(94, 129, 153, 0.82);
+      border-radius: 6px;
+      background: #0f1d27;
+      color: #e5edf4;
+      padding: 0 8px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: none;
+    }
+
     .modal-output-body .formula-list {
       width: 100%;
       min-width: 0;
@@ -8544,13 +8581,24 @@
         outputText.innerHTML = `<div class="formula-empty">尚未创建支路。</div>`;
         return;
       }
-      const formulas = currentFormulaEntriesForCanvas();
+      let profiles = [];
+      try {
+        profiles = multiCaseFormulaProfiles();
+      } catch (error) {
+        outputText.innerHTML = `<div class="formula-list"><div class="formula-empty">${escapeHtml(localizedBackendErrorMessage(error))}</div></div>`;
+        return;
+      }
+      const selectedProfileIndex = clampedFormulaCaseProfileIndex(profiles);
+      const selectedProfile = profiles[selectedProfileIndex] || null;
+      const formulas = selectedProfile
+        ? runWithCaseProfile(selectedProfile, () => currentFormulaEntriesForCanvas())
+        : currentFormulaEntriesForCanvas();
       const token = ++branchCurrentRenderToken;
       const reducedHtml = state.showReducedBranchCurrents
-        ? (currentReducedBranchCurrentHtml() || renderReducedBranchCurrentPlaceholder())
+        ? (currentReducedBranchCurrentHtml(selectedProfile) || renderReducedBranchCurrentPlaceholder(selectedProfile))
         : renderReducedBranchCurrentDisabledNote();
-      outputText.innerHTML = `<div class="formula-list">${formulas.map(renderFormulaCard).join("")}${reducedHtml}</div>`;
-      if (state.showReducedBranchCurrents) renderReducedBranchCurrentsAsync(token);
+      outputText.innerHTML = `<div class="formula-list">${renderFormulaCaseSelector(profiles, selectedProfileIndex)}${formulas.map(renderFormulaCard).join("")}${reducedHtml}</div>`;
+      if (state.showReducedBranchCurrents) renderReducedBranchCurrentsAsync(token, selectedProfile);
     }
 
     function renderReducedBranchCurrentDisabledNote() {
@@ -8562,8 +8610,8 @@
       `;
     }
 
-    function renderReducedBranchCurrentPlaceholder() {
-      const branchPayload = buildReducedBranchCurrentPayload();
+    function renderReducedBranchCurrentPlaceholder(profile = null) {
+      const branchPayload = buildReducedBranchCurrentPayload(profile);
       if (!branchPayload) return "";
       return `
         <div class="formula-card" id="reducedBranchCurrents">
@@ -8573,8 +8621,8 @@
       `;
     }
 
-    async function renderReducedBranchCurrentsAsync(token) {
-      const branchPayload = buildReducedBranchCurrentPayload();
+    async function renderReducedBranchCurrentsAsync(token, profile = null) {
+      const branchPayload = buildReducedBranchCurrentPayload(profile);
       if (!branchPayload) return;
       const { payload, internal, external, formulas, displayNames } = branchPayload;
       const key = reducedCacheKey(payload);
@@ -8639,7 +8687,8 @@
       }
     }
 
-    function buildReducedBranchCurrentPayload() {
+    function buildReducedBranchCurrentPayload(profile = null) {
+      if (profile) return runWithCaseProfile(profile, () => buildReducedBranchCurrentPayload());
       const payload = buildReducedPayload();
       const displayNames = payload.node_display_names || {};
       const internal = payload.internal_nodes || [];
@@ -8693,10 +8742,10 @@
       return map;
     }
 
-    function currentReducedBranchCurrentHtml() {
-      const branchPayload = buildReducedBranchCurrentPayload();
+    function currentReducedBranchCurrentHtml(profile = null) {
+      const branchPayload = buildReducedBranchCurrentPayload(profile);
       if (!branchPayload) return "";
-      const key = JSON.stringify({ language: state.language, payload: branchPayload.payload });
+      const key = reducedCacheKey(branchPayload.payload);
       return cacheGet(branchCurrentCache, key)?.html || "";
     }
 
@@ -9286,6 +9335,26 @@
     }
 
     function renderNodeEquations() {
+      try {
+        const profiles = multiCaseFormulaProfiles();
+        if (!profiles.length) return renderSingleNodeEquations();
+        return `
+          <div class="formula-list">
+            ${profiles.map((profile, index) => {
+              try {
+                return `${profileSectionHeader(profile, index)}${runWithCaseProfile(profile, () => renderSingleNodeEquations())}`;
+              } catch (error) {
+                return `${profileSectionHeader(profile, index)}<div class="formula-card"><div class="formula-empty">${escapeHtml(localizedBackendErrorMessage(error))}</div></div>`;
+              }
+            }).join("")}
+          </div>
+        `;
+      } catch (error) {
+        return `<div class="formula-list"><div class="formula-empty">${escapeHtml(localizedBackendErrorMessage(error))}</div></div>`;
+      }
+    }
+
+    function renderSingleNodeEquations() {
       const assembled = constrainedAssembledSystem(assembleGlobalSystem({ expandPackaged: true }));
       if (!assembled.nodes.length) {
         return `<div class="formula-empty">${escapeHtml(tr("尚未创建节点。"))}</div>`;
@@ -9451,34 +9520,88 @@
     }
 
     async function renderReducedEquationsAsync(token) {
+      try {
+        const profiles = multiCaseFormulaProfiles();
+        if (profiles.length) {
+          const profilePayloads = profiles.map(profile => ({
+            profile,
+            payload: runWithCaseProfile(profile, () => buildReducedPayload())
+          }));
+          if (token === reducedRenderToken && state.activeOutput === "reducedEquations") {
+            outputText.innerHTML = `<div class="formula-list">${profilePayloads.map(({ profile }, index) => renderReducedProfilePlaceholder(profile, index)).join("")}</div>`;
+          }
+          for (let index = 0; index < profilePayloads.length; index += 1) {
+            const { profile, payload } = profilePayloads[index];
+            await renderReducedProfileIntoToken(token, profile, index, payload);
+            if (token !== reducedRenderToken || state.activeOutput !== "reducedEquations") break;
+          }
+          return;
+        }
+      } catch (error) {
+        if (token === reducedRenderToken) {
+          outputText.innerHTML = `<div class="formula-empty">${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
+        }
+        return;
+      }
+
       const payload = buildReducedPayload();
+      try {
+        const html = await reducedPayloadHtml(payload);
+        if (token === reducedRenderToken) outputText.innerHTML = html;
+      } catch (error) {
+        if (token === reducedRenderToken) {
+          outputText.innerHTML = `<div class="formula-empty">${escapeHtml(optText("节点消去失败", "Node reduction failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
+        }
+      }
+    }
+
+    function renderReducedProfilePlaceholder(profile, index) {
+      return `
+        <div class="formula-profile-section" data-reduced-profile-index="${index}">
+          ${profileSectionHeader(profile, index)}
+          <div class="formula-card">
+            <div class="formula-empty">${escapeHtml(optText("正在用 SymPy 化简节点消去方程...", "Reducing this case with SymPy..."))}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function renderReducedProfileIntoToken(token, profile, index, payload) {
+      try {
+        const html = await reducedPayloadHtml(payload);
+        replaceReducedProfileHtml(token, index, `${profileSectionHeader(profile, index)}${html}`);
+      } catch (error) {
+        replaceReducedProfileHtml(token, index, `
+          ${profileSectionHeader(profile, index)}
+          <div class="formula-card">
+            <div class="formula-empty">${escapeHtml(optText("节点消去失败", "Node reduction failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div>
+          </div>
+        `);
+      }
+    }
+
+    function replaceReducedProfileHtml(token, index, html) {
+      if (token !== reducedRenderToken || state.activeOutput !== "reducedEquations") return;
+      const target = document.querySelector(`[data-reduced-profile-index="${index}"]`);
+      if (target) target.innerHTML = html;
+    }
+
+    async function reducedPayloadHtml(payload) {
       const staticHtml = reducedStaticMessage(payload);
       if (staticHtml) {
-        if (token === reducedRenderToken) outputText.innerHTML = staticHtml;
-        return;
+        return staticHtml;
       }
 
       const key = reducedCacheKey(payload);
       const cachedEntry = cacheGet(reducedCache, key);
       if (cachedEntry?.html) {
-        if (token === reducedRenderToken) {
-          outputText.innerHTML = cachedEntry.result
-            ? renderReducedEquationsResult(cachedEntry.result, payload.node_display_names || {})
-            : cachedEntry.html;
-        }
-        return;
+        return cachedEntry.result
+          ? renderReducedEquationsResult(cachedEntry.result, payload.node_display_names || {})
+          : cachedEntry.html;
       }
 
       if (cachedEntry?.pending) {
-        try {
-          const html = await cachedEntry.pending;
-          if (token === reducedRenderToken) outputText.innerHTML = html;
-        } catch (error) {
-          if (token === reducedRenderToken) {
-            outputText.innerHTML = `<div class="formula-empty">${escapeHtml(optText("节点消去失败", "Node reduction failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
-          }
-        }
-        return;
+        return cachedEntry.pending;
       }
 
       const pending = requestReduction(payload).then(result => {
@@ -9509,19 +9632,15 @@
       });
       cacheSet(reducedCache, key, { html: null, pending });
 
-      try {
-        const html = await pending;
-        if (token === reducedRenderToken) {
-          outputText.innerHTML = html;
-        }
-      } catch (error) {
-        if (token === reducedRenderToken) {
-          outputText.innerHTML = `<div class="formula-empty">${escapeHtml(optText("节点消去失败", "Node reduction failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
-        }
-      }
+      return pending;
     }
 
     function currentReducedHtml() {
+      try {
+        if (multiCaseFormulaProfiles().length) return null;
+      } catch (error) {
+        return `<div class="formula-empty">${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
+      }
       const payload = buildReducedPayload();
       const staticHtml = reducedStaticMessage(payload);
       if (staticHtml) return staticHtml;
@@ -9913,6 +10032,34 @@
         <div class="formula-card formula-profile-heading">
           <div class="formula-name">${escapeHtml(title)}</div>
           <div class="formula-empty">${escapeHtml(profileCaseSummary(profile))}</div>
+        </div>
+      `;
+    }
+
+    function clampedFormulaCaseProfileIndex(profiles) {
+      const count = profiles.length;
+      if (!count) {
+        state.formulaCaseProfileIndex = 0;
+        return 0;
+      }
+      const index = Math.max(0, Math.min(count - 1, Number(state.formulaCaseProfileIndex) || 0));
+      state.formulaCaseProfileIndex = index;
+      return index;
+    }
+
+    function renderFormulaCaseSelector(profiles, selectedIndex) {
+      if (!profiles.length) return "";
+      const options = profiles.map((profile, index) => {
+        const summary = profileCaseSummary(profile);
+        const label = `case ${profile.case_id ?? index}: ${profile.name || defaultCaseName(index)} - ${summary}`;
+        return `<option value="${index}" ${index === selectedIndex ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      }).join("");
+      return `
+        <div class="formula-toolbar">
+          <label class="formula-select-label">
+            <span>${escapeHtml(optText("Case", "Case"))}</span>
+            <select data-formula-case-profile>${options}</select>
+          </label>
         </div>
       `;
     }
@@ -17186,6 +17333,13 @@ function startResizeDrag(branch, handle, event) {
     outputText.addEventListener("pointerover", handleFormulaHover);
     outputText.addEventListener("pointerout", handleFormulaHoverOut);
     function handleOutputControlChange(event) {
+      const formulaCaseSelect = event.target.closest?.("[data-formula-case-profile]");
+      if (formulaCaseSelect) {
+        state.formulaCaseProfileIndex = Number(formulaCaseSelect.value) || 0;
+        branchCurrentRenderToken += 1;
+        renderOutput();
+        return;
+      }
       const multiCaseProfiles = event.target.closest?.("[data-multicase-profiles]");
       if (multiCaseProfiles) {
         state.multiCaseProfilesText = multiCaseProfiles.value || "";

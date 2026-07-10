@@ -303,6 +303,45 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("parseMultiCaseProfiles()", helper_source)
         self.assertIn("case_id: index", helper_source)
 
+    def test_branch_currents_render_case_selector_and_profile_context(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+        self.assertIn("formulaCaseProfileIndex", source)
+        self.assertIn("function clampedFormulaCaseProfileIndex(profiles)", source)
+        self.assertIn("function renderFormulaCaseSelector(profiles, selectedIndex)", source)
+        render_start = source.index('outputText.className = "output-body output-body-formulas";')
+        render_end = source.index("function renderReducedBranchCurrentDisabledNote", render_start)
+        render_source = source[render_start:render_end]
+        self.assertIn("profiles = multiCaseFormulaProfiles();", render_source)
+        self.assertIn("localizedBackendErrorMessage(error)", render_source)
+        self.assertIn("renderFormulaCaseSelector(profiles, selectedProfileIndex)", render_source)
+        self.assertIn("runWithCaseProfile(selectedProfile, () => currentFormulaEntriesForCanvas())", render_source)
+        self.assertIn("renderReducedBranchCurrentsAsync(token, selectedProfile)", render_source)
+        self.assertIn('data-formula-case-profile', source)
+
+    def test_node_equations_render_all_multicase_profiles(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+        self.assertIn("function renderSingleNodeEquations()", source)
+        start = source.index("function renderNodeEquations()")
+        end = source.index("function renderSingleNodeEquations()", start)
+        node_source = source[start:end]
+        self.assertIn("const profiles = multiCaseFormulaProfiles();", node_source)
+        self.assertIn("profiles.map((profile, index) =>", node_source)
+        self.assertIn("profileSectionHeader(profile, index)", node_source)
+        self.assertIn("runWithCaseProfile(profile, () => renderSingleNodeEquations())", node_source)
+
+    def test_reduced_equations_render_profiles_sequentially(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+        self.assertIn("function renderReducedProfilePlaceholder(profile, index)", source)
+        self.assertIn("async function renderReducedProfileIntoToken(token, profile, index, payload)", source)
+        self.assertIn("function replaceReducedProfileHtml(token, index, html)", source)
+        start = source.index("async function renderReducedEquationsAsync(token)")
+        end = source.index("function currentReducedHtml", start)
+        reduced_source = source[start:end]
+        self.assertIn("const profiles = multiCaseFormulaProfiles();", reduced_source)
+        self.assertIn("for (let index = 0; index < profilePayloads.length; index += 1)", reduced_source)
+        self.assertIn("await renderReducedProfileIntoToken(token, profile, index, payload);", reduced_source)
+        self.assertNotIn("Promise.all", reduced_source)
+
     def test_multicase_cache_key_ignores_language_for_backend_result_reuse(self):
         source = Path("index.html").read_text(encoding="utf-8")
 
