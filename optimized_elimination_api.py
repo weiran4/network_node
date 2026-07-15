@@ -4804,20 +4804,37 @@ def _split_large_recovery_matrix_lifecycle(draft: str) -> str:
 def _guard_internal_active_ihis_schur(draft: str) -> str:
     if "internal_active" not in draft or "No active internal nodes: Ihisred = Ihisr." in draft:
         return draft
-    old = "\n".join([
+    old_with_grkw_refresh = "\n".join([
         "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
         "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
         "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
         "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
     ])
-    if old not in draft:
+    old_precomputed_grkw = "\n".join([
+        "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
+        "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+        "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+    ])
+    if old_with_grkw_refresh in draft:
+        old = old_with_grkw_refresh
+        active_lines = [
+            "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+            "        /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
+            "        matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+            "        matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+        ]
+    elif old_precomputed_grkw in draft:
+        old = old_precomputed_grkw
+        active_lines = [
+            "        /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
+            "        matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+            "        matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+        ]
+    else:
         return draft
     new = "\n".join([
         "    if (internal_active > 0) {",
-        "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
-        "        /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
-        "        matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
-        "        matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+        *active_lines,
         "    }",
         "    else {",
         "        int row;",
@@ -4836,7 +4853,7 @@ def _replace_internal_profile_ihis_schur(
     case_id_symbol: str,
     profiles: Sequence[Mapping],
 ) -> str:
-    old = "\n".join([
+    old_with_grkw_refresh = "\n".join([
         "    if (internal_active > 0) {",
         "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
         "        /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
@@ -4851,7 +4868,27 @@ def _replace_internal_profile_ihis_schur(
         "        }",
         "    }",
     ])
-    if old not in draft:
+    old_precomputed_grkw = "\n".join([
+        "    if (internal_active > 0) {",
+        "        /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
+        "        matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
+        "        matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+        "    }",
+        "    else {",
+        "        int row;",
+        "        /* No active internal nodes: Ihisred = Ihisr. */",
+        "        for (row = 0; row < RETAINED_NODES; row++) {",
+        "            set_CODE(&Ihisred_code, row, 0, get_CODE(&Ihisr_code, row, 0));",
+        "        }",
+        "    }",
+    ])
+    if old_with_grkw_refresh in draft:
+        old = old_with_grkw_refresh
+        grkw_precomputed = False
+    elif old_precomputed_grkw in draft:
+        old = old_precomputed_grkw
+        grkw_precomputed = True
+    else:
         return draft
     lines = [
         "    /* Case-resolved Ihis Schur update over active internal profile. */",
@@ -4874,21 +4911,34 @@ def _replace_internal_profile_ihis_schur(
                 "        }",
             ])
         elif active_count == 1:
-            lines.extend([
-                "        int row;",
-                "        double grk = 0.0;",
-                "        double inv0 = get_CODE(&W_code, 0, 0);",
-                "        double t0 = inv0 * get_CODE(&Ihisk_code, 0, 0);",
-                "        for (row = 0; row < RETAINED_NODES; row++) {",
-                "            grk = get_CODE(&Grk_code, row, 0);",
-                "            set_CODE(&tmp_Grk_W_code, row, 0, grk * inv0);",
-                "            set_CODE(&Ihisred_code, row, 0,",
-                "                     get_CODE(&Ihisr_code, row, 0) - grk * t0);",
-                "        }",
-            ])
+            if grkw_precomputed:
+                lines.extend([
+                    "        int row;",
+                    "        double grkw = 0.0;",
+                    "        double h0 = get_CODE(&Ihisk_code, 0, 0);",
+                    "        for (row = 0; row < RETAINED_NODES; row++) {",
+                    "            grkw = get_CODE(&tmp_Grk_W_code, row, 0);",
+                    "            set_CODE(&Ihisred_code, row, 0,",
+                    "                     get_CODE(&Ihisr_code, row, 0) - grkw * h0);",
+                    "        }",
+                ])
+            else:
+                lines.extend([
+                    "        int row;",
+                    "        double grk = 0.0;",
+                    "        double inv0 = get_CODE(&W_code, 0, 0);",
+                    "        double t0 = inv0 * get_CODE(&Ihisk_code, 0, 0);",
+                    "        for (row = 0; row < RETAINED_NODES; row++) {",
+                    "            grk = get_CODE(&Grk_code, row, 0);",
+                    "            set_CODE(&tmp_Grk_W_code, row, 0, grk * inv0);",
+                    "            set_CODE(&Ihisred_code, row, 0,",
+                    "                     get_CODE(&Ihisr_code, row, 0) - grk * t0);",
+                    "        }",
+                ])
         else:
+            if not grkw_precomputed:
+                lines.append("        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);")
             lines.extend([
-                "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
                 "        /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
                 "        matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
                 "        matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
@@ -4966,49 +5016,62 @@ def _replace_internal_matrix_set_code_blocks(
         )
         for match in matches
     ]
-    lines = [
-        "    /* Active internal profile matrix setup; backend placeholder rows are not written. */",
-        f"    switch ({case_id_symbol}) {{",
-    ]
-    for profile in profiles:
-        for case_id in profile.get("case_ids") or []:
-            lines.append(f"    case {int(case_id)}:")
-        active_index = profile.get("internal_to_active_index") or {}
-        if not active_index:
-            lines.append("        /* This Pack case has no active internal nodes. */")
-        else:
-            emitted: list[str] = []
-            for name, row, col, expr in matrix_entries:
-                line = _remap_internal_set_code_line(
-                    name,
-                    row,
-                    col,
-                    expr,
-                    active_index,
-                    template_internal_nodes,
-                    retained_count=retained_count,
-                )
-                if line is not None:
-                    emitted.append(line)
-            lines.extend(dict.fromkeys(emitted))
-        lines.append("        break;")
-    lines.extend([
-        "    default:",
-        "        break;",
-        "    }",
-    ])
-    insertion = "\n".join(lines) + "\n"
+    g_entries = [entry for entry in matrix_entries if entry[0] != "Ihisk_code"]
+    ihisk_entries = [entry for entry in matrix_entries if entry[0] == "Ihisk_code"]
+
+    def build_switch(entries: Sequence[tuple[str, int, int, str]], title: str) -> str:
+        lines = [
+            f"    /* {title}; backend placeholder rows are not written. */",
+            f"    switch ({case_id_symbol}) {{",
+        ]
+        for profile in profiles:
+            for case_id in profile.get("case_ids") or []:
+                lines.append(f"    case {int(case_id)}:")
+            active_index = profile.get("internal_to_active_index") or {}
+            if not active_index:
+                lines.append("        /* This Pack case has no active internal nodes. */")
+            else:
+                emitted: list[str] = []
+                for name, row, col, expr in entries:
+                    line = _remap_internal_set_code_line(
+                        name,
+                        row,
+                        col,
+                        expr,
+                        active_index,
+                        template_internal_nodes,
+                        retained_count=retained_count,
+                    )
+                    if line is not None:
+                        emitted.append(line)
+                lines.extend(dict.fromkeys(emitted) or ["        /* This Pack case has no active entries for this matrix. */"])
+            lines.append("        break;")
+        lines.extend([
+            "    default:",
+            "        break;",
+            "    }",
+        ])
+        return "\n".join(lines) + "\n"
+
+    g_insertion = build_switch(g_entries, "Active internal profile G matrix setup") if g_entries else ""
+    ihisk_insertion = build_switch(ihisk_entries, "Active internal profile Ihisk setup") if ihisk_entries else ""
     parts: list[str] = []
     last = 0
     inserted = False
     for match in matches:
         parts.append(draft[last:match.start()])
-        if not inserted:
-            parts.append(insertion)
+        if not inserted and g_insertion:
+            parts.append(g_insertion)
             inserted = True
         last = match.end()
     parts.append(draft[last:])
-    return "".join(parts)
+    draft = "".join(parts)
+    if ihisk_insertion:
+        marker = "    /* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP"
+        start = draft.find(marker)
+        if start >= 0:
+            draft = draft[:start] + ihisk_insertion + draft[start:]
+    return draft
 
 
 def _active_gkk_template(
@@ -5098,6 +5161,10 @@ def _replace_internal_profile_w_inverse(
         return draft
     end_marker = "    /* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP"
     end = draft.find(end_marker, start)
+    ready_marker = "        rtds_matrix_code_ready = 1;"
+    ready_end = draft.find(ready_marker, start)
+    if ready_end >= 0 and (end < 0 or ready_end < end):
+        end = ready_end
     if end < 0:
         for fallback_marker in (
             "    /* Node injection currents follow the retained-node order of the reduced system. */",
@@ -5108,6 +5175,7 @@ def _replace_internal_profile_w_inverse(
                 break
     if end < 0:
         return draft
+    original_region = draft[start:end]
     case_by_id = {
         int(profile.get("case_id", index) or index): profile
         for index, profile in enumerate(case_profiles)
@@ -5139,8 +5207,20 @@ def _replace_internal_profile_w_inverse(
         "    default:",
         "        break;",
         "    }",
-        "",
     ])
+    if "matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);" in original_region:
+        lines.extend([
+            "    if (internal_active > 0) {",
+            "        matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
+            "    }",
+        ])
+    if "matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);" in original_region:
+        lines.extend([
+            "    if (internal_active == 2) {",
+            "        matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);",
+            "    }",
+        ])
+    lines.append("")
     return draft[:start] + "\n".join(lines) + draft[end:]
 
 
@@ -6909,6 +6989,51 @@ def _remove_code_g_alias_resolution_for_conditional_final_writes(draft: str, ali
     return draft[:start] + replacement + draft[end:]
 
 
+def _g_aliases_are_ram_owned(aliases: Mapping[str, Mapping]) -> bool:
+    for info in aliases.values():
+        if not str(info.get("kind") or "").upper().startswith("G"):
+            continue
+        if str(info.get("owner") or "RAM") != "RAM":
+            return False
+        if bool(info.get("runtime_mutable")):
+            return False
+    return True
+
+
+def _hoist_constant_code_g_setup_to_ready(draft: str, *, aliases: Mapping[str, Mapping]) -> str:
+    if not _g_aliases_are_ram_owned(aliases):
+        return draft
+    start_marker = "    /* ************************************************************************\n     * CODE-SIDE G MATRIX VALUE SETUP"
+    end_marker = "    /* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP"
+    start = draft.find(start_marker)
+    end = draft.find(end_marker, start)
+    if start < 0 or end < 0:
+        return draft
+    block = draft[start:end].rstrip("\n")
+    if "CODE-owned" in block or "Resolve CODE multi-case" in block:
+        return draft
+    ready_start_marker = "    if (!rtds_matrix_code_ready) {\n"
+    ready_set_marker = "        rtds_matrix_code_ready = 1;"
+    ready_start = draft.find(ready_start_marker)
+    ready_set = draft.find(ready_set_marker, ready_start)
+    if ready_start < 0 or ready_set < 0 or ready_set > start:
+        return draft
+
+    hoisted_lines: list[str] = []
+    for line in block.splitlines():
+        if "CODE-SIDE G MATRIX VALUE SETUP" in line:
+            line = line.replace("CODE-SIDE G MATRIX VALUE SETUP", "CODE-ONCE G MATRIX VALUE SETUP")
+        if line.startswith("    "):
+            hoisted_lines.append("    " + line)
+        elif line:
+            hoisted_lines.append("        " + line)
+        else:
+            hoisted_lines.append("")
+    hoisted = "\n".join(hoisted_lines).rstrip("\n") + "\n"
+    draft = draft[:start] + draft[end:]
+    return draft[:ready_set] + hoisted + draft[ready_set:]
+
+
 def _remove_ram_g_alias_resolution_for_conditional_final_writes(draft: str, aliases: dict[str, dict]) -> str:
     if not aliases:
         return draft
@@ -7395,6 +7520,7 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 "Info: no-internal multi-case final G entries were split into RAM and CODE terms. "
                 "RAM terms are stamped in RAM_PASS1; CODE terms are assigned directly to GValue handles."
             )
+    draft = _hoist_constant_code_g_setup_to_ready(draft, aliases=aliases)
     if "codegen_mode" not in locals():
         codegen_mode = "case-agnostic alias template"
     if "fast_path" not in locals():
@@ -8106,6 +8232,15 @@ def _apply_final_retained_recovery_profiles_to_draft(
             "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
             "    matrix_scalarMult_CODE(&Vk_code, &tmp_W_Gkr_Vr_code, -1.0);",
         ])
+        precomputed_wgkr_matrix_recovery = "\n".join([
+            "    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);",
+            "    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);",
+            "    matrix_add_CODE(&tmp_Vk_sum_code, &tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code);",
+            "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
+        ])
+        if precomputed_wgkr_matrix_recovery in block:
+            block = block.replace(precomputed_wgkr_matrix_recovery, helper_call)
+            full_matrix_replaced = True
         for internal_expr in ("INTERNAL_NODES", "internal_active"):
             for retained_expr in retained_exprs:
                 symmetry_reuse = "\n".join([

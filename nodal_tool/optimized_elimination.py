@@ -1703,61 +1703,62 @@ def _matrix_code_sym_inverse_lines(
     dim: int,
     fn: str = "set_CODE",
     getter: str = "get_CODE",
+    indent: str = "    ",
 ) -> list[str]:
     if dim <= 0:
         return []
     if dim == 1:
-        return [f"    {fn}(&{inverse_name}, 0, 0, 1.0 / {getter}(&{matrix_name}, 0, 0));"]
+        return [f"{indent}{fn}(&{inverse_name}, 0, 0, 1.0 / {getter}(&{matrix_name}, 0, 0));"]
     if dim == 2:
         return [
-            f"    double {inverse_name}_11 = 0.0;",
-            f"    double {inverse_name}_12 = 0.0;",
-            f"    double {inverse_name}_22 = 0.0;",
+            f"{indent}double {inverse_name}_11 = 0.0;",
+            f"{indent}double {inverse_name}_12 = 0.0;",
+            f"{indent}double {inverse_name}_22 = 0.0;",
             (
-                f"    mat_2x2_sym_inv_code({getter}(&{matrix_name}, 0, 0), "
+                f"{indent}mat_2x2_sym_inv_code({getter}(&{matrix_name}, 0, 0), "
                 f"{getter}(&{matrix_name}, 0, 1), {getter}(&{matrix_name}, 1, 1),"
             ),
-            f"                         &{inverse_name}_11, &{inverse_name}_12, &{inverse_name}_22);",
-            f"    {fn}(&{inverse_name}, 0, 0, {inverse_name}_11);",
-            f"    {fn}(&{inverse_name}, 0, 1, {inverse_name}_12);",
-            f"    {fn}(&{inverse_name}, 1, 0, {inverse_name}_12);",
-            f"    {fn}(&{inverse_name}, 1, 1, {inverse_name}_22);",
+            f"{indent}                     &{inverse_name}_11, &{inverse_name}_12, &{inverse_name}_22);",
+            f"{indent}{fn}(&{inverse_name}, 0, 0, {inverse_name}_11);",
+            f"{indent}{fn}(&{inverse_name}, 0, 1, {inverse_name}_12);",
+            f"{indent}{fn}(&{inverse_name}, 1, 0, {inverse_name}_12);",
+            f"{indent}{fn}(&{inverse_name}, 1, 1, {inverse_name}_22);",
         ]
     if dim == 3:
         return [
-            f"    double {inverse_name}_11 = 0.0;",
-            f"    double {inverse_name}_12 = 0.0;",
-            f"    double {inverse_name}_13 = 0.0;",
-            f"    double {inverse_name}_22 = 0.0;",
-            f"    double {inverse_name}_23 = 0.0;",
-            f"    double {inverse_name}_33 = 0.0;",
+            f"{indent}double {inverse_name}_11 = 0.0;",
+            f"{indent}double {inverse_name}_12 = 0.0;",
+            f"{indent}double {inverse_name}_13 = 0.0;",
+            f"{indent}double {inverse_name}_22 = 0.0;",
+            f"{indent}double {inverse_name}_23 = 0.0;",
+            f"{indent}double {inverse_name}_33 = 0.0;",
             (
-                f"    mat_3x3_sym_inv_code({getter}(&{matrix_name}, 0, 0), "
+                f"{indent}mat_3x3_sym_inv_code({getter}(&{matrix_name}, 0, 0), "
                 f"{getter}(&{matrix_name}, 0, 1), {getter}(&{matrix_name}, 0, 2),"
             ),
             (
-                f"                         {getter}(&{matrix_name}, 1, 1), "
+                f"{indent}                     {getter}(&{matrix_name}, 1, 1), "
                 f"{getter}(&{matrix_name}, 1, 2),"
             ),
-            f"                         {getter}(&{matrix_name}, 2, 2),",
+            f"{indent}                     {getter}(&{matrix_name}, 2, 2),",
             (
-                f"                         &{inverse_name}_11, &{inverse_name}_12, &{inverse_name}_13,"
+                f"{indent}                     &{inverse_name}_11, &{inverse_name}_12, &{inverse_name}_13,"
             ),
-            f"                         &{inverse_name}_22, &{inverse_name}_23,",
-            f"                         &{inverse_name}_33);",
-            f"    {fn}(&{inverse_name}, 0, 0, {inverse_name}_11);",
-            f"    {fn}(&{inverse_name}, 0, 1, {inverse_name}_12);",
-            f"    {fn}(&{inverse_name}, 0, 2, {inverse_name}_13);",
-            f"    {fn}(&{inverse_name}, 1, 0, {inverse_name}_12);",
-            f"    {fn}(&{inverse_name}, 1, 1, {inverse_name}_22);",
-            f"    {fn}(&{inverse_name}, 1, 2, {inverse_name}_23);",
-            f"    {fn}(&{inverse_name}, 2, 0, {inverse_name}_13);",
-            f"    {fn}(&{inverse_name}, 2, 1, {inverse_name}_23);",
-            f"    {fn}(&{inverse_name}, 2, 2, {inverse_name}_33);",
+            f"{indent}                     &{inverse_name}_22, &{inverse_name}_23,",
+            f"{indent}                     &{inverse_name}_33);",
+            f"{indent}{fn}(&{inverse_name}, 0, 0, {inverse_name}_11);",
+            f"{indent}{fn}(&{inverse_name}, 0, 1, {inverse_name}_12);",
+            f"{indent}{fn}(&{inverse_name}, 0, 2, {inverse_name}_13);",
+            f"{indent}{fn}(&{inverse_name}, 1, 0, {inverse_name}_12);",
+            f"{indent}{fn}(&{inverse_name}, 1, 1, {inverse_name}_22);",
+            f"{indent}{fn}(&{inverse_name}, 1, 2, {inverse_name}_23);",
+            f"{indent}{fn}(&{inverse_name}, 2, 0, {inverse_name}_13);",
+            f"{indent}{fn}(&{inverse_name}, 2, 1, {inverse_name}_23);",
+            f"{indent}{fn}(&{inverse_name}, 2, 2, {inverse_name}_33);",
         ]
     return [
-        f"    /* WARNING: {matrix_name} is {dim}x{dim}; RTDS fast symmetric inverse helpers only cover 2x2 and 3x3. */",
-        f"    MATH_matx_invert({dim}, &({matrix_name}.p[0]), {dim}, &({inverse_name}.p[0]), {dim});",
+        f"{indent}/* WARNING: {matrix_name} is {dim}x{dim}; RTDS fast symmetric inverse helpers only cover 2x2 and 3x3. */",
+        f"{indent}MATH_matx_invert({dim}, &({matrix_name}.p[0]), {dim}, &({inverse_name}.p[0]), {dim});",
     ]
 
 
@@ -2505,6 +2506,14 @@ def _c_emit_rtds_stage_sections(
         or rectangular_gred_dyn_path
         or structured_w_builder
     )
+    code_g_setup_once = bool(
+        need_code_g_setup_section
+        and not structured_w_builder
+        and not diagonal_gkk_scalar_code_path
+        and not rectangular_gred_dyn_path
+        and not partial_ihisred_code_path
+        and all(_matrix_is_ram_stage(matrix, symbol_table) for matrix in code_g_matrices)
+    )
     w_builder_matrix_dims = _diagonal_plus_coupled_w_matrix_dims(details) if structured_w_builder else []
     w_builder_matrix_names = [name for name, _, _ in w_builder_matrix_dims]
     var_g_pair_set = {(row, col) for row, col, _, _ in var_g_pairs}
@@ -2821,50 +2830,84 @@ def _c_emit_rtds_stage_sections(
             ],
             "",
         ])
+
+    def _code_g_setup_lines(indent: str = "    ") -> list[str]:
+        if not need_code_g_setup_section:
+            return []
+        setup_kind = "CODE-ONCE G MATRIX VALUE SETUP" if code_g_setup_once else "CODE-SIDE G MATRIX VALUE SETUP"
+        setup_body = (
+            [
+                "These G-related symbols and matrices depend only on RAM-stage constants.",
+                "Prepare them once after MATRIX_ conditioning; per-step code only updates Ihis/Vr vectors.",
+            ]
+            if code_g_setup_once
+            else [
+                "Update runtime G-related symbols and matrices before the reduction math below.",
+                "Only matrices required by dynamic G, Ihis reduction, or Vk recovery are refreshed.",
+            ]
+        )
+        return [
+            *_c_section_warning(setup_kind, setup_body, indent=indent),
+            f"{indent}/* Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */",
+            *_block_alias_compute_lines(code_block_alias_entries, indent=indent),
+            *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set_CODE", indent=indent) if need_Grr_code else []),
+            *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE", indent=indent) if need_Grk_code and not ram_precompute_grk_w else []),
+            *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE", indent=indent) if need_Gkr_code and not ram_precompute_w_gkr else []),
+            *(_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_code", "set_CODE", indent=indent) if need_Gkk_code else []),
+            *(
+                _matrix_code_sym_inverse_lines("Gkk_code", "W_code", Gkk.rows, indent=indent)
+                if use_fast_symmetric_gkk_inverse
+                else ([f"{indent}MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code and need_W_code else [])
+            ),
+            *(_diagonal_plus_coupled_w_code_lines(details) if structured_w_builder else []),
+            *(
+                _matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE", indent=indent)
+                if need_W_code and not w_runtime_inverse and not structured_w_builder and not (ram_precompute_grk_w or ram_precompute_w_gkr)
+                else []
+            ),
+            *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols, indent=indent) if rectangular_gred_dyn_path else []),
+            *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=list(range(Grk.cols)), indent=indent) if rectangular_gred_dyn_path else []),
+            *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols, indent=indent) if rectangular_gred_dyn_path else []),
+            "",
+        ]
+
+    def _code_once_product_lines(indent: str = "    ") -> list[str]:
+        if not code_g_setup_once:
+            return []
+        product_lines: list[str] = []
+        if need_tmp_grk_w_code and not ram_precompute_grk_w:
+            product_lines.append(f"{indent}matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);")
+        if need_vk_vr_path and not ram_precompute_w_gkr:
+            if reuse_w_gkr_from_grk_w:
+                product_lines.extend(
+                    _matrix_transpose_copy_lines(
+                        "tmp_W_Gkr_code",
+                        "tmp_Grk_W_code",
+                        "NK",
+                        "NR",
+                        indent=indent,
+                        comment="Symmetry reuse: W * Gkr = transpose(Grk * W).",
+                    )
+                )
+            else:
+                product_lines.append(f"{indent}matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);")
+        if product_lines:
+            product_lines.append("")
+        return product_lines
+
     lines.extend([
         "CODE:",
         "BEGIN_T0:",
         "    if (!rtds_matrix_code_ready) {",
         "        initializeMatricesForCode();",
         *_c_condition_lines(code_runtime_matrix_names),
+        *(_code_g_setup_lines(indent="        ") if code_g_setup_once else []),
+        *_code_once_product_lines(indent="        "),
         "        rtds_matrix_code_ready = 1;",
         "    }",
         "",
         "",
-        *(
-            [
-                *_c_section_warning(
-                    "CODE-SIDE G MATRIX VALUE SETUP",
-                    [
-                        "Update runtime G-related symbols and matrices before the reduction math below.",
-                        "Only matrices required by dynamic G, Ihis reduction, or Vk recovery are refreshed.",
-                    ],
-                ),
-                "    /* Runtime refresh. Use set_CODE for matrices touched in CODE; do not write MATRIX_.p directly. */",
-                *_block_alias_compute_lines(code_block_alias_entries),
-                *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_code", "set_CODE") if need_Grr_code else []),
-                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_code", "set_CODE") if need_Grk_code and not ram_precompute_grk_w else []),
-                *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_code", "set_CODE") if need_Gkr_code and not ram_precompute_w_gkr else []),
-                *(_matrix_set_alias_lines(Gkk_alias_entries, "Gkk_code", "set_CODE") if need_Gkk_code else []),
-                *(
-                    _matrix_code_sym_inverse_lines("Gkk_code", "W_code", Gkk.rows)
-                    if use_fast_symmetric_gkk_inverse
-                    else (["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if need_Gkk_code and need_W_code else [])
-                ),
-                *(_diagonal_plus_coupled_w_code_lines(details) if structured_w_builder else []),
-                *(
-                    _matrix_set_alias_lines(W_alias_entries, "W_code", "set_CODE")
-                    if need_W_code and not w_runtime_inverse and not structured_w_builder and not (ram_precompute_grk_w or ram_precompute_w_gkr)
-                    else []
-                ),
-                *(_matrix_set_alias_lines(Grr_alias_entries, "Grr_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
-                *(_matrix_set_alias_lines(Grk_alias_entries, "Grk_dyn_code", "set_CODE", row_map=gred_dyn_rows, col_map=list(range(Grk.cols))) if rectangular_gred_dyn_path else []),
-                *(_matrix_set_alias_lines(Gkr_alias_entries, "Gkr_dyn_code", "set_CODE", row_map=list(range(Gkr.rows)), col_map=gred_dyn_cols) if rectangular_gred_dyn_path else []),
-                "",
-            ]
-            if need_code_g_setup_section
-            else []
-        ),
+        *(_code_g_setup_lines() if need_code_g_setup_section and not code_g_setup_once else []),
         *(
             [
                 *_c_section_warning(
@@ -2883,7 +2926,7 @@ def _c_emit_rtds_stage_sections(
             if need_Ihisr_code or need_Ihisk_code or partial_ihisred_code_path
             else []
         ),
-        *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if need_tmp_grk_w_code and not ram_precompute_grk_w else []),
+        *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if need_tmp_grk_w_code and not ram_precompute_grk_w and not code_g_setup_once else []),
     ])
     if dynamic_gred and full_gred_code_path:
         if diagonal_gkk_scalar_code_path:
@@ -3046,8 +3089,8 @@ def _c_emit_rtds_stage_sections(
                             "NR",
                             comment="Symmetry reuse: W * Gkr = transpose(Grk * W).",
                         )
-                        if need_vk_vr_path and not ram_precompute_w_gkr and reuse_w_gkr_from_grk_w
-                        else (["    matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);"] if need_vk_vr_path and not ram_precompute_w_gkr else [])
+                        if need_vk_vr_path and not ram_precompute_w_gkr and not code_g_setup_once and reuse_w_gkr_from_grk_w
+                        else (["    matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);"] if need_vk_vr_path and not ram_precompute_w_gkr and not code_g_setup_once else [])
                     ),
                     *(["    matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);"] if need_vk_vr_path else []),
                     *(["    matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);"] if need_vk_ihis_path else []),

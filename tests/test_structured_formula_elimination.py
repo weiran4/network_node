@@ -383,6 +383,39 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         self.assertIn("matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);", draft)
         self.assertIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", draft)
 
+    def test_constant_g_runtime_inverse_precomputes_code_matrices_once(self):
+        G1, G2, h = sp.symbols("G1 G2 h")
+        nodes = ["A", "B", "X"]
+        G = sp.Matrix([[G1, 0, -G1], [0, G2, -G2], [-G1, -G2, G1 + G2]])
+        Ihis = sp.Matrix([[0], [0], [h]])
+        structured = build_structured_formula(G, Ihis, nodes, ["A", "B"], ["X"])
+        plan = build_dependency_stage_plan(
+            structured,
+            {"G1": "RAM_CONSTANT", "G2": "RAM_CONSTANT", "h": "STEP_HISTORY"},
+            dependency_model_override={"W": None},
+        )
+
+        draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
+
+        ready_block = draft.split("    if (!rtds_matrix_code_ready) {", 1)[1].split(
+            "        rtds_matrix_code_ready = 1;",
+            1,
+        )[0]
+        per_step_g_region = draft.split("        rtds_matrix_code_ready = 1;\n    }", 1)[1].split(
+            "CODE-SIDE IHIS VALUE SETUP",
+            1,
+        )[0]
+        self.assertIn("set_CODE(&Gkr_code, 0, 0, Gkr_X_A);", ready_block)
+        self.assertIn("set_CODE(&Gkk_code, 0, 0, Gkk_X_X);", ready_block)
+        self.assertIn("set_CODE(&W_code, 0, 0, 1.0 / get_CODE(&Gkk_code, 0, 0));", ready_block)
+        self.assertIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", ready_block)
+        self.assertNotIn("set_CODE(&Gkr_code", per_step_g_region)
+        self.assertNotIn("set_CODE(&Gkk_code", per_step_g_region)
+        self.assertNotIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", per_step_g_region)
+        self.assertNotIn("set_CODE(&Ihisk_code", ready_block)
+        self.assertIn("set_CODE(&Ihisk_code, 0, 0, h);", draft)
+        self.assertIn("matrix_matXvec_CODE(&tmp_W_Ihisk_code, &W_code, &Ihisk_code);", draft)
+
     def test_c_draft_without_internal_nodes_uses_original_g_and_ihis(self):
         G1, G2, hA, hB = sp.symbols("G1 G2 hA hB")
         nodes = ["A", "B"]

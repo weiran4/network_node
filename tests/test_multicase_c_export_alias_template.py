@@ -1303,12 +1303,13 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         )[0]
         ihis_case3 = ihis_setup.split("case 3:", 1)[1].split("case 1:", 1)[0]
         ihis_case1_2 = ihis_setup.split("case 1:", 1)[1].split("case 0:", 1)[0]
-        self.assertIn("double inv0 = get_CODE(&W_code, 0, 0);", ihis_case1_2)
-        self.assertIn("set_CODE(&tmp_Grk_W_code, row, 0, grk * inv0);", ihis_case1_2)
-        self.assertIn("get_CODE(&Ihisr_code, row, 0) - grk * t0", ihis_case1_2)
+        self.assertIn("double grkw = 0.0;", ihis_case1_2)
+        self.assertIn("grkw = get_CODE(&tmp_Grk_W_code, row, 0);", ihis_case1_2)
+        self.assertIn("get_CODE(&Ihisr_code, row, 0) - grkw * h0", ihis_case1_2)
+        self.assertNotIn("set_CODE(&tmp_Grk_W_code", ihis_case1_2)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code", ihis_case1_2)
         self.assertNotIn("matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code", ihis_case1_2)
-        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", ihis_case3)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", ihis_case3)
         self.assertIn("matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code", ihis_case3)
         self.assertIn("set_CODE(&Vr_code, 0, 0, N1);", hoisted_recovery)
         self.assertIn("set_CODE(&Vr_code, 3, 0, N4);", hoisted_recovery)
@@ -1335,6 +1336,21 @@ class MultiCaseAliasTemplateTests(unittest.TestCase):
         self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case2)
         self.assertNotIn("matrix_matXvec_CODE(&tmp_W_Gkr_Vr_code, &tmp_W_Gkr_code, &Vr_code);", recovery_case3)
         self.assertIn("Case-resolved Gkk inverse over active internal profile", draft)
+        ready_block = draft.split("    if (!rtds_matrix_code_ready) {", 1)[1].split(
+            "        rtds_matrix_code_ready = 1;",
+            1,
+        )[0]
+        per_step_g_region = draft.split("rtds_matrix_code_ready = 1;", 1)[1].split(
+            "CODE-SIDE IHIS VALUE SETUP",
+            1,
+        )[0]
+        self.assertIn("Case-resolved Gkk inverse over active internal profile", ready_block)
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", ready_block)
+        self.assertNotIn("set_CODE(&Ihisk_code", ready_block)
+        self.assertNotIn("Case-resolved Gkk inverse over active internal profile", per_step_g_region)
+        self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", per_step_g_region)
+        self.assertIn("Active internal profile Ihisk setup", per_step_g_region)
+        self.assertIn("set_CODE(&Ihisk_code", per_step_g_region)
         w_switch = draft.split("Case-resolved Gkk inverse over active internal profile", 1)[1].split(
             "/* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP",
             1,

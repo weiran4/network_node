@@ -276,6 +276,43 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         self.assertIn("ensureMultiCaseProfilesText(branches);", payload_source)
         self.assertIn("const profiles = parseMultiCaseProfiles();", payload_source)
 
+    def test_heavy_export_tabs_defer_payload_building_until_after_placeholder_render(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        render_start = source.index("function renderOutput")
+        render_end = source.index("function renderReducedBranchCurrentDisabledNote")
+        render_source = source[render_start:render_end]
+        optimized_section = render_source[
+            render_source.index('if (state.activeOutput === "optimizedElimination")'):
+            render_source.index('if (state.activeOutput === "multiCaseCExport")')
+        ]
+        multi_case_section = render_source[
+            render_source.index('if (state.activeOutput === "multiCaseCExport")'):
+            render_source.index("outputText.className = \"output-body output-body-formulas\"")
+        ]
+
+        self.assertIn("renderOptimizedEliminationDeferred(token);", optimized_section)
+        self.assertNotIn("optimizedEliminationPayload();", optimized_section)
+        self.assertIn("renderMultiCaseCExportDeferred(token, branches);", multi_case_section)
+        self.assertNotIn("multiCaseExportPayload();", multi_case_section)
+
+        deferred_start = source.index("async function renderMultiCaseCExportDeferred")
+        deferred_end = source.index("async function renderMultiCaseCExportAsync")
+        deferred_source = source[deferred_start:deferred_end]
+        self.assertIn("await yieldToBrowser();", deferred_source)
+        self.assertIn("await multiCaseExportPayloadAsync(token);", deferred_source)
+
+    def test_multicase_reduced_builds_each_case_payload_progressively(self):
+        source = Path("index.html").read_text(encoding="utf-8")
+
+        start = source.index("async function renderReducedEquationsAsync")
+        end = source.index("function renderReducedProfilePlaceholder")
+        reduced_source = source[start:end]
+        self.assertNotIn("const profilePayloads = profiles.map", reduced_source)
+        self.assertIn("await yieldToBrowser();", reduced_source)
+        self.assertIn("const payload = runWithCaseProfile(profile, () => buildReducedPayload());", reduced_source)
+        self.assertIn("renderReducedProfileRunning(profile, index)", reduced_source)
+
     def test_formula_views_have_multicase_profile_helpers(self):
         source = Path("index.html").read_text(encoding="utf-8")
         self.assertIn("function multiCaseFormulaProfiles(", source)
@@ -338,7 +375,8 @@ class FrontendOptimizedReuseTests(unittest.TestCase):
         end = source.index("function currentReducedHtml", start)
         reduced_source = source[start:end]
         self.assertIn("const profiles = multiCaseFormulaProfiles();", reduced_source)
-        self.assertIn("for (let index = 0; index < profilePayloads.length; index += 1)", reduced_source)
+        self.assertIn("for (let index = 0; index < profiles.length; index += 1)", reduced_source)
+        self.assertIn("const payload = runWithCaseProfile(profile, () => buildReducedPayload());", reduced_source)
         self.assertIn("await renderReducedProfileIntoToken(token, profile, index, payload);", reduced_source)
         self.assertNotIn("Promise.all", reduced_source)
 

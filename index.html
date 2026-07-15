@@ -3288,6 +3288,10 @@
       }
     }
 
+    function yieldToBrowser() {
+      return new Promise(resolve => window.setTimeout(resolve, 0));
+    }
+
     function clearDerivedResultCaches() {
       reducedCache.clear();
       branchCurrentCache.clear();
@@ -8553,9 +8557,8 @@
       if (state.activeOutput === "optimizedElimination") {
         outputText.className = "output-body";
         const token = ++optimizedEliminationRenderToken;
-        const payload = optimizedEliminationPayload();
         outputText.innerHTML = `<div class="formula-list"><div class="formula-empty">${optText("正在计算优化消元 / C导出...", "Computing optimized elimination / C export...")}</div></div>`;
-        renderOptimizedEliminationAsync(token, payload);
+        renderOptimizedEliminationDeferred(token);
         return;
       }
       if (state.activeOutput === "multiCaseCExport") {
@@ -8567,10 +8570,9 @@
         }
         try {
           ensureMultiCaseProfilesText(branches);
-          const payload = multiCaseExportPayload();
           const token = ++multiCaseExportRenderToken;
           outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(optText("正在生成多Case集合 C导出...", "Generating multi-case collection C export..."))}</div></div>`;
-          renderMultiCaseCExportAsync(token, payload);
+          renderMultiCaseCExportDeferred(token, branches);
         } catch (error) {
           outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(localizedBackendErrorMessage(error))}</div></div>`;
         }
@@ -9523,15 +9525,16 @@
       try {
         const profiles = multiCaseFormulaProfiles();
         if (profiles.length) {
-          const profilePayloads = profiles.map(profile => ({
-            profile,
-            payload: runWithCaseProfile(profile, () => buildReducedPayload())
-          }));
           if (token === reducedRenderToken && state.activeOutput === "reducedEquations") {
-            outputText.innerHTML = `<div class="formula-list">${profilePayloads.map(({ profile }, index) => renderReducedProfilePlaceholder(profile, index)).join("")}</div>`;
+            outputText.innerHTML = `<div class="formula-list">${profiles.map((profile, index) => renderReducedProfilePlaceholder(profile, index)).join("")}</div>`;
           }
-          for (let index = 0; index < profilePayloads.length; index += 1) {
-            const { profile, payload } = profilePayloads[index];
+          for (let index = 0; index < profiles.length; index += 1) {
+            if (token !== reducedRenderToken || state.activeOutput !== "reducedEquations") break;
+            await yieldToBrowser();
+            if (token !== reducedRenderToken || state.activeOutput !== "reducedEquations") break;
+            const profile = profiles[index];
+            replaceReducedProfileHtml(token, index, renderReducedProfileRunning(profile, index));
+            const payload = runWithCaseProfile(profile, () => buildReducedPayload());
             await renderReducedProfileIntoToken(token, profile, index, payload);
             if (token !== reducedRenderToken || state.activeOutput !== "reducedEquations") break;
           }
@@ -9560,8 +9563,17 @@
         <div class="formula-profile-section" data-reduced-profile-index="${index}">
           ${profileSectionHeader(profile, index)}
           <div class="formula-card">
-            <div class="formula-empty">${escapeHtml(optText("正在用 SymPy 化简节点消去方程...", "Reducing this case with SymPy..."))}</div>
+            <div class="formula-empty">${escapeHtml(optText("等待前面的 case 完成...", "Waiting for earlier cases..."))}</div>
           </div>
+        </div>
+      `;
+    }
+
+    function renderReducedProfileRunning(profile, index) {
+      return `
+        ${profileSectionHeader(profile, index)}
+        <div class="formula-card">
+          <div class="formula-empty">${escapeHtml(optText("正在构造当前 case 并用 SymPy 化简节点消去方程...", "Building this case and reducing it with SymPy..."))}</div>
         </div>
       `;
     }
@@ -10253,6 +10265,88 @@
           payloads: profiles.map(profile => payloadForCaseProfile(profile, { [branch.id]: index }))
         }))
       }));
+      const common_dummy_internal_nodes = [...new Set(case_profiles.flatMap(profile =>
+        (profile.payload?.dummy_node_blocks || []).flatMap(block =>
+          (block.dummy_nodes || []).map(node => node.node_id).filter(Boolean)
+        )
+      ))];
+      return {
+        mode: "multi_case_c_export",
+        case_id_symbol: state.multiCaseIdSymbol || "case_id",
+        runtime_case_groups,
+        display_mode: state.optimizedEliminationDisplay || "compact",
+        simplify_level: state.optimizedEliminationSimplify || "light",
+        elimination_codegen_mode: normalizedEliminationCodegenMode(),
+        force_scalar_confirmed: Boolean(state.forceScalarPreflightConfirmed),
+        assume_spd: state.optimizedEliminationAssumeSpd !== false,
+        use_suggested_order: state.optimizedEliminationUseSuggestedOrder !== false,
+        eligible_branches: branches.map(branch => ({
+          id: branch.id,
+          name: branch.name,
+          kind: branch.kind,
+          case_count: branch.switchCases?.length || 0
+        })),
+        common_dummy_internal_nodes,
+        case_profiles
+      };
+    }
+
+    function assertActiveMultiCaseExport(token) {
+      if (token === multiCaseExportRenderToken && state.activeOutput === "multiCaseCExport") return;
+      const error = new Error("Stale multi-case export render");
+      error.name = "AbortError";
+      throw error;
+    }
+
+    async function multiCaseExportPayloadAsync(token) {
+      const branches = multiCaseEligibleBranches();
+      ensureMultiCaseProfilesText(branches);
+      const runtimeBranches = runtimeMutableCaseBranches(branches);
+      const runtimeBaseCaseMap = Object.fromEntries(runtimeBranches.map(branch => [branch.id, 0]));
+      const profiles = parseMultiCaseProfiles();
+      const case_profiles = [];
+      for (let index = 0; index < profiles.length; index++) {
+        assertActiveMultiCaseExport(token);
+        await yieldToBrowser();
+        assertActiveMultiCaseExport(token);
+        const profile = profiles[index];
+        const payload = payloadForCaseProfile(profile, runtimeBaseCaseMap);
+        const dummy_finalization = dummyFinalizationForCaseProfile(profile, payload);
+        case_profiles.push({
+          name: profile.name || defaultCaseName(index),
+          comment: profile.comment || "",
+          case_map: profile.case_map || {},
+          payload,
+          ...(dummy_finalization ? { dummy_finalization } : {})
+        });
+      }
+
+      const runtime_case_groups = [];
+      for (const branch of runtimeBranches) {
+        const cases = [];
+        for (let index = 0; index < (branch.switchCases || []).length; index++) {
+          const payloads = [];
+          for (const profile of profiles) {
+            assertActiveMultiCaseExport(token);
+            await yieldToBrowser();
+            assertActiveMultiCaseExport(token);
+            payloads.push(payloadForCaseProfile(profile, { [branch.id]: index }));
+          }
+          cases.push({
+            index,
+            name: displayCaseName((branch.switchCases || [])[index], index),
+            payloads
+          });
+        }
+        runtime_case_groups.push({
+          branch_id: branch.id,
+          name: branch.name || branch.id,
+          kind: branch.kind,
+          case_id_symbol: `runtime_${cIdentifier(branch.name || branch.id || "case")}_case_id`,
+          cases
+        });
+      }
+
       const common_dummy_internal_nodes = [...new Set(case_profiles.flatMap(profile =>
         (profile.payload?.dummy_node_blocks || []).flatMap(block =>
           (block.dummy_nodes || []).map(node => node.node_id).filter(Boolean)
@@ -11486,6 +11580,35 @@
           payload: profile.payload
         }))
       });
+    }
+
+    async function renderMultiCaseCExportDeferred(token, branches) {
+      try {
+        await yieldToBrowser();
+        assertActiveMultiCaseExport(token);
+        const payload = await multiCaseExportPayloadAsync(token);
+        assertActiveMultiCaseExport(token);
+        await renderMultiCaseCExportAsync(token, payload);
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        if (token === multiCaseExportRenderToken && state.activeOutput === "multiCaseCExport") {
+          outputText.innerHTML = `<div class="formula-list">${renderMultiCaseProfileEditor(branches)}<div class="formula-empty">${escapeHtml(optText("多Case C导出失败", "Multi-case C export failed"))}：${escapeHtml(localizedBackendErrorMessage(error))}</div></div>`;
+        }
+      }
+    }
+
+    async function renderOptimizedEliminationDeferred(token) {
+      try {
+        await yieldToBrowser();
+        if (token !== optimizedEliminationRenderToken || state.activeOutput !== "optimizedElimination") return;
+        const payload = optimizedEliminationPayload();
+        if (token !== optimizedEliminationRenderToken || state.activeOutput !== "optimizedElimination") return;
+        await renderOptimizedEliminationAsync(token, payload);
+      } catch (error) {
+        if (token === optimizedEliminationRenderToken && state.activeOutput === "optimizedElimination") {
+          outputText.innerHTML = `<div class="formula-empty">${optText("优化消元失败", "Optimized elimination failed")}：${escapeHtml(localizedBackendErrorMessage(error))}</div>`;
+        }
+      }
     }
 
     async function renderMultiCaseCExportAsync(token, payload) {
