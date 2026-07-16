@@ -308,6 +308,9 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         self.assertIn('double varG_A_B = createGValue("varG_A_B", "A", "B", 0, "TRUE");', draft)
         self.assertIn('double varG_B_B = createGValue("varG_B_B", "B", "B", 0, "TRUE");', draft)
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertIn("Formula: Gred = Grr - Grk * W * Gkr.", draft)
+        self.assertIn("Scalar diagonal Gkk: W[k,k] = 1 / Gkk[k,k].", draft)
+        self.assertIn("Upper-triangle only: Gred is symmetric", draft)
         self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)
         self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Grk_code, j, k) * inv_gkk_diag[k];", draft)
@@ -331,6 +334,7 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertIn("Formula: Vk = -W * Gkr * Vr - W * Ihisk.", draft)
         self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)
         self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Grk_code, j, k) * inv_gkk_diag[k];", draft)
@@ -499,6 +503,8 @@ class StructuredFormulaEliminationTests(unittest.TestCase):
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
+        self.assertIn("Formula: Gred = Grr - Grk * W * Gkr.", draft)
+        self.assertIn("Upper-triangle only: Gred is symmetric", draft)
         self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)
         self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Grk_code, j, k) * inv_gkk_diag[k];", draft)

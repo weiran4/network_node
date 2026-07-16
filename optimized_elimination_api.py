@@ -1804,6 +1804,32 @@ def _upper_tri_matrix_product_transpose_rhs_lines(
     ]
 
 
+def _upper_tri_matrix_subtract_product_transpose_rhs_lines(
+    dst: str,
+    lhs: str,
+    product_lhs: str,
+    product_rhs: str,
+    dim_expr: str,
+    inner_expr: str = "INTERNAL_NODES",
+    *,
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}/* Formula: Gred = Grr - Grk * W * Gkr. */",
+        f"{indent}/* Symmetry reuse: subtract {product_lhs} * transpose({product_rhs}) directly without materializing Gkr or a dense product. */",
+        f"{indent}/* Upper-triangle only: Gred is symmetric, and GValue stamps read row <= col. */",
+        f"{indent}for (int row = 0; row < {dim_expr}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim_expr}; col++) {{",
+        f"{indent}        double acc = 0.0;",
+        f"{indent}        for (int k = 0; k < {inner_expr}; k++) {{",
+        f"{indent}            acc += get_CODE(&{product_lhs}, row, k) * get_CODE(&{product_rhs}, col, k);",
+        f"{indent}        }}",
+        f"{indent}        set_CODE(&{dst}, row, col, get_CODE(&{lhs}, row, col) - acc);",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
+
+
 def _clear_matrix_lines(name: str, rows: int, cols: int, *, indent: str = "        ") -> list[str]:
     if rows <= 0 or cols <= 0:
         return []
@@ -5881,6 +5907,9 @@ def _diagonal_gkk_scalar_gred_lines(
 ) -> list[str]:
     prefix = " " * indent
     return [
+        f"{prefix}/* Formula: Gred = Grr - Grk * W * Gkr. */",
+        f"{prefix}/* Scalar diagonal Gkk: W[k,k] = 1 / Gkk[k,k]. */",
+        f"{prefix}/* Upper-triangle only: Gred is symmetric, and GValue stamps read row <= col. */",
         f"{prefix}/* Diagonal Gkk scalar Schur path: reuse W[k,k] = 1/Gkk[k,k]. */",
         f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
         f"{prefix}    for (int k = 0; k < {internal_expr}; k++) {{",
@@ -5908,6 +5937,8 @@ def _diagonal_gkk_scalar_ihis_lines(
 ) -> list[str]:
     prefix = " " * indent
     return [
+        f"{prefix}/* Formula: Ihisred = Ihisr - Grk * W * Ihisk. */",
+        f"{prefix}/* Scalar diagonal Gkk: tmp_Grk_W[i,k] is evaluated as Grk[i,k] / Gkk[k,k]. */",
         f"{prefix}/* Diagonal Gkk scalar Ihisred path: Ihisred = Ihisr - tmp_Grk_W * Ihisk. */",
         f"{prefix}for (int row = 0; row < {active_nr_expr}; row++) {{",
         f"{prefix}    double ihis_acc = 0.0;",
@@ -5927,6 +5958,8 @@ def _diagonal_gkk_scalar_vk_lines(
 ) -> list[str]:
     prefix = " " * indent
     return [
+        f"{prefix}/* Formula: Vk = -W * Gkr * Vr - W * Ihisk. */",
+        f"{prefix}/* Scalar diagonal Gkk: recovery divides each eliminated-node row by its own Gkk[k,k]. */",
         f"{prefix}/* Diagonal Gkk scalar recovery: W*Gkr is transpose(tmp_Grk_W). */",
         f"{prefix}for (int k = 0; k < {internal_expr}; k++) {{",
         f"{prefix}    double core_v = 0.0;",
@@ -6020,8 +6053,13 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
     gred_fallback = [
         "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
         "    /* Full Gred CODE path: compute the dense product, then write only the upper triangle used by GValue stamps. */",
-        *_upper_tri_matrix_product_transpose_rhs_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Grk_code", active_nr_expr),
-        *_upper_tri_matrix_subtract_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code", active_nr_expr),
+        *_upper_tri_matrix_subtract_product_transpose_rhs_lines(
+            "Gred_code",
+            "Grr_code",
+            "tmp_Grk_W_code",
+            "Grk_code",
+            active_nr_expr,
+        ),
     ]
     diagonal_cases, fallback_cases = _multicase_diagonal_case_groups(
         profiles=profiles,
@@ -7995,16 +8033,20 @@ def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) 
         "        break;",
         "    }",
         "",
-        "    /* Shared Schur flow: Gred = Grr - Grk * W * Gkr. */",
+        "    /* Shared Schur flow. */",
+        "    /* Formula: Gred = Grr - Grk * W * Gkr. */",
         *(["    MATH_matx_invert(NK, &(Gkk_code.p[0]), NK, &(W_code.p[0]), NK);"] if nk else []),
         *(["    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);"] if nk else []),
         *(_upper_tri_matrix_product_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Gkr_code", "NR", "NK") if nk else []),
         *(_upper_tri_matrix_subtract_lines("Gschur_code", "Grr_code", "tmp_Grk_W_Gkr_code", "NR") if nk else ["    /* No internal nodes: Gschur = Grr. */"]),
+        "    /* Formula: Gred_final = Gred_schur + Gred_direct. */",
         *_upper_tri_matrix_add_lines("Gfinal_code", "Gschur_code", "Gdirect_code", "NR"),
         "",
-        "    /* Shared Ihis flow: Ihisred = Ihisr - Grk * W * Ihisk. */",
+        "    /* Shared Ihis flow. */",
+        "    /* Formula: Ihisred = Ihisr - Grk * W * Ihisk. */",
         *(["    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);"] if nk else []),
         *(["    matrix_subtract_CODE(&Ihisschur_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);"] if nk else ["    /* No internal nodes: Ihisschur = Ihisr. */"]),
+        "    /* Formula: Ihisred_final = Ihisred_schur + Ihisred_direct. */",
         "    matrix_add_CODE(&Ihisfinal_code, &Ihisschur_code, &Ihisdirect_code);",
         *[
             f"    Inj{_c_identifier_name(node, f'N{index + 1}')} = get_CODE(&Ihisfinal_code, {index}, 0);"
@@ -8012,7 +8054,7 @@ def _build_multi_case_c_draft(case_id_symbol: str, profile_results: list[dict]) 
         ],
         "",
         "T1_T2:",
-        *(["    /* Internal-node voltage recovery uses core matrices only: Vk = -W * Gkr * Vr - W * Ihisk. */"] if nk else ["    /* No internal-node voltage recovery is required. */"]),
+        *(["    /* Internal-node voltage recovery uses core matrices only. */", "    /* Formula: Vk = -W * Gkr * Vr - W * Ihisk. */"] if nk else ["    /* No internal-node voltage recovery is required. */"]),
         *([
             f"    set_CODE(&Vr_code, {index}, 0, {_c_identifier_name(node, f'N{index + 1}')});"
             for index, node in enumerate(external_nodes)
@@ -8481,6 +8523,7 @@ def _apply_final_retained_recovery_profiles_to_draft(
             stripped = line.strip()
             if in_vr_setup and (
                 stripped == "/* Internal-node voltage recovery after solved retained-node voltages are available. */"
+                or stripped == "/* Formula: Vk = -W * Gkr * Vr - W * Ihisk. */"
                 or stripped.startswith("set_CODE(&Vr_code,")
                 or not stripped
             ):

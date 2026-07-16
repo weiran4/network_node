@@ -217,7 +217,20 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         fallback_block = draft[diagonal_block_end:]
         self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", fallback_block)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", fallback_block)
-        self.assertIn("Symmetry reuse: multiply by transpose(Grk_code) without materializing Gkr.", fallback_block)
+        self.assertIn("Formula: Gred = Grr - Grk * W * Gkr.", diagonal_block)
+        self.assertIn("Formula: Gred = Grr - Grk * W * Gkr.", fallback_block)
+        self.assertIn("Upper-triangle only: Gred is symmetric", fallback_block)
+        self.assertIn(
+            "Symmetry reuse: subtract tmp_Grk_W_code * transpose(Grk_code) directly without materializing Gkr or a dense product.",
+            fallback_block,
+        )
+        self.assertIn("Formula: Ihisred = Ihisr - Grk * W * Ihisk.", draft)
+        self.assertIn("Formula: Vk = -W * Gkr * Vr - W * Ihisk.", draft)
+        self.assertIn("set_CODE(&Gred_code, row, col, get_CODE(&Grr_code, row, col) - acc);", fallback_block)
+        self.assertNotIn("MATRIX_ tmp_Grk_W_Gkr_code", draft)
+        self.assertNotIn("matrixDim(&tmp_Grk_W_Gkr_code", draft)
+        self.assertNotIn("set_CODE(&tmp_Grk_W_Gkr_code", draft)
+        self.assertNotIn("get_CODE(&tmp_Grk_W_Gkr_code", draft)
         self.assertIn("for (col = row; col < node_active; col++)", fallback_block)
         self.assertNotIn("for (int ", draft)
         self.assertIn("CODE_FUNCTIONS:", draft)

@@ -1816,6 +1816,34 @@ def _upper_tri_matrix_product_transpose_rhs_code_lines(
     ]
 
 
+def _upper_tri_matrix_subtract_product_transpose_rhs_code_lines(
+    dst: str,
+    lhs: str,
+    product_lhs: str,
+    product_rhs_base: str,
+    dim: str = "NR",
+    inner_dim: str = "NK",
+    *,
+    indent: str = "    ",
+    setter: str = "set_CODE",
+    getter: str = "get_CODE",
+) -> list[str]:
+    return [
+        f"{indent}/* Formula: Gred = Grr - Grk * W * Gkr. */",
+        f"{indent}/* Symmetry reuse: subtract {product_lhs} * transpose({product_rhs_base}) directly without materializing Gkr or a dense product. */",
+        f"{indent}/* Upper-triangle only: Gred is symmetric, and GValue stamps read row <= col. */",
+        f"{indent}for (int row = 0; row < {dim}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim}; col++) {{",
+        f"{indent}        double acc = 0.0;",
+        f"{indent}        for (int k = 0; k < {inner_dim}; k++) {{",
+        f"{indent}            acc += {getter}(&{product_lhs}, row, k) * {getter}(&{product_rhs_base}, col, k);",
+        f"{indent}        }}",
+        f"{indent}        {setter}(&{dst}, row, col, {getter}(&{lhs}, row, col) - acc);",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
+
+
 def _diagonal_gkk_scalar_gred_code_lines(has_direct: bool, *, use_grk_transpose: bool = False) -> list[str]:
     rhs_expr = "get_CODE(&Grk_code, j, k)" if use_grk_transpose else "get_CODE(&Gkr_code, k, j)"
     comment = (
@@ -1824,6 +1852,9 @@ def _diagonal_gkk_scalar_gred_code_lines(has_direct: bool, *, use_grk_transpose:
         else "    /* Diagonal Gkk scalar CODE path: Gred = Grr - sum_k Grk[i,k] * Gkr[k,j] / Gkk[k,k]. */"
     )
     lines = [
+        "    /* Formula: Gred = Grr - Grk * W * Gkr. */",
+        "    /* Scalar diagonal Gkk: W[k,k] = 1 / Gkk[k,k]. */",
+        "    /* Upper-triangle only: Gred is symmetric, and GValue stamps read row <= col. */",
         comment,
         "    {",
         "        double inv_gkk_diag[NK];",
@@ -1892,6 +1923,8 @@ def _upper_tri_matrix_product_code_lines(
 
 def _diagonal_gkk_scalar_ihisred_code_lines(has_direct: bool) -> list[str]:
     lines = [
+        "    /* Formula: Ihisred = Ihisr - Grk * W * Ihisk. */",
+        "    /* Scalar diagonal Gkk: tmp_Grk_W[i,k] is evaluated as Grk[i,k] / Gkk[k,k]. */",
         "    /* Diagonal Gkk scalar CODE path: Ihisred = Ihisr - sum_k Grk[i,k] * Ihisk[k] / Gkk[k,k]. */",
         "    {",
         "        double inv_gkk_diag[NK];",
@@ -1924,6 +1957,8 @@ def _diagonal_gkk_scalar_vk_code_lines(need_vr: bool, need_ihisk: bool, *, use_g
         else "    /* Diagonal Gkk scalar CODE path: Vk[k] = -(Gkr[k,*] * Vr + Ihisk[k]) / Gkk[k,k]. */"
     )
     lines = [
+        "    /* Formula: Vk = -W * Gkr * Vr - W * Ihisk. */",
+        "    /* Scalar diagonal Gkk: each eliminated-node voltage divides by its own Gkk[k,k]. */",
         comment,
         "    {",
         "        double inv_gkk_diag[NK];",
@@ -2188,6 +2223,10 @@ def _c_emit_rtds_stage_sections(
         _matrix_is_transpose_light(Grk, Gkr)
         and _matrix_is_symmetric_light(Gkk)
         and not rectangular_gred_dyn_path
+    )
+    need_tmp_grk_w_gkr_code = bool(
+        full_gred_code_path
+        and not can_reuse_gkr_from_grk_transpose
     )
     need_tmp_grk_w_code = bool(
         full_gred_code_path
@@ -2736,7 +2775,7 @@ def _c_emit_rtds_stage_sections(
         code_matrix_names.insert(7, "Ihisred_code")
     if need_tmp_grk_w_code:
         code_matrix_names.insert(10, "tmp_Grk_W_code")
-    if full_gred_code_path and not diagonal_gkk_scalar_code_path:
+    if need_tmp_grk_w_gkr_code and not diagonal_gkk_scalar_code_path:
         code_matrix_names.insert(11, "tmp_Grk_W_Gkr_code")
     if full_ihisred_code_path and not diagonal_gkk_scalar_code_path:
         code_matrix_names.insert(12, "tmp_Grk_W_Ihisk_code")
@@ -2802,7 +2841,7 @@ def _c_emit_rtds_stage_sections(
         *(["    MATRIX_ Vr_code = {0};"] if need_Vr_code else []),
         *(["    MATRIX_ Vk_code = {0};"] if need_Vk_code else []),
         *(["    MATRIX_ tmp_Grk_W_code = {0};"] if need_tmp_grk_w_code else []),
-        *(["    MATRIX_ tmp_Grk_W_Gkr_code = {0};"] if full_gred_code_path and not diagonal_gkk_scalar_code_path else []),
+        *(["    MATRIX_ tmp_Grk_W_Gkr_code = {0};"] if need_tmp_grk_w_gkr_code and not diagonal_gkk_scalar_code_path else []),
         *(["    MATRIX_ tmp_Grk_W_Ihisk_code = {0};"] if full_ihisred_code_path and not diagonal_gkk_scalar_code_path else []),
         *(["    MATRIX_ tmp_W_Gkr_code = {0};"] if need_tmp_w_gkr_code else []),
         *(["    MATRIX_ tmp_W_Gkr_Vr_code = {0};"] if need_tmp_w_gkr_vr_code else []),
@@ -2872,7 +2911,7 @@ def _c_emit_rtds_stage_sections(
         *(["    err += matrixDim(&Vr_code, NR, 1);"] if need_Vr_code else []),
         *(["    err += matrixDim(&Vk_code, NK, 1);"] if need_Vk_code else []),
         *(["    err += matrixDim(&tmp_Grk_W_code, NR, NK);"] if need_tmp_grk_w_code and not ram_gred_code_schur_scratch else []),
-        *(["    err += matrixDim(&tmp_Grk_W_Gkr_code, NR, NR);"] if full_gred_code_path and not diagonal_gkk_scalar_code_path else []),
+        *(["    err += matrixDim(&tmp_Grk_W_Gkr_code, NR, NR);"] if need_tmp_grk_w_gkr_code and not diagonal_gkk_scalar_code_path else []),
         *(["    err += matrixDim(&tmp_Grk_W_Ihisk_code, NR, 1);"] if full_ihisred_code_path and not diagonal_gkk_scalar_code_path else []),
         *(["    err += matrixDim(&tmp_W_Gkr_code, NK, NR);"] if need_tmp_w_gkr_code else []),
         *(["    err += matrixDim(&tmp_W_Gkr_Vr_code, NK, 1);"] if need_tmp_w_gkr_vr_code else []),
@@ -3085,24 +3124,33 @@ def _c_emit_rtds_stage_sections(
                         False,
                         use_grk_transpose=can_reuse_gkr_from_grk_transpose,
                     ),
+                    *(["    /* Formula: Gred_final = Gred_schur + Gred_direct. */"] if _matrix_has_nonzero(code_Gred_direct) else []),
                     *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code", upper_triangle_only=True) if _matrix_has_nonzero(code_Gred_direct) else []),
                     "    /* Stamp dynamic Gred entries in row-major upper-triangular order. */",
                 ]
             )
         else:
-            lines.extend([
-                "    /* Full Gred CODE path: all reduced entries are CODE-owned, so a full Schur update is allowed. */",
-                *(
-                    _upper_tri_matrix_product_transpose_rhs_code_lines(
-                        "tmp_Grk_W_Gkr_code",
+            lines.append("    /* Full Gred CODE path: all reduced entries are CODE-owned, so a full Schur update is allowed. */")
+            lines.append("    /* Formula: Gred = Grr - Grk * W * Gkr. */")
+            if can_reuse_gkr_from_grk_transpose:
+                lines.extend(
+                    _upper_tri_matrix_subtract_product_transpose_rhs_code_lines(
+                        "Gred_code",
+                        "Grr_code",
                         "tmp_Grk_W_code",
                         "Grk_code",
                     )
-                    if can_reuse_gkr_from_grk_transpose
-                    else _upper_tri_matrix_product_code_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Gkr_code")
-                ),
-                "    /* Gred is symmetric; only the upper triangle is needed for dynamic GValue stamps. */",
-                *_upper_tri_matrix_subtract_code_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code"),
+                )
+            else:
+                lines.extend(
+                    [
+                        *_upper_tri_matrix_product_code_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Gkr_code"),
+                        "    /* Upper-triangle only: Gred is symmetric, and GValue stamps read row <= col. */",
+                        *_upper_tri_matrix_subtract_code_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code"),
+                    ]
+                )
+            lines.extend([
+                *(["    /* Formula: Gred_final = Gred_schur + Gred_direct. */"] if _matrix_has_nonzero(code_Gred_direct) else []),
                 *(_c_matrix_add_nonzero_lines(code_Gred_direct, "Gred_code", upper_triangle_only=True) if _matrix_has_nonzero(code_Gred_direct) else []),
                 "    /* Stamp dynamic Gred entries in row-major upper-triangular order. */",
             ])
@@ -3177,6 +3225,8 @@ def _c_emit_rtds_stage_sections(
             "    matrix_mult_CODE(&tmp_Grk_W_ihis_dyn_code, &Grk_ihis_dyn_code, &W_code);",
             "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_dyn_code, &tmp_Grk_W_ihis_dyn_code, &Ihisk_code);",
             "    matrix_subtract_CODE(&Ihisred_dyn_code, &Ihisr_ihis_dyn_code, &tmp_Grk_W_Ihisk_dyn_code);",
+            "    /* Formula: Ihisred = Ihisr - Grk * W * Ihisk. */",
+            *(["    /* Formula: Ihisred_final = Ihisred_schur + Ihisred_direct. */"] if _matrix_has_nonzero(_slice_matrix(Ihisred_direct, ihisred_dyn_rows, [0])) else []),
             *_c_vector_add_nonzero_lines(_slice_matrix(Ihisred_direct, ihisred_dyn_rows, [0]), "Ihisred_dyn_code"),
             *[
                 (
@@ -3194,6 +3244,7 @@ def _c_emit_rtds_stage_sections(
                 [
                     "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
                     *_diagonal_gkk_scalar_ihisred_code_lines(False),
+                    *(["    /* Formula: Ihisred_final = Ihisred_schur + Ihisred_direct. */"] if _matrix_has_nonzero(Ihisred_direct) else []),
                     *_c_vector_add_nonzero_lines(Ihisred_direct, "Ihisred_code"),
                 ]
             )
@@ -3202,6 +3253,8 @@ def _c_emit_rtds_stage_sections(
                 "    /* Ihisred is a per-step injection vector: Ihisred = Ihisr - Grk * W * Ihisk. */",
                 "    matrix_matXvec_CODE(&tmp_Grk_W_Ihisk_code, &tmp_Grk_W_code, &Ihisk_code);",
                 "    matrix_subtract_CODE(&Ihisred_code, &Ihisr_code, &tmp_Grk_W_Ihisk_code);",
+                "    /* Formula: Ihisred = Ihisr - Grk * W * Ihisk. */",
+                *(["    /* Formula: Ihisred_final = Ihisred_schur + Ihisred_direct. */"] if _matrix_has_nonzero(Ihisred_direct) else []),
                 *_c_vector_add_nonzero_lines(Ihisred_direct, "Ihisred_code"),
             ])
     lines.extend([
@@ -3229,6 +3282,7 @@ def _c_emit_rtds_stage_sections(
         lines.extend([
             "T1_T2:",
             "    /* Internal-node voltage recovery after solved retained-node voltages are available. */",
+            "    /* Formula: Vk = -W * Gkr * Vr - W * Ihisk. */",
             *(
                 [
                     f"    set_CODE(&Vr_code, {index}, 0, {_c_symbol_name(_c_display_node(node, node_display_names))});"
