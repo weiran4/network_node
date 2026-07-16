@@ -217,7 +217,7 @@ class MultiCaseCommonDummyInternalCodegenTests(unittest.TestCase):
         fallback_block = draft[diagonal_block_end:]
         self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", fallback_block)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", fallback_block)
-        self.assertIn("Symmetric product: only upper triangle of tmp_Grk_W_Gkr_code is needed downstream.", fallback_block)
+        self.assertIn("Symmetry reuse: multiply by transpose(Grk_code) without materializing Gkr.", fallback_block)
         self.assertIn("for (col = row; col < node_active; col++)", fallback_block)
         self.assertNotIn("for (int ", draft)
         self.assertIn("CODE_FUNCTIONS:", draft)

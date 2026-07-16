@@ -637,9 +637,14 @@ def _c89_for_loop_compat(draft: str) -> str:
         names = list(dict.fromkeys(re.findall(r"\bfor \(([A-Za-z_]\w*) =", section)))
         pieces.append(draft[cursor:section_start])
         if names:
+            names_to_promote = [
+                name
+                for name in names
+                if not re.search(rf"(?m)^\s+int\s+{re.escape(name)}\s*;", section)
+            ]
             for name in names:
                 section = re.sub(rf"(?m)^    int\s+{re.escape(name)}\s*;\n", "", section)
-            pieces.extend(f"    int {name};\n" for name in names)
+            pieces.extend(f"    int {name};\n" for name in names_to_promote)
         pieces.append(section)
         cursor = section_end
     pieces.append(draft[cursor:])
@@ -674,6 +679,11 @@ def _ensure_static_blank_line(draft: str) -> str:
     draft = _c89_for_loop_compat(draft)
     draft = _drop_unused_section_int_declarations(draft)
     draft = re.sub(r"\n    int row;\n    int col;\n(?=(?:/\* WARNING:|$))", "\n", draft)
+    draft = re.sub(
+        r"(BEGIN_T0:\n\n)    int row;\n\n(?=    /\* Resolve CODE_PER_STEP multi-case effective aliases as full values, never deltas\. \*/)",
+        r"\1",
+        draft,
+    )
     return _CBUILDER_SECTION_NEEDS_BLANK_RE.sub(
         lambda match: f"{match.group('label')}:\n\n",
         draft,
@@ -1764,6 +1774,29 @@ def _upper_tri_matrix_product_lines(
         f"{indent}        double acc = 0.0;",
         f"{indent}        for (int k = 0; k < {inner_expr}; k++) {{",
         f"{indent}            acc += get_CODE(&{lhs}, row, k) * get_CODE(&{rhs}, k, col);",
+        f"{indent}        }}",
+        f"{indent}        set_CODE(&{dst}, row, col, acc);",
+        f"{indent}    }}",
+        f"{indent}}}",
+    ]
+
+
+def _upper_tri_matrix_product_transpose_rhs_lines(
+    dst: str,
+    lhs: str,
+    rhs: str,
+    dim_expr: str,
+    inner_expr: str = "INTERNAL_NODES",
+    *,
+    indent: str = "    ",
+) -> list[str]:
+    return [
+        f"{indent}/* Symmetry reuse: multiply by transpose({rhs}) without materializing Gkr. */",
+        f"{indent}for (int row = 0; row < {dim_expr}; row++) {{",
+        f"{indent}    for (int col = row; col < {dim_expr}; col++) {{",
+        f"{indent}        double acc = 0.0;",
+        f"{indent}        for (int k = 0; k < {inner_expr}; k++) {{",
+        f"{indent}            acc += get_CODE(&{lhs}, row, k) * get_CODE(&{rhs}, col, k);",
         f"{indent}        }}",
         f"{indent}        set_CODE(&{dst}, row, col, acc);",
         f"{indent}    }}",
@@ -4455,6 +4488,7 @@ def _insert_multicase_alias_layer(
         "   the normal structured matrix DAG is generated exactly once. */",
     ]
     draft = _apply_shared_source_temp_text_reuse(draft, all_source_temps)
+    draft = _ensure_static_blank_line(draft)
     return _prepend_c_header_after_includes(draft, header)
 
 
@@ -4749,7 +4783,6 @@ def _guard_internal_active_matrix_lifecycle(draft: str) -> str:
 
 
 _LARGE_RECOVERY_MATRIX_OBJECTS = {
-    "tmp_W_Gkr_code",
     "tmp_W_Gkr_Vr_code",
     "tmp_W_Ihisk_code",
     "tmp_Vk_sum_code",
@@ -4960,6 +4993,11 @@ _SET_CODE_RE = re.compile(
     r"(?P<row>\d+), (?P<col>\d+), (?P<expr>[^;]+)\);\n"
 )
 
+_SET_RAM_INTERNAL_RE = re.compile(
+    r"    set\(&(?P<name>Grk_code|Gkr_code|Gkk_code|Grk_ram|Gkr_ram|Gkk_ram), "
+    r"(?P<row>\d+), (?P<col>\d+), (?P<expr>[^;]+)\);\n"
+)
+
 
 def _remap_internal_set_code_line(
     name: str,
@@ -4994,6 +5032,249 @@ def _remap_internal_set_code_line(
             return None
         return f"        set_CODE(&Ihisk_code, {global_to_active[row]}, {col}, {expr});"
     return None
+
+
+def _remap_internal_set_ram_line(
+    name: str,
+    row: int,
+    col: int,
+    expr: str,
+    active_index: Mapping[str, int],
+    template_internal_nodes: Sequence[str],
+    *,
+    retained_count: int,
+) -> str | None:
+    node_to_global = {node: index for index, node in enumerate(template_internal_nodes)}
+    global_to_active = {
+        node_to_global[node]: int(active)
+        for node, active in active_index.items()
+        if node in node_to_global
+    }
+    if name == "Grk_code":
+        if col not in global_to_active:
+            return None
+        return f"        set(&Grk_code, {row}, {global_to_active[col]}, {expr});"
+    if name == "Gkr_code":
+        if row not in global_to_active:
+            return None
+        return f"        set(&Gkr_code, {global_to_active[row]}, {col}, {expr});"
+    if name == "Gkk_code":
+        if row not in global_to_active or col not in global_to_active:
+            return None
+        return f"        set(&Gkk_code, {global_to_active[row]}, {global_to_active[col]}, {expr});"
+    return None
+
+
+def _active_internal_entry_expr(
+    entries: Sequence[tuple[str, int, int, str]],
+    name: str,
+    *,
+    active_row: int,
+    active_col: int,
+    active_index: Mapping[str, int],
+    template_internal_nodes: Sequence[str],
+) -> str | None:
+    node_to_global = {node: index for index, node in enumerate(template_internal_nodes)}
+    global_to_active = {
+        node_to_global[node]: int(active)
+        for node, active in active_index.items()
+        if node in node_to_global
+    }
+    for entry_name, row, col, expr in entries:
+        if entry_name != name:
+            continue
+        mapped_row = global_to_active.get(row) if name in {"Gkr_code", "Gkk_code"} else row
+        mapped_col = global_to_active.get(col) if name in {"Grk_code", "Gkk_code"} else col
+        if mapped_row == active_row and mapped_col == active_col:
+            return expr
+    return None
+
+
+def _remove_unused_matrix_object(draft: str, name: str) -> str:
+    name_re = re.compile(rf"\b{re.escape(name)}\b")
+    removable_patterns = [
+        re.compile(rf"^\s*MATRIX_\s+{re.escape(name)}\s*=\s*\{{0\}};\s*$"),
+        re.compile(rf"^\s*err\s*\+=\s*matrixDim\(&{re.escape(name)}, [^;]+\);\s*$"),
+        re.compile(rf"^\s*matrix_register\(&{re.escape(name)}\);\s*$"),
+        re.compile(rf"^\s*conditionMatrixForCODE\(&{re.escape(name)}\);\s*$"),
+    ]
+
+    def is_removable(line: str) -> bool:
+        return any(pattern.match(line) for pattern in removable_patterns)
+
+    touched_lines = [line for line in draft.splitlines() if name_re.search(line)]
+    if any(not is_removable(line) for line in touched_lines):
+        return draft
+    lines = [line for line in draft.splitlines() if not (name_re.search(line) and is_removable(line))]
+    return "\n".join(lines) + ("\n" if draft.endswith("\n") else "")
+
+
+def _replace_ram_fixed_internal_matrix_precompute(
+    draft: str,
+    *,
+    case_id_symbol: str,
+    profiles: Sequence[Mapping],
+    template_internal_nodes: Sequence[str],
+    retained_count: int,
+) -> str:
+    marker = "    /* ************************************************************************\n     * RAM-SIDE FIXED G MATRIX PRECOMPUTE"
+    start = draft.find(marker)
+    if start < 0:
+        return draft
+    lifecycle_match = re.search(
+        r"\n    (?:if \(internal_active > 0\) \{\n        matrix_register\(|matrix_register\()",
+        draft[start:],
+    )
+    if lifecycle_match is None:
+        return draft
+    end = start + lifecycle_match.start() + 1
+    block = draft[start:end]
+    entry_matches = list(_SET_RAM_INTERNAL_RE.finditer(block))
+    if not entry_matches:
+        entry_matches = list(_SET_RAM_INTERNAL_RE.finditer(draft[:start]))
+    entries = []
+    for match in entry_matches:
+        name = match.group("name").replace("_ram", "_code")
+        entries.append(
+            (
+                name,
+                int(match.group("row")),
+                int(match.group("col")),
+                match.group("expr"),
+            )
+        )
+    if not entries:
+        return draft
+    needs_tmp_w_gkr = "tmp_W_Gkr_code" in block
+    has_ram_schur_scratch = all(
+        marker in draft
+        for marker in (
+            "MATRIX_ W_ram",
+            "MATRIX_ tmp_Grk_W_ram",
+            "matrix_mult(&tmp_Grk_W_ram",
+        )
+    )
+    has_code_schur_scratch = "matrix_mult(&tmp_Grk_W_code, &Grk_ram, &W_code)" in draft
+    lines = [
+        "    /* ************************************************************************",
+        "     * RAM-SIDE FIXED G MATRIX PRECOMPUTE",
+        "     * These G-related symbols and matrices depend only on RAM-known data.",
+        "     * Prepare active-profile matrices in RAM; CODE only conditions pointers.",
+        "     * ************************************************************************ */",
+        "",
+        "",
+        "",
+        "    /* Active internal profile fixed-G matrix setup; backend placeholder rows are not written. */",
+        f"    switch ({case_id_symbol}) {{",
+    ]
+    for profile in profiles:
+        for case_id in profile.get("case_ids") or []:
+            lines.append(f"    case {int(case_id)}:")
+        active_index = profile.get("internal_to_active_index") or {}
+        active_count = len(active_index)
+        if active_count == 0:
+            lines.append("        /* This Pack case has no active internal nodes. */")
+            lines.append("        break;")
+            continue
+        emitted: list[str] = []
+        seen: set[str] = set()
+        for name, row, col, expr in entries:
+            remapped = _remap_internal_set_ram_line(
+                name,
+                row,
+                col,
+                expr,
+                active_index,
+                template_internal_nodes,
+                retained_count=retained_count,
+            )
+            if remapped and remapped not in seen:
+                emitted.append(remapped)
+                seen.add(remapped)
+        if active_count > 1 and not (has_ram_schur_scratch or has_code_schur_scratch):
+            lines.extend(emitted)
+        if active_count == 1:
+            gkk_expr = _active_internal_entry_expr(
+                entries,
+                "Gkk_code",
+                active_row=0,
+                active_col=0,
+                active_index=active_index,
+                template_internal_nodes=template_internal_nodes,
+            )
+            if not gkk_expr:
+                return draft
+            lines.append(f"        set(&W_code, 0, 0, 1.0 / ({gkk_expr}));")
+            for retained_row in range(retained_count):
+                grk_expr = _active_internal_entry_expr(
+                    entries,
+                    "Grk_code",
+                    active_row=retained_row,
+                    active_col=0,
+                    active_index=active_index,
+                    template_internal_nodes=template_internal_nodes,
+                )
+                if grk_expr:
+                    lines.append(
+                        f"        set(&tmp_Grk_W_code, {retained_row}, 0, ({grk_expr}) * get(&W_code, 0, 0));"
+                    )
+                else:
+                    lines.append(f"        set(&tmp_Grk_W_code, {retained_row}, 0, 0.0);")
+        elif has_code_schur_scratch:
+            lines.append(
+                "        /* W_code and tmp_Grk_W_code were computed during the RAM Gred Schur precompute. */"
+            )
+        elif has_ram_schur_scratch:
+            lines.extend(
+                [
+                    "        /* Reuse RAM Schur scratch: W_ram and tmp_Grk_W_ram are already active-profile sized. */",
+                    "        for (row = 0; row < internal_active; row++) {",
+                    "            for (col = 0; col < internal_active; col++) {",
+                    "                set(&W_code, row, col, get(&W_ram, row, col));",
+                    "            }",
+                    "        }",
+                    f"        for (row = 0; row < {retained_count}; row++) {{",
+                    "            for (col = 0; col < internal_active; col++) {",
+                    "                set(&tmp_Grk_W_code, row, col, get(&tmp_Grk_W_ram, row, col));",
+                    "            }",
+                    "        }",
+                ]
+            )
+        else:
+            lines.append("        err += matrix_invert(&W_code, &Gkk_code);")
+            lines.append("        err += matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);")
+        if needs_tmp_w_gkr and active_count > 1:
+            lines.extend(
+                [
+                    "        /* Symmetry reuse: W * Gkr = transpose(Grk * W). */",
+                    "        for (row = 0; row < internal_active; row++) {",
+                    f"            for (col = 0; col < {retained_count}; col++) {{",
+                    "                set(&tmp_W_Gkr_code, row, col, get(&tmp_Grk_W_code, col, row));",
+                    "            }",
+                    "        }",
+                ]
+            )
+        lines.append("        break;")
+    lines.extend(
+        [
+            "    default:",
+            "        break;",
+            "    }",
+            "    if (err > 0) {",
+            '        reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
+            '                       "RTDS RAM active-profile fixed-G precompute failed for component %s.", Name);',
+            "    }",
+            "",
+        ]
+    )
+    updated = draft[:start] + "\n".join(lines) + "\n" + draft[end:]
+    if has_ram_schur_scratch or has_code_schur_scratch:
+        for matrix_name in ("Grk_code", "Gkr_code", "Gkk_code"):
+            updated = _remove_unused_matrix_object(updated, matrix_name)
+    if has_code_schur_scratch:
+        for matrix_name in ("W_ram", "tmp_Grk_W_ram"):
+            updated = _remove_unused_matrix_object(updated, matrix_name)
+    return updated
 
 
 def _replace_internal_matrix_set_code_blocks(
@@ -5263,26 +5544,15 @@ def _ram_entry_map(matches: Sequence[re.Match]) -> dict[str, dict[tuple[int, int
 
 def _ram_precompute_alias_lines(region: str) -> list[str]:
     kept: list[str] = []
-    skip_prefixes = (
-        "/* RAM-side matrix Schur precompute",
-        "err += matrixDim(",
-        "if (err > 0)",
-        "reportError_RW(",
-        '"RTDS RAM matrix',
-        "set(&",
-        "err += matrix_invert(",
-        "err += matrix_mult(",
-        "err += matrix_subtract(",
-        "g_mat_over[",
-        "}",
-    )
     for line in region.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
-        if any(stripped.startswith(prefix) for prefix in skip_prefixes):
+        if stripped.startswith("/*") and " represents " in stripped:
+            kept.append(line)
             continue
-        kept.append(line)
+        if re.match(r"^[A-Za-z_]\w*\s*=", stripped):
+            kept.append(line)
     return kept
 
 
@@ -5299,7 +5569,10 @@ def _ram_schur_1x1_expr(
 ) -> str:
     base = _ram_base_expr(entries, row, col)
     grk = entries.get("Grk_ram", {}).get((row, active_global), "0.0")
-    gkr = entries.get("Gkr_ram", {}).get((active_global, col), "0.0")
+    gkr = entries.get("Gkr_ram", {}).get(
+        (active_global, col),
+        entries.get("Grk_ram", {}).get((col, active_global), "0.0"),
+    )
     if grk == "0.0" or gkr == "0.0":
         return base
     return f"{base} - ({grk})*{inv_name}*({gkr})"
@@ -5308,6 +5581,8 @@ def _ram_schur_1x1_expr(
 def _ram_remapped_set_lines(
     entries: Mapping[str, Mapping[tuple[int, int], str]],
     active_rows: Sequence[int],
+    *,
+    include_gkr: bool = True,
 ) -> list[str]:
     active_index = {global_row: active_row for active_row, global_row in enumerate(active_rows)}
     lines: list[str] = []
@@ -5316,9 +5591,10 @@ def _ram_remapped_set_lines(
     for (row, col), expr in sorted(entries.get("Grk_ram", {}).items()):
         if col in active_index:
             lines.append(f"        set(&Grk_ram, {row}, {active_index[col]}, {expr});")
-    for (row, col), expr in sorted(entries.get("Gkr_ram", {}).items()):
-        if row in active_index:
-            lines.append(f"        set(&Gkr_ram, {active_index[row]}, {col}, {expr});")
+    if include_gkr:
+        for (row, col), expr in sorted(entries.get("Gkr_ram", {}).items()):
+            if row in active_index:
+                lines.append(f"        set(&Gkr_ram, {active_index[row]}, {col}, {expr});")
     for (row, col), expr in sorted(entries.get("Gkk_ram", {}).items()):
         if row in active_index and col in active_index:
             lines.append(f"        set(&Gkk_ram, {active_index[row]}, {active_index[col]}, {expr});")
@@ -5346,10 +5622,12 @@ def _replace_ram_gred_precompute_for_internal_profiles(
         return draft
 
     entries = _ram_entry_map(set_matches)
+    use_grk_transpose_for_gkr = not bool(entries.get("Gkr_ram"))
     gred_assignments = [
         (match.group("lhs"), int(match.group("row")), int(match.group("col")))
         for match in gred_assign_matches
     ]
+    use_code_schur_scratch = "MATRIX_ W_code" in draft and "MATRIX_ tmp_Grk_W_code" in draft
     lines = [
         "    /* RAM-side active-profile Schur precompute for fixed Gred stamp. */",
         *_ram_precompute_alias_lines(region),
@@ -5369,31 +5647,56 @@ def _replace_ram_gred_precompute_for_internal_profiles(
             for lhs, row, col in gred_assignments:
                 lines.append(f"        {lhs} = {_ram_base_expr(entries, row, col)};")
         elif active_count == 1:
+            if use_code_schur_scratch:
+                lines.append("        err += matrixDim(&W_code, internal_active, internal_active);")
+                lines.append("        err += matrixDim(&tmp_Grk_W_code, RETAINED_NODES, internal_active);")
             active_global = active_rows[0]
             gkk = entries.get("Gkk_ram", {}).get((active_global, active_global), "0.0")
             lines.append(f"        double inv0 = 1.0 / ({gkk});")
             for lhs, row, col in gred_assignments:
                 lines.append(f"        {lhs} = {_ram_schur_1x1_expr(entries, row, col, active_global)};")
         else:
+            w_target = "W_code" if use_code_schur_scratch else "W_ram"
+            tmp_grk_w_target = "tmp_Grk_W_code" if use_code_schur_scratch else "tmp_Grk_W_ram"
             lines.extend([
                 "        err += matrixDim(&Grr_ram, RETAINED_NODES, RETAINED_NODES);",
                 "        err += matrixDim(&Grk_ram, RETAINED_NODES, internal_active);",
-                "        err += matrixDim(&Gkr_ram, internal_active, RETAINED_NODES);",
+                *(["        err += matrixDim(&Gkr_ram, internal_active, RETAINED_NODES);"] if not use_grk_transpose_for_gkr else []),
                 "        err += matrixDim(&Gkk_ram, internal_active, internal_active);",
-                "        err += matrixDim(&W_ram, internal_active, internal_active);",
+                f"        err += matrixDim(&{w_target}, internal_active, internal_active);",
                 "        err += matrixDim(&Gred_ram, RETAINED_NODES, RETAINED_NODES);",
-                "        err += matrixDim(&tmp_Grk_W_ram, RETAINED_NODES, internal_active);",
+                f"        err += matrixDim(&{tmp_grk_w_target}, RETAINED_NODES, internal_active);",
                 "        err += matrixDim(&tmp_Grk_W_Gkr_ram, RETAINED_NODES, RETAINED_NODES);",
                 "        if (err > 0) {",
                 '            reportError_RW("network_node", STOP_IMMEDIATELY_CONDITION,',
                 '                           "RTDS RAM active-profile matrix allocation failed for component %s.", Name);',
                 "        }",
             ])
-            lines.extend(_ram_remapped_set_lines(entries, active_rows))
+            lines.extend(_ram_remapped_set_lines(entries, active_rows, include_gkr=not use_grk_transpose_for_gkr))
             lines.extend([
-                "        err += matrix_invert(&W_ram, &Gkk_ram);",
-                "        err += matrix_mult(&tmp_Grk_W_ram, &Grk_ram, &W_ram);",
-                "        err += matrix_mult(&tmp_Grk_W_Gkr_ram, &tmp_Grk_W_ram, &Gkr_ram);",
+                f"        err += matrix_invert(&{w_target}, &Gkk_ram);",
+                f"        err += matrix_mult(&{tmp_grk_w_target}, &Grk_ram, &{w_target});",
+            ])
+            if use_grk_transpose_for_gkr:
+                lines.extend([
+                    "        /* Symmetry reuse: multiply by transpose(Grk_ram) without materializing Gkr_ram. */",
+                    "        for (row = 0; row < RETAINED_NODES; row++) {",
+                    "            for (col = row; col < RETAINED_NODES; col++) {",
+                    "                double acc = 0.0;",
+                    "                int k;",
+                    "                for (k = 0; k < internal_active; k++) {",
+                    f"                    acc += get(&{tmp_grk_w_target}, row, k) * get(&Grk_ram, col, k);",
+                    "                }",
+                    "                set(&tmp_Grk_W_Gkr_ram, row, col, acc);",
+                    "                if (col != row) {",
+                    "                    set(&tmp_Grk_W_Gkr_ram, col, row, acc);",
+                    "                }",
+                    "            }",
+                    "        }",
+                ])
+            else:
+                lines.append(f"        err += matrix_mult(&tmp_Grk_W_Gkr_ram, &{tmp_grk_w_target}, &Gkr_ram);")
+            lines.extend([
                 "        err += matrix_subtract(&Gred_ram, &Grr_ram, &tmp_Grk_W_Gkr_ram);",
             ])
             for lhs, row, col in gred_assignments:
@@ -5409,7 +5712,20 @@ def _replace_ram_gred_precompute_for_internal_profiles(
         '                       "RTDS RAM active-profile Schur precompute failed for component %s.", Name);',
         "    }",
     ])
-    return draft[:start] + "\n".join(lines) + "\n" + draft[end:]
+    updated = draft[:start] + "\n".join(lines) + "\n" + draft[end:]
+    if use_code_schur_scratch:
+        setup_index = updated.find("    setupGMatrix", start)
+        if setup_index >= 0:
+            head = updated[:setup_index]
+            tail = updated[setup_index:]
+            for duplicate_dim in (
+                "        err += matrixDim(&W_code, internal_active, internal_active);\n",
+                "        err += matrixDim(&tmp_Grk_W_code, RETAINED_NODES, internal_active);\n",
+            ):
+                tail = tail.replace(duplicate_dim, "", 1)
+            updated = head + tail
+        updated = updated.replace("    if (internal_active > 0) {\n    }\n", "")
+    return updated
 
 
 def _apply_internal_layout_profile_compaction(
@@ -5451,6 +5767,13 @@ def _apply_internal_layout_profile_compaction(
         aliases=aliases,
         gkk_template=gkk_template,
         template_internal_nodes=template_internal_nodes,
+    )
+    draft = _replace_ram_fixed_internal_matrix_precompute(
+        draft,
+        case_id_symbol=case_id_symbol,
+        profiles=internal_layout_profiles,
+        template_internal_nodes=template_internal_nodes,
+        retained_count=retained_count,
     )
     draft = _guard_internal_active_ihis_schur(draft)
     draft = _replace_internal_profile_ihis_schur(
@@ -5569,7 +5892,7 @@ def _diagonal_gkk_scalar_gred_lines(
         f"{prefix}    for (int col = row; col < {active_nr_expr}; col++) {{",
         f"{prefix}        double schur_acc = 0.0;",
         f"{prefix}        for (int k = 0; k < {internal_expr}; k++) {{",
-        f"{prefix}            schur_acc += get_CODE(&tmp_Grk_W_code, row, k) * get_CODE(&Gkr_code, k, col);",
+        f"{prefix}            schur_acc += get_CODE(&tmp_Grk_W_code, row, k) * get_CODE(&Grk_code, col, k);",
         f"{prefix}        }}",
         f"{prefix}        set_CODE(&Gred_code, row, col, get_CODE(&Grr_code, row, col) - schur_acc);",
         f"{prefix}    }}",
@@ -5697,7 +6020,7 @@ def _apply_multicase_conditional_diagonal_scalar_paths(
     gred_fallback = [
         "    matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);",
         "    /* Full Gred CODE path: compute the dense product, then write only the upper triangle used by GValue stamps. */",
-        *_upper_tri_matrix_product_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Gkr_code", active_nr_expr),
+        *_upper_tri_matrix_product_transpose_rhs_lines("tmp_Grk_W_Gkr_code", "tmp_Grk_W_code", "Grk_code", active_nr_expr),
         *_upper_tri_matrix_subtract_lines("Gred_code", "Grr_code", "tmp_Grk_W_Gkr_code", active_nr_expr),
     ]
     diagonal_cases, fallback_cases = _multicase_diagonal_case_groups(
@@ -6989,51 +7312,6 @@ def _remove_code_g_alias_resolution_for_conditional_final_writes(draft: str, ali
     return draft[:start] + replacement + draft[end:]
 
 
-def _g_aliases_are_ram_owned(aliases: Mapping[str, Mapping]) -> bool:
-    for info in aliases.values():
-        if not str(info.get("kind") or "").upper().startswith("G"):
-            continue
-        if str(info.get("owner") or "RAM") != "RAM":
-            return False
-        if bool(info.get("runtime_mutable")):
-            return False
-    return True
-
-
-def _hoist_constant_code_g_setup_to_ready(draft: str, *, aliases: Mapping[str, Mapping]) -> str:
-    if not _g_aliases_are_ram_owned(aliases):
-        return draft
-    start_marker = "    /* ************************************************************************\n     * CODE-SIDE G MATRIX VALUE SETUP"
-    end_marker = "    /* ************************************************************************\n     * CODE-SIDE IHIS VALUE SETUP"
-    start = draft.find(start_marker)
-    end = draft.find(end_marker, start)
-    if start < 0 or end < 0:
-        return draft
-    block = draft[start:end].rstrip("\n")
-    if "CODE-owned" in block or "Resolve CODE multi-case" in block:
-        return draft
-    ready_start_marker = "    if (!rtds_matrix_code_ready) {\n"
-    ready_set_marker = "        rtds_matrix_code_ready = 1;"
-    ready_start = draft.find(ready_start_marker)
-    ready_set = draft.find(ready_set_marker, ready_start)
-    if ready_start < 0 or ready_set < 0 or ready_set > start:
-        return draft
-
-    hoisted_lines: list[str] = []
-    for line in block.splitlines():
-        if "CODE-SIDE G MATRIX VALUE SETUP" in line:
-            line = line.replace("CODE-SIDE G MATRIX VALUE SETUP", "CODE-ONCE G MATRIX VALUE SETUP")
-        if line.startswith("    "):
-            hoisted_lines.append("    " + line)
-        elif line:
-            hoisted_lines.append("        " + line)
-        else:
-            hoisted_lines.append("")
-    hoisted = "\n".join(hoisted_lines).rstrip("\n") + "\n"
-    draft = draft[:start] + draft[end:]
-    return draft[:ready_set] + hoisted + draft[ready_set:]
-
-
 def _remove_ram_g_alias_resolution_for_conditional_final_writes(draft: str, aliases: dict[str, dict]) -> str:
     if not aliases:
         return draft
@@ -7520,7 +7798,6 @@ def _try_build_alias_template_response(payload: dict) -> dict | None:
                 "Info: no-internal multi-case final G entries were split into RAM and CODE terms. "
                 "RAM terms are stamped in RAM_PASS1; CODE terms are assigned directly to GValue handles."
             )
-    draft = _hoist_constant_code_g_setup_to_ready(draft, aliases=aliases)
     if "codegen_mode" not in locals():
         codegen_mode = "case-agnostic alias template"
     if "fast_path" not in locals():
@@ -8045,6 +8322,22 @@ def _vk_recovery_code_functions_blocks() -> dict[str, str]:
     matrix_scalarMult_CODE(Vk_code, tmp_Vk_sum_code, -1.0);
 }""",
 
+        "matrix_wgkr": """void network_node_recover_vk_matrix_from_wgkr(MATRIX_ *tmp_W_Gkr_code,
+                                              MATRIX_ *Vr_code,
+                                              MATRIX_ *W_code,
+                                              MATRIX_ *Ihisk_code,
+                                              MATRIX_ *tmp_W_Gkr_Vr_code,
+                                              MATRIX_ *tmp_W_Ihisk_code,
+                                              MATRIX_ *tmp_Vk_sum_code,
+                                              MATRIX_ *Vk_code)
+{
+    /* Fixed-G path: tmp_W_Gkr_code already stores W * Gkr. */
+    matrix_matXvec_CODE(tmp_W_Gkr_Vr_code, tmp_W_Gkr_code, Vr_code);
+    matrix_matXvec_CODE(tmp_W_Ihisk_code, W_code, Ihisk_code);
+    matrix_add_CODE(tmp_Vk_sum_code, tmp_W_Gkr_Vr_code, tmp_W_Ihisk_code);
+    matrix_scalarMult_CODE(Vk_code, tmp_Vk_sum_code, -1.0);
+}""",
+
         "wgkr_only": """void network_node_recover_vk_from_wgkr_only(int retained_count, int internal_count,
                                             MATRIX_ *tmp_W_Gkr_code,
                                             MATRIX_ *Vr_code,
@@ -8086,10 +8379,11 @@ def _vk_recovery_code_functions_blocks() -> dict[str, str]:
 
 def _ensure_vk_recovery_code_functions(draft: str) -> str:
     helper_specs = [
-        ("diag", "network_node_recover_vk_diag(", "void network_node_recover_vk_diag"),
-        ("matrix", "network_node_recover_vk_matrix(", "void network_node_recover_vk_matrix"),
-        ("wgkr_only", "network_node_recover_vk_from_wgkr_only(", "void network_node_recover_vk_from_wgkr_only"),
-        ("grkw_only", "network_node_recover_vk_from_grkw_only(", "void network_node_recover_vk_from_grkw_only"),
+        ("diag", "network_node_recover_vk_diag(", "void network_node_recover_vk_diag("),
+        ("matrix", "network_node_recover_vk_matrix(", "void network_node_recover_vk_matrix("),
+        ("matrix_wgkr", "network_node_recover_vk_matrix_from_wgkr(", "void network_node_recover_vk_matrix_from_wgkr("),
+        ("wgkr_only", "network_node_recover_vk_from_wgkr_only(", "void network_node_recover_vk_from_wgkr_only("),
+        ("grkw_only", "network_node_recover_vk_from_grkw_only(", "void network_node_recover_vk_from_grkw_only("),
     ]
     blocks_by_name = _vk_recovery_code_functions_blocks()
     needed_blocks: list[str] = []
@@ -8212,6 +8506,12 @@ def _apply_final_retained_recovery_profiles_to_draft(
             "&tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code, &tmp_Vk_sum_code, &Vk_code);"
         )
 
+    def vk_matrix_wgkr_helper_call(active_nr_expr: str) -> str:
+        return (
+            "    network_node_recover_vk_matrix_from_wgkr(&tmp_W_Gkr_code, &Vr_code, &W_code, &Ihisk_code, "
+            "&tmp_W_Gkr_Vr_code, &tmp_W_Ihisk_code, &tmp_Vk_sum_code, &Vk_code);"
+        )
+
     def vk_wgkr_only_helper_call(active_nr_expr: str) -> str:
         return (
             f"    network_node_recover_vk_from_wgkr_only({active_nr_expr}, {vk_internal_count_expr()}, "
@@ -8239,7 +8539,8 @@ def _apply_final_retained_recovery_profiles_to_draft(
             "    matrix_scalarMult_CODE(&Vk_code, &tmp_Vk_sum_code, -1.0);",
         ])
         if precomputed_wgkr_matrix_recovery in block:
-            block = block.replace(precomputed_wgkr_matrix_recovery, helper_call)
+            replacement = helper_call if diagonal else vk_matrix_wgkr_helper_call(active_nr_expr)
+            block = block.replace(precomputed_wgkr_matrix_recovery, replacement)
             full_matrix_replaced = True
         for internal_expr in ("INTERNAL_NODES", "internal_active"):
             for retained_expr in retained_exprs:
@@ -9847,6 +10148,7 @@ def _apply_dummy_finalization_injection_guards(
         candidates = [
             f"Inj{node_c} = get_CODE(&Ihisred_code, {row}, 0);",
             f"Inj{node_c} = get_CODE(&Ihisfinal_code, {row}, 0);",
+            f"Inj{node_c} = mc_Ihisred_{row};",
             f"Inj{node_c} = 0.0;",
         ]
         for assignment in candidates:
@@ -9858,9 +10160,18 @@ def _apply_dummy_finalization_injection_guards(
         first_assignment = assignments[0]
         for assignment in assignments[1:]:
             draft = draft.replace(f"    {assignment}", "", 1)
+        inactive_zero_lines = []
+        for assignment in assignments:
+            target = assignment.split("=", 1)[0].strip()
+            if target.startswith("Inj"):
+                inactive_zero_lines.append(f"        {target} = 0.0;")
+        switch_lines = _case_switch_assignment_lines(case_id_symbol, case_indices, assignments)
+        if inactive_zero_lines:
+            default_index = switch_lines.index("    default:")
+            switch_lines[default_index + 1:default_index + 1] = inactive_zero_lines
         draft = draft.replace(
             f"    {first_assignment}",
-            "\n".join(_case_switch_assignment_lines(case_id_symbol, case_indices, assignments)),
+            "\n".join(switch_lines),
             1,
         )
     return draft

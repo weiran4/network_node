@@ -405,7 +405,7 @@ class RuntimeMutableCaseGroupTests(unittest.TestCase):
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
         self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)
-        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) * inv_gkk_diag[k];", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Grk_code, j, k) * inv_gkk_diag[k];", draft)
         self.assertNotIn("matrix_subtract_CODE(&Gred_code, &Grr_code, &tmp_Grk_W_Gkr_code);", draft)
         self.assertFalse(any("runtime_R11_case_id" in line for line in draft.splitlines() if "createGValue" in line))
         self.assertNotIn("case 0:\n        varG", draft)

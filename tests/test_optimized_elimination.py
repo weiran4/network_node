@@ -108,8 +108,10 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("multcase_G_tx_A_A = G3;", draft)
         self.assertNotIn("TODO", draft)
         self.assertIn("RAM-SIDE STATIC MATRIX PRECOMPUTE", draft)
-        self.assertIn("Gkr_X_A = -multcase_G_tx_A_A;", draft)
-        self.assertIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
+        self.assertIn("Grk_A_X = -multcase_G_tx_A_A;", draft)
+        self.assertIn("matrix_mult(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertIn("set(&tmp_W_Gkr_code, row, col, get(&tmp_Grk_W_code, col, row));", draft)
+        self.assertNotIn("matrix_mult(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
         self.assertNotIn("set_CODE(&Gkr_code, 0, 0, Gkr_X_A);", draft)
         self.assertNotIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
 
@@ -512,7 +514,8 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertNotIn("Same MATRIX_ objects are used from RAM and CODE when needed.", draft)
         self.assertNotIn("set(&Gkr_code", draft)
         self.assertNotIn("set(&W_code", draft)
-        self.assertIn("set_CODE(&Gkr_code", draft)
+        self.assertIn("set_CODE(&Grk_code", draft)
+        self.assertNotIn("set_CODE(&Gkr_code", draft)
         self.assertIn("set_CODE(&Gkk_code", draft)
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
         self.assertNotIn("set_CODE(&W_code", draft)
@@ -638,7 +641,9 @@ class OptimizedEliminationTests(unittest.TestCase):
 
         self.assertIn("Build M = S - U^T * inv_D * U", draft)
         self.assertIn("MATRIX_ W_DD", draft)
-        self.assertIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
+        self.assertIn("matrix_mult_CODE(&tmp_Grk_W_code, &Grk_code, &W_code);", draft)
+        self.assertIn("set_CODE(&tmp_W_Gkr_code, row, col, get_CODE(&tmp_Grk_W_code, col, row));", draft)
+        self.assertNotIn("matrix_mult_CODE(&tmp_W_Gkr_code, &W_code, &Gkr_code);", draft)
 
     def test_runtime_w_ihisred_rows_use_structural_mask_not_placeholder_cancellation(self):
         g, Dx, Dy, xp, xn, yp, yn, PP, PN, NN, h = sp.symbols("g Dx Dy xp xn yp yn PP PN NN h")
@@ -1153,7 +1158,7 @@ class OptimizedEliminationTests(unittest.TestCase):
         self.assertIn("Diagonal Gkk scalar CODE path", draft)
         self.assertIn("double inv_gkk_diag[INTERNAL_NODES];", draft)
         self.assertIn("inv_gkk_diag[k] = 1.0 / get_CODE(&Gkk_code, k, k);", draft)
-        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Gkr_code, k, j) * inv_gkk_diag[k];", draft)
+        self.assertIn("schur -= get_CODE(&Grk_code, i, k) * get_CODE(&Grk_code, j, k) * inv_gkk_diag[k];", draft)
         self.assertNotIn("matrix_mult_CODE(&tmp_Grk_W_Gkr_code, &tmp_Grk_W_code, &Gkr_code);", draft)
         self.assertNotIn("A**2/(A + G)", draft)
 

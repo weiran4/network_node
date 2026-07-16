@@ -194,14 +194,14 @@ class DynamicSubblockSchurTests(unittest.TestCase):
 
         draft = c_draft_for_structured_formula(structured, rtds_stage_plan=plan)
 
-        self.assertNotIn("Grk_code", draft)
-        self.assertIn("double Gkr_shared_1 = 0.0;", draft)
-        self.assertNotIn("double Gkr_y_B = 0.0;", draft)
-        self.assertNotIn("double Gkr_z_C = 0.0;", draft)
-        self.assertIn("/* Gkr_shared_1 represents Gkr[x,A], Gkr[y,B], Gkr[z,C]: -G_rc. */", draft)
-        self.assertIn("set_CODE(&Gkr_code, 0, 0, Gkr_shared_1);", draft)
-        self.assertIn("set_CODE(&Gkr_code, 1, 1, Gkr_shared_1);", draft)
-        self.assertIn("set_CODE(&Gkr_code, 2, 2, Gkr_shared_1);", draft)
+        self.assertNotIn("Gkr_code", draft)
+        self.assertIn("double Grk_shared_1 = 0.0;", draft)
+        self.assertNotIn("double Grk_B_y = 0.0;", draft)
+        self.assertNotIn("double Grk_C_z = 0.0;", draft)
+        self.assertIn("/* Grk_shared_1 represents Grk[A,x], Grk[B,y], Grk[C,z]: -G_rc. */", draft)
+        self.assertIn("set_CODE(&Grk_code, 0, 0, Grk_shared_1);", draft)
+        self.assertIn("set_CODE(&Grk_code, 1, 1, Grk_shared_1);", draft)
+        self.assertIn("set_CODE(&Grk_code, 2, 2, Grk_shared_1);", draft)
 
     def test_partial_ihisred_rows_use_sliced_updates(self):
         Gc, Gv, h = sp.symbols("Gc Gv h")
